@@ -4,6 +4,7 @@ dist/
 .modelforge-data/
 .modelforge-local/
 .modelforge-release/
+.modelforge-api.*.log
 .cache/
 .env
 .env.*

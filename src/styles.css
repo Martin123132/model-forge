@@ -2392,10 +2392,12 @@ h2 {
 .setup-repair-button {
   appearance: none;
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 7px;
   min-height: 34px;
+  max-width: min(100%, 360px);
   padding: 0 11px;
   border: 1px solid #c6d7ef;
   border-radius: 7px;
@@ -2404,6 +2406,21 @@ h2 {
   font-size: 12px;
   font-weight: 780;
   cursor: pointer;
+}
+
+.setup-repair-button span,
+.setup-repair-button code {
+  min-width: 0;
+}
+
+.setup-repair-button code {
+  overflow: hidden;
+  flex-basis: 100%;
+  color: #33517d;
+  font-size: 10px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .setup-repair-button.primary {

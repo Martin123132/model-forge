@@ -33,11 +33,17 @@ const skippedDirs = new Set([
   "build",
   ".modelforge-data",
   ".modelforge-local",
+  ".modelforge-release",
   ".cache",
   ".pytest_cache",
   "__pycache__",
   ".venv",
   "venv"
+]);
+
+const skippedSourceFileNames = new Set([
+  ".modelforge-api.err.log",
+  ".modelforge-api.out.log"
 ]);
 
 const languageByExtension = new Map([
@@ -114,7 +120,7 @@ function commandEnv(extra = {}) {
 function runCommand(command, args, options = {}) {
   return new Promise((resolveCommand) => {
     const env = commandEnv(options.env || {});
-    execFile(command, args, { cwd: options.cwd || projectRoot, env, timeout: options.timeout || 8000, windowsHide: true }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd: options.cwd || projectRoot, env, timeout: options.timeout || 8000, windowsHide: true, maxBuffer: options.maxBuffer || 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       resolveCommand({
         ok: !error,
         code: error?.code ?? 0,
@@ -180,6 +186,11 @@ function joinPatternList(value) {
 
 function defaultTargetModelName() {
   return cleanSetting(setupConfig.targetModel) || "modelforge-local:latest";
+}
+
+function defaultStarterModelName() {
+  const configured = cleanSetting(process.env.MODEL_FORGE_STARTER_MODEL) || "llama3.2:3b";
+  return /^[a-z0-9][a-z0-9._:/-]{0,120}$/i.test(configured) ? configured : "llama3.2:3b";
 }
 
 function applySetupConfig(config = {}, { persistEnv = true } = {}) {
@@ -784,6 +795,7 @@ async function getPythonStatus() {
 
 function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus, pythonStatus, ollama, hardware, preferredStorage }) {
   const launcherPath = join(projectRoot, "Start-ModelForge.cmd");
+  const starterModel = defaultStarterModelName();
   const recommended = {
     dataRoot: preferredStorage.recommendedDataRoot,
     ollamaModels: preferredStorage.recommendedOllamaModels
@@ -823,11 +835,12 @@ function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus,
   } else if (!ollamaHasModels) {
     actions.push({
       id: "pull-small-model",
-      label: "Pull a small model",
-      kind: "manual",
-      tone: "warning",
-      detail: "Install a compact base such as llama3.2:3b, then press Recheck.",
-      command: "ollama pull llama3.2:3b"
+      label: "Install starter model",
+      kind: "server-action",
+      tone: "primary",
+      detail: `ModelForge will run Ollama's pull step for ${starterModel}, save it as the base model, and write a repair receipt.`,
+      command: `ollama pull ${starterModel}`,
+      modelName: starterModel
     });
   }
   if (!pythonStatus.ok) {
@@ -1071,6 +1084,93 @@ function commandReceipt({ name, ok, status, command, outputPath, summary, stdout
     error: error || "",
     startedAt,
     endedAt
+  };
+}
+
+function safeModelName(value = "") {
+  const modelName = cleanSetting(value);
+  return /^[a-z0-9][a-z0-9._:/-]{0,120}$/i.test(modelName) ? modelName : "";
+}
+
+async function runSetupDoctorAction(body = {}) {
+  const actionId = cleanSetting(body.actionId);
+  if (actionId !== "pull-small-model") {
+    throw new Error(`Unsupported setup repair action: ${actionId || "missing"}`);
+  }
+
+  const modelName = safeModelName(body.modelName) || defaultStarterModelName();
+  const startedAt = new Date().toISOString();
+  const receiptDir = join(dataRoot, "setup", "repairs");
+  const receiptPath = join(receiptDir, `repair-${startedAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}.json`);
+  const command = ["ollama", "pull", modelName];
+  await ensureDataRoot();
+  await mkdir(receiptDir, { recursive: true });
+
+  if (body.dryRun === true) {
+    const dryRunReceipt = {
+      schema: "modelforge.setup_repair.v1",
+      actionId,
+      modelName,
+      ok: true,
+      dryRun: true,
+      command,
+      outputPath: receiptPath,
+      summary: `Ready to install starter model ${modelName}.`,
+      startedAt,
+      endedAt: new Date().toISOString()
+    };
+    return {
+      ok: true,
+      repair: dryRunReceipt,
+      setup: await getSetupState(),
+      project: await getProjectPayload(),
+      ollama: await getOllamaStatus()
+    };
+  }
+
+  const before = await getOllamaStatus();
+  const result = await runCommand(command[0], command.slice(1), { timeout: 20 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
+  const after = await getOllamaStatus();
+  const installed = after.models.some((model) => model.name === modelName);
+  const ok = result.ok && installed;
+  if (installed) {
+    await saveSetupConfig({ ...currentSetupConfig(), baseModel: modelName });
+  }
+  const endedAt = new Date().toISOString();
+  const receipt = {
+    schema: "modelforge.setup_repair.v1",
+    actionId,
+    modelName,
+    ok,
+    dryRun: false,
+    beforeModelCount: before.models.length,
+    afterModelCount: after.models.length,
+    receipt: commandReceipt({
+      name: "Setup repair: install starter model",
+      ok,
+      status: ok ? "ok" : "failed",
+      command,
+      outputPath: receiptPath,
+      summary: ok ? `Installed starter model ${modelName} and saved it as the base model.` : `Could not verify starter model ${modelName} after Ollama pull.`,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: result.error,
+      startedAt,
+      endedAt
+    }),
+    startedAt,
+    endedAt,
+    outputPath: receiptPath,
+    summary: ok ? `Installed starter model ${modelName}.` : `Starter model repair failed for ${modelName}.`
+  };
+  await writeJson(receiptPath, receipt);
+  return {
+    ok,
+    error: ok ? "" : receipt.receipt.error || receipt.receipt.stderrTail || receipt.summary,
+    repair: receipt,
+    setup: await getSetupState(),
+    project: await getProjectPayload(),
+    ollama: after
   };
 }
 
@@ -1356,7 +1456,9 @@ async function buildDiagnosticsReport() {
         label: action.label,
         kind: action.kind,
         tone: action.tone,
-        detail: sanitizeDiagnosticText(action.detail)
+        detail: sanitizeDiagnosticText(action.detail),
+        command: Array.isArray(action.command) ? action.command.map(sanitizeDiagnosticText) : sanitizeDiagnosticText(action.command || ""),
+        modelName: action.modelName || ""
       }))
     },
     storage: {
@@ -3908,6 +4010,10 @@ async function walkSources(root, limit = 450) {
         continue;
       }
 
+      if (skippedSourceFileNames.has(entry.name)) {
+        continue;
+      }
+
       let fileStat;
       try {
         fileStat = await stat(absolute);
@@ -4123,7 +4229,7 @@ async function runRepoMoriSnapshot(runDir, label = "run") {
     return receipt;
   }
 
-  const result = await runCommand(command[0], command.slice(1), { timeout: 90000, cwd: sourceRoot });
+  const result = await runCommand(command[0], command.slice(1), { timeout: 180000, cwd: sourceRoot });
   const outputPath = join(outputDir, "repomori-output.json");
   await writeFile(outputPath, result.stdout || result.stderr || "", "utf-8");
   const receipt = commandReceipt({
@@ -6104,6 +6210,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/setup/run") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await runFirstSetup(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/setup/doctor/action") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await runSetupDoctorAction(body));
       return;
     }
 

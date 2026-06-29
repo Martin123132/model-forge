@@ -499,11 +499,39 @@ export type SetupDoctorCheck = {
 export type SetupDoctorAction = {
   id: string;
   label: string;
-  kind: "apply-config" | "manual" | string;
+  kind: "apply-config" | "manual" | "server-action" | string;
   tone: "primary" | "warning" | "secondary" | string;
   detail: string;
   configPatch?: Partial<SetupConfig>;
   command?: string;
+  modelName?: string;
+};
+
+export type SetupDoctorRepair = {
+  schema: string;
+  actionId: string;
+  modelName?: string;
+  ok: boolean;
+  dryRun?: boolean;
+  command?: string[];
+  outputPath?: string;
+  summary: string;
+  error?: string;
+  startedAt: string;
+  endedAt: string;
+  receipt?: {
+    name: string;
+    ok: boolean;
+    status: string;
+    command: string[];
+    outputPath: string;
+    summary: string;
+    stdoutTail: string;
+    stderrTail: string;
+    error: string;
+    startedAt: string;
+    endedAt: string;
+  };
 };
 
 export type SetupDoctor = {

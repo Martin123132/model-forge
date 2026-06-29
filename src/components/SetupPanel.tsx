@@ -11,10 +11,12 @@ type SetupPanelProps = {
   ollama: OllamaStatus | null;
   saving: boolean;
   running: boolean;
+  doctorActionBusy: string;
   projectBusy: boolean;
   onRefresh: () => void;
   onSave: (config: SetupConfig) => void;
   onRun: (config: SetupConfig, createModel: boolean) => void;
+  onDoctorAction: (action: SetupDoctorAction) => void;
   onCreateProject: (request: { name: string; sourceRoot: string; dataRoot?: string; targetModel?: string; baseModel?: string; ollamaModels?: string; pythonCommand?: string; sourceIncludes?: string; sourceExcludes?: string }) => void;
   onSelectProject: (projectId: string) => void;
   onArchiveProject: (projectId: string) => void;
@@ -96,10 +98,12 @@ export function SetupPanel({
   ollama,
   saving,
   running,
+  doctorActionBusy,
   projectBusy,
   onRefresh,
   onSave,
   onRun,
+  onDoctorAction,
   onCreateProject,
   onSelectProject,
   onArchiveProject,
@@ -224,17 +228,31 @@ export function SetupPanel({
 
           {doctor.actions.length ? (
             <div className="setup-doctor-actions" aria-label="Repair actions">
-              {doctor.actions.map((action) =>
-                action.kind === "apply-config" ? (
+              {doctor.actions.map((action) => {
+                const isBusy = doctorActionBusy === action.id;
+                return action.kind === "apply-config" ? (
                   <button
                     className={`setup-repair-button ${action.tone === "primary" ? "primary" : ""}`}
-                    disabled={saving || running}
+                    disabled={saving || running || Boolean(doctorActionBusy)}
                     key={action.id}
                     type="button"
                     onClick={() => applyDoctorAction(action)}
                   >
                     <Wrench size={14} />
                     <span>{action.label}</span>
+                  </button>
+                ) : action.kind === "server-action" ? (
+                  <button
+                    className={`setup-repair-button ${action.tone === "primary" ? "primary" : ""}`}
+                    disabled={saving || running || Boolean(doctorActionBusy)}
+                    key={action.id}
+                    title={action.detail}
+                    type="button"
+                    onClick={() => onDoctorAction(action)}
+                  >
+                    {isBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Download size={14} />}
+                    <span>{isBusy ? "Installing" : action.label}</span>
+                    {action.command ? <code>{action.command}</code> : null}
                   </button>
                 ) : (
                   <div className="setup-repair-note" key={action.id}>
@@ -245,8 +263,8 @@ export function SetupPanel({
                       {action.command ? <code>{action.command}</code> : null}
                     </div>
                   </div>
-                )
-              )}
+                );
+              })}
             </div>
           ) : null}
 

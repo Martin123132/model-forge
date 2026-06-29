@@ -25,6 +25,7 @@ import {
   getSetupState,
   getSources,
   runFirstSetup,
+  runSetupDoctorAction,
   runEvalGates,
   runRecipePack,
   runPipeline,
@@ -56,6 +57,7 @@ import type {
   RecipePackRun,
   ShareCard,
   SetupConfig,
+  SetupDoctorAction,
   SetupState,
   SourceSummary
 } from "./lib/types";
@@ -208,6 +210,7 @@ function App() {
   const [recipeBusy, setRecipeBusy] = useState(false);
   const [setupSaving, setSetupSaving] = useState(false);
   const [setupRunning, setSetupRunning] = useState(false);
+  const [setupDoctorBusy, setSetupDoctorBusy] = useState("");
   const [selectRecipeBusy, setSelectRecipeBusy] = useState(false);
   const [packRunBusy, setPackRunBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
@@ -547,6 +550,42 @@ function App() {
       setSetupRunning(false);
     }
   }, [refreshModelLibrary]);
+
+  const handleSetupDoctorAction = useCallback(async (action: SetupDoctorAction) => {
+    if (action.kind !== "server-action") return;
+    setSetupDoctorBusy(action.id);
+    setError("");
+    try {
+      const result = await runSetupDoctorAction(action.id, action.modelName);
+      const [sourcePayload, exportPackPayload, projectRegistryPayload, modelLibraryPayload] = await Promise.all([getSources(), getLatestExportPack(), getProjectRegistry(), getModelLibrary()]);
+      setSetupState(result.setup);
+      setProject(result.project);
+      setSources(sourcePayload);
+      setOllama(result.ollama);
+      setModelExport(result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setExportPack(exportPackPayload.pack || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
+      setProjectRegistry(projectRegistryPayload.registry);
+      setModelLibrary(modelLibraryPayload.library);
+      if (!result.ok) {
+        setError(result.error || result.repair?.summary || "Setup repair did not complete.");
+      }
+      setActiveWorkspace("setup");
+    } catch (setupError) {
+      setError(setupError instanceof Error ? setupError.message : String(setupError));
+    } finally {
+      setSetupDoctorBusy("");
+    }
+  }, []);
 
   const handleBuildProof = useCallback(async () => {
     setProofBusy(true);
@@ -1310,10 +1349,12 @@ function App() {
                     ollama={ollama}
                     saving={setupSaving}
                     running={setupRunning}
+                    doctorActionBusy={setupDoctorBusy}
                     projectBusy={projectBusy}
                     onRefresh={refresh}
                     onSave={handleSaveSetup}
                     onRun={handleRunFirstSetup}
+                    onDoctorAction={handleSetupDoctorAction}
                     onCreateProject={handleCreateProject}
                     onSelectProject={handleSelectProject}
                     onArchiveProject={handleArchiveProject}

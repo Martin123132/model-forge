@@ -20,6 +20,7 @@ import type {
   RecipePackRun,
   ShareCard,
   SetupConfig,
+  SetupDoctorRepair,
   SetupState,
   SourceSummary,
   ToolStatus
@@ -189,6 +190,20 @@ export function runFirstSetup(config: SetupConfig, createModel: boolean) {
       modelName: config.targetModel,
       createModel
     })
+  });
+}
+
+export function runSetupDoctorAction(actionId: string, modelName?: string) {
+  return requestJson<{
+    ok: boolean;
+    error?: string;
+    repair: SetupDoctorRepair;
+    setup: SetupState;
+    project: ProjectPayload;
+    ollama: OllamaStatus;
+  }>("/api/setup/doctor/action", {
+    method: "POST",
+    body: JSON.stringify({ actionId, modelName })
   });
 }
 

@@ -24,6 +24,11 @@ prefers:
 Check the source folder, data root, Ollama model folder, base model, target
 model, and Python command. Use the First-Run Doctor status before building.
 
+If D-drive storage is recommended, press **Use D-drive storage**. If Ollama is
+running but has no local model yet, press **Install starter model** and
+ModelForge will pull `llama3.2:3b`, save it as the base model, and write a local
+repair receipt.
+
 ## 3. Describe The AI
 
 Open Builder and pick a starter template such as Support agent, Repo copilot,

@@ -11,6 +11,18 @@ async function getJson(path) {
   return response.json();
 }
 
+async function postJson(path, body) {
+  const response = await fetch(`${apiRoot}${path}`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    throw new Error(`${path} returned HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 function gateCounts(gates = []) {
   return gates.reduce(
     (summary, gate) => {
@@ -35,7 +47,7 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse] = await Promise.all([
+  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorRepairDryRun] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
     getJson("/api/setup"),
@@ -44,7 +56,8 @@ async function main() {
     getJson("/api/dataset/latest"),
     getJson("/api/models/library"),
     getJson("/api/projects"),
-    getJson("/api/diagnostics")
+    getJson("/api/diagnostics"),
+    postJson("/api/setup/doctor/action", { actionId: "pull-small-model", dryRun: true })
   ]);
   const evalReport = project.latestEval || null;
   const dataset = project.latestDataset || datasetResponse.dataset || null;
@@ -118,6 +131,16 @@ async function main() {
           diagnostics.setup?.doctorChecks?.length >= 6
       ),
       diagnostics ? `${diagnostics.setup.doctorStatus}: ${diagnostics.files?.downloadName || "no download name"}` : "no diagnostics report"
+    ),
+    check(
+      "Doctor model repair",
+      Boolean(
+        doctorRepairDryRun?.repair?.schema === "modelforge.setup_repair.v1" &&
+          doctorRepairDryRun.repair.dryRun === true &&
+          doctorRepairDryRun.repair.actionId === "pull-small-model" &&
+          doctorRepairDryRun.repair.command?.join(" ").includes("ollama pull")
+      ),
+      doctorRepairDryRun?.repair ? `${doctorRepairDryRun.repair.summary} (${doctorRepairDryRun.repair.command?.join(" ") || "no command"})` : "no repair dry run"
     ),
     check(
       "Source rules",
