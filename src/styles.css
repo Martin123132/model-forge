@@ -2412,6 +2412,215 @@ h2 {
   color: var(--red);
 }
 
+.project-manager {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: #fbfdff;
+}
+
+.project-manager-heading,
+.project-card-head,
+.project-create-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.project-manager-heading,
+.project-card-head {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.project-manager-heading > div,
+.project-card-head > div,
+.project-create-title > div {
+  min-width: 0;
+}
+
+.project-manager-heading span,
+.project-manager-heading h3,
+.project-manager-heading p,
+.project-card-head span,
+.project-card-head strong,
+.project-create-title strong,
+.project-create-title span {
+  min-width: 0;
+}
+
+.project-manager-heading span,
+.project-card-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.project-manager-heading h3 {
+  margin: 3px 0 0;
+  color: #172236;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.project-manager-heading p {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.project-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.project-card.active {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+}
+
+.project-card.archived {
+  background: #f8fafc;
+  opacity: 0.78;
+}
+
+.project-card-head strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: #172236;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.project-card dl div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-card dt,
+.project-card dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.project-card dt {
+  color: var(--muted);
+  font-weight: 760;
+}
+
+.project-card dd {
+  overflow: hidden;
+  color: #26354b;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.project-create-box {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(160px, 0.8fr) minmax(220px, 1.2fr) minmax(220px, 1.2fr) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe5f0;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.project-create-title {
+  align-self: center;
+  gap: 8px;
+}
+
+.project-create-title svg {
+  color: var(--blue);
+}
+
+.project-create-title strong,
+.project-create-title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-create-title strong {
+  color: #172236;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.project-create-title span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.project-create-box label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.project-create-box label span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.project-create-box input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: #172236;
+  font-size: 12px;
+  font-weight: 620;
+}
+
 .setup-summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2747,6 +2956,113 @@ h2 {
   color: var(--muted);
   font-size: 11px;
   font-weight: 610;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-rules-panel {
+  display: grid;
+  gap: 9px;
+  margin: 10px 0 12px;
+  padding: 10px;
+  border: 1px solid #dbe5f0;
+  border-radius: 7px;
+  background: #fbfdff;
+}
+
+.source-rules-heading,
+.source-rules-heading > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.source-rules-heading {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.source-rules-heading > div {
+  gap: 8px;
+}
+
+.source-rules-heading svg {
+  flex: 0 0 auto;
+  color: var(--blue);
+}
+
+.source-rules-heading strong,
+.source-rules-heading span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-rules-heading strong {
+  color: #172236;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.source-rules-heading span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 630;
+}
+
+.source-rules-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(180px, 0.65fr);
+  gap: 8px;
+}
+
+.source-rules-grid label,
+.source-rules-preview {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.source-rules-grid label > span,
+.source-rules-preview > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.source-rules-grid textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 86px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: #172236;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.42;
+  resize: vertical;
+}
+
+.source-rules-preview {
+  align-content: start;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.source-rules-preview strong {
+  display: block;
+  overflow: hidden;
+  color: #26354b;
+  font-size: 11px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5564,6 +5880,14 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .project-create-box {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-create-title {
+    grid-column: 1 / -1;
+  }
+
   .setup-doctor-facts,
   .setup-doctor-checks {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5783,6 +6107,22 @@ h2 {
   .compare-target-grid,
   .compare-result-grid {
     grid-template-columns: 1fr;
+  }
+
+  .project-card-grid,
+  .project-create-box,
+  .source-rules-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .project-manager-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .project-manager-heading p {
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .model-library-grid {

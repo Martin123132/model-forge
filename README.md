@@ -16,6 +16,7 @@
   <a href="#what-it-does">What it does</a> |
   <a href="#builder-wizard">Builder Wizard</a> |
   <a href="#model-library">Model Library</a> |
+  <a href="#project-data-management">Project Data</a> |
   <a href="#screenshots">Screenshots</a> |
   <a href="#quickstart">Quickstart</a> |
   <a href="#proof-posture">Proof posture</a> |
@@ -70,6 +71,8 @@ artifacts from code and project folders.
   the pack proves it can recreate the local target.
 - Shows a **Your AIs** library with forged targets, base models, recipes,
   receipts, source evidence, and a side-by-side base-vs-forged test playground.
+- Saves multiple local AI projects in a local registry, with separate source
+  folders, data roots, model names, and source include/exclude rules.
 
 This alpha is intentionally focused on the forge layer: source boundary,
 training-ready packs, recipes, evidence, local model profiles, and release
@@ -161,6 +164,27 @@ prompt to the base model and the forged target, then shows both answers plus any
 fallback or missing-model state. The goal is to make the app say, plainly: this
 is the AI I built, this is what it is based on, and this is the evidence behind
 it.
+
+## Project Data Management
+
+Setup now includes a local **Project/Data Manager**. Each project records a
+name, source folder, data root, Ollama model folder, base/target model names,
+and source boundary rules. Switching projects changes the active source and data
+roots, so proof bundles, datasets, recipes, chat transcripts, and export packs
+stay tied to the selected local project.
+
+The registry lives under `.modelforge-local/projects.json` and stays out of git.
+Archive and remove actions only update the registry in this alpha; they do not
+delete project folders from disk.
+
+The Sources workspace also has a **Source boundary** editor:
+
+- **Include only** patterns limit the project to matching paths such as `src/`,
+  `docs/`, or `*.md`.
+- **Exclude** patterns hide matching paths such as `dist/`, large assets, or
+  private notes.
+- The next scan, Dataset Forge run, proof bundle, and build plan all use the
+  saved source boundary.
 
 ## Screenshots
 
@@ -290,6 +314,7 @@ Dataset and export checks also verify:
 - Build From Plan has completed every stage and written a builder receipt.
 - The Model Library API returns saved targets, receipts, and a compare-playground
   contract.
+- The project registry and source-rule contracts load through the local API.
 
 Run the repeatable smoke check while `npm.cmd run dev` is active:
 

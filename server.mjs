@@ -10,6 +10,7 @@ import { execFile, spawn } from "node:child_process";
 const projectRoot = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const setupConfigDir = join(projectRoot, ".modelforge-local");
 const setupConfigPath = join(setupConfigDir, "setup.json");
+const projectRegistryPath = join(setupConfigDir, "projects.json");
 const defaultDataRoot = resolve(process.env.MODEL_FORGE_DATA_ROOT || join(projectRoot, ".modelforge-data"));
 const defaultSourceRoot = resolve(process.env.MODEL_FORGE_SOURCE_ROOT || projectRoot);
 const bundledPython = join(projectRoot, ".venv", "Scripts", "python.exe");
@@ -155,6 +156,21 @@ function resolvePathSetting(value, fallback) {
   return resolve(raw || fallback);
 }
 
+function splitPatternList(value) {
+  if (Array.isArray(value)) {
+    return value.map(cleanSetting).filter(Boolean).slice(0, 80);
+  }
+  return String(value || "")
+    .split(/[\n,;]+/)
+    .map(cleanSetting)
+    .filter(Boolean)
+    .slice(0, 80);
+}
+
+function joinPatternList(value) {
+  return splitPatternList(value).join("\n");
+}
+
 function defaultTargetModelName() {
   return cleanSetting(setupConfig.targetModel) || "modelforge-local:latest";
 }
@@ -169,12 +185,16 @@ function applySetupConfig(config = {}, { persistEnv = true } = {}) {
   sourceRoot = nextSourceRoot;
   pythonCommand = nextPython;
   setupConfig = {
+    projectId: cleanSetting(config.projectId || config.id),
+    projectName: cleanSetting(config.projectName || config.name) || "Repo-Aware Local Model",
     sourceRoot,
     dataRoot,
     ollamaModels: nextOllamaModels,
     pythonCommand,
     baseModel: cleanSetting(config.baseModel),
     targetModel: cleanSetting(config.targetModel) || "modelforge-local:latest",
+    sourceIncludes: joinPatternList(config.sourceIncludes),
+    sourceExcludes: joinPatternList(config.sourceExcludes),
     updatedAt: config.updatedAt || ""
   };
 
@@ -197,12 +217,282 @@ async function loadSetupConfig() {
 
 function currentSetupConfig() {
   return {
+    projectId: setupConfig.projectId || "",
+    projectName: setupConfig.projectName || "Repo-Aware Local Model",
     sourceRoot,
     dataRoot,
     ollamaModels: process.env.OLLAMA_MODELS || setupConfig.ollamaModels || "",
     pythonCommand,
     baseModel: setupConfig.baseModel || "",
-    targetModel: setupConfig.targetModel || "modelforge-local:latest"
+    targetModel: setupConfig.targetModel || "modelforge-local:latest",
+    sourceIncludes: setupConfig.sourceIncludes || "",
+    sourceExcludes: setupConfig.sourceExcludes || ""
+  };
+}
+
+function projectSlug(value = "") {
+  const slug = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 42);
+  return slug || "local-ai";
+}
+
+function projectIdFor(config = {}) {
+  const seed = `${config.sourceRoot || sourceRoot}|${config.dataRoot || dataRoot}|${config.projectName || ""}`;
+  return `project-${createHash("sha256").update(seed).digest("hex").slice(0, 12)}`;
+}
+
+function projectNameFromRoot(root = "") {
+  const parts = String(root || "").replaceAll("\\", "/").split("/").filter(Boolean);
+  return parts.at(-1) || "Repo-Aware Local Model";
+}
+
+function projectEntryFromConfig(config = {}, overrides = {}) {
+  const sourceValue = resolvePathSetting(config.sourceRoot, sourceRoot);
+  const dataValue = resolvePathSetting(config.dataRoot, dataRoot);
+  const name = cleanSetting(config.projectName || config.name) || projectNameFromRoot(sourceValue);
+  const now = new Date().toISOString();
+  return {
+    id: cleanSetting(config.projectId || config.id) || projectIdFor({ sourceRoot: sourceValue, dataRoot: dataValue, projectName: name }),
+    name,
+    status: cleanSetting(config.status) || "active",
+    sourceRoot: sourceValue,
+    dataRoot: dataValue,
+    ollamaModels: cleanSetting(config.ollamaModels),
+    pythonCommand: cleanSetting(config.pythonCommand) || pythonCommand,
+    baseModel: cleanSetting(config.baseModel),
+    targetModel: cleanSetting(config.targetModel) || "modelforge-local:latest",
+    sourceIncludes: joinPatternList(config.sourceIncludes),
+    sourceExcludes: joinPatternList(config.sourceExcludes),
+    createdAt: config.createdAt || now,
+    updatedAt: config.updatedAt || now,
+    lastOpenedAt: config.lastOpenedAt || "",
+    ...overrides
+  };
+}
+
+function currentProjectEntry(overrides = {}) {
+  return projectEntryFromConfig(currentSetupConfig(), {
+    status: "active",
+    lastOpenedAt: new Date().toISOString(),
+    ...overrides
+  });
+}
+
+function summarizeProjectEntry(project, preferredStorage) {
+  const includePatterns = splitPatternList(project.sourceIncludes);
+  const excludePatterns = splitPatternList(project.sourceExcludes);
+  return {
+    ...project,
+    active: project.id === setupConfig.projectId || (!setupConfig.projectId && project.sourceRoot === sourceRoot && project.dataRoot === dataRoot),
+    dataOnPreferredDrive: !preferredStorage?.canUsePreferred || isWindowsPathOnDrive(project.dataRoot, "D"),
+    sourceRules: {
+      includePatterns,
+      excludePatterns,
+      includeCount: includePatterns.length,
+      excludeCount: excludePatterns.length
+    }
+  };
+}
+
+async function readProjectRegistry() {
+  await mkdir(setupConfigDir, { recursive: true });
+  const saved = await readJsonIfExists(projectRegistryPath);
+  const now = new Date().toISOString();
+  if (saved?.schema === "modelforge.project_registry.v1" && Array.isArray(saved.projects)) {
+    return {
+      schema: saved.schema,
+      createdAt: saved.createdAt || now,
+      updatedAt: saved.updatedAt || now,
+      activeProjectId: saved.activeProjectId || setupConfig.projectId || "",
+      projects: saved.projects.map((project) => projectEntryFromConfig(project))
+    };
+  }
+  const seeded = currentProjectEntry({ createdAt: now, updatedAt: now });
+  return {
+    schema: "modelforge.project_registry.v1",
+    createdAt: now,
+    updatedAt: now,
+    activeProjectId: seeded.id,
+    projects: [seeded]
+  };
+}
+
+async function writeProjectRegistry(registry) {
+  const normalized = {
+    schema: "modelforge.project_registry.v1",
+    createdAt: registry.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    activeProjectId: registry.activeProjectId || "",
+    projects: (registry.projects || []).map((project) => projectEntryFromConfig(project))
+  };
+  await mkdir(setupConfigDir, { recursive: true });
+  await writeJson(projectRegistryPath, normalized);
+  return normalized;
+}
+
+async function upsertCurrentProjectInRegistry() {
+  const registry = await readProjectRegistry();
+  const current = currentProjectEntry();
+  const projects = registry.projects.filter((project) => project.id !== current.id);
+  projects.unshift(current);
+  return writeProjectRegistry({
+    ...registry,
+    activeProjectId: current.id,
+    projects
+  });
+}
+
+async function getProjectRegistry() {
+  const [registry, preferredStorage] = await Promise.all([readProjectRegistry(), getPreferredStoragePlan()]);
+  const activeProjectId = registry.projects.some((project) => project.id === registry.activeProjectId)
+    ? registry.activeProjectId
+    : registry.projects.some((project) => project.id === setupConfig.projectId)
+      ? setupConfig.projectId
+      : registry.projects.find((project) => project.sourceRoot === sourceRoot && project.dataRoot === dataRoot)?.id || registry.projects[0]?.id || "";
+  const projects = registry.projects.map((project) => summarizeProjectEntry(project, preferredStorage));
+  return {
+    schema: registry.schema,
+    createdAt: registry.createdAt,
+    updatedAt: registry.updatedAt,
+    activeProjectId,
+    registryPath: projectRegistryPath,
+    recommended: {
+      dataRoot: preferredStorage.recommendedDataRoot,
+      ollamaModels: preferredStorage.recommendedOllamaModels,
+      preferredDrive: preferredStorage.preferredDrive
+    },
+    summary: {
+      total: projects.length,
+      active: projects.filter((project) => project.status !== "archived").length,
+      archived: projects.filter((project) => project.status === "archived").length
+    },
+    projects
+  };
+}
+
+async function persistActiveProjectConfig(project) {
+  const nextConfig = projectEntryFromConfig(project, {
+    lastOpenedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+  const setupShape = {
+    ...nextConfig,
+    projectId: nextConfig.id,
+    projectName: nextConfig.name
+  };
+  applySetupConfig(setupShape);
+  await ensureDataRoot();
+  if (nextConfig.ollamaModels) {
+    await mkdir(nextConfig.ollamaModels, { recursive: true });
+  }
+  await mkdir(setupConfigDir, { recursive: true });
+  await writeJson(setupConfigPath, setupShape);
+  return setupShape;
+}
+
+async function createProject(body = {}) {
+  const preferredStorage = await getPreferredStoragePlan();
+  const sourceValue = resolvePathSetting(body.sourceRoot, sourceRoot);
+  const sourceCheck = await pathCheck(sourceValue);
+  if (!sourceCheck.ok) {
+    throw new Error(`Source folder is not readable: ${sourceValue}`);
+  }
+  const name = cleanSetting(body.name || body.projectName) || projectNameFromRoot(sourceValue);
+  const suggestedDataRoot = join(resolve(preferredStorage.recommendedDataRoot, ".."), projectSlug(name), ".modelforge-data");
+  const entry = projectEntryFromConfig({
+    projectName: name,
+    sourceRoot: sourceValue,
+    dataRoot: resolvePathSetting(body.dataRoot, suggestedDataRoot),
+    ollamaModels: cleanSetting(body.ollamaModels || setupConfig.ollamaModels || process.env.OLLAMA_MODELS),
+    pythonCommand: cleanSetting(body.pythonCommand || pythonCommand),
+    baseModel: cleanSetting(body.baseModel || setupConfig.baseModel),
+    targetModel: cleanSetting(body.targetModel || setupConfig.targetModel || "modelforge-local:latest"),
+    sourceIncludes: body.sourceIncludes || "",
+    sourceExcludes: body.sourceExcludes || ""
+  });
+  const registry = await readProjectRegistry();
+  const projects = [entry, ...registry.projects.filter((project) => project.id !== entry.id)];
+  await writeProjectRegistry({ ...registry, activeProjectId: entry.id, projects });
+  await persistActiveProjectConfig(entry);
+  return {
+    ok: true,
+    project: await getProjectPayload(),
+    setup: await getSetupState(),
+    registry: await getProjectRegistry()
+  };
+}
+
+async function selectProject(projectId = "") {
+  const registry = await readProjectRegistry();
+  const target = registry.projects.find((project) => project.id === projectId && project.status !== "archived");
+  if (!target) {
+    throw new Error("Select an active project from the registry.");
+  }
+  const selected = await persistActiveProjectConfig(target);
+  const projects = registry.projects.map((project) => (project.id === selected.id ? selected : project));
+  await writeProjectRegistry({ ...registry, activeProjectId: selected.id, projects });
+  return {
+    ok: true,
+    project: await getProjectPayload(),
+    setup: await getSetupState(),
+    registry: await getProjectRegistry()
+  };
+}
+
+async function archiveProject(projectId = "") {
+  const registry = await readProjectRegistry();
+  const target = registry.projects.find((project) => project.id === projectId);
+  if (!target) {
+    throw new Error("Project was not found.");
+  }
+  const activeProjects = registry.projects.filter((project) => project.status !== "archived");
+  if (activeProjects.length <= 1 && target.status !== "archived") {
+    throw new Error("Keep at least one active project.");
+  }
+  const archived = projectEntryFromConfig(target, { status: "archived", updatedAt: new Date().toISOString() });
+  let activeProjectId = registry.activeProjectId;
+  const projects = registry.projects.map((project) => (project.id === projectId ? archived : project));
+  if (registry.activeProjectId === projectId) {
+    const nextActive = projects.find((project) => project.status !== "archived");
+    activeProjectId = nextActive?.id || "";
+    if (nextActive) {
+      await persistActiveProjectConfig(nextActive);
+    }
+  }
+  await writeProjectRegistry({ ...registry, activeProjectId, projects });
+  return {
+    ok: true,
+    project: await getProjectPayload(),
+    setup: await getSetupState(),
+    registry: await getProjectRegistry()
+  };
+}
+
+async function deleteProject(projectId = "") {
+  const registry = await readProjectRegistry();
+  const target = registry.projects.find((project) => project.id === projectId);
+  if (!target) {
+    throw new Error("Project was not found.");
+  }
+  if (registry.projects.length <= 1) {
+    throw new Error("Keep at least one project in the registry.");
+  }
+  const projects = registry.projects.filter((project) => project.id !== projectId);
+  let activeProjectId = registry.activeProjectId;
+  if (registry.activeProjectId === projectId) {
+    const nextActive = projects.find((project) => project.status !== "archived") || projects[0];
+    activeProjectId = nextActive.id;
+    await persistActiveProjectConfig(nextActive);
+  }
+  await writeProjectRegistry({ ...registry, activeProjectId, projects });
+  return {
+    ok: true,
+    project: await getProjectPayload(),
+    setup: await getSetupState(),
+    registry: await getProjectRegistry()
   };
 }
 
@@ -556,12 +846,16 @@ async function getSetupState() {
 
 async function saveSetupConfig(body = {}) {
   const nextConfig = {
+    projectId: cleanSetting(body.projectId || setupConfig.projectId),
+    projectName: cleanSetting(body.projectName || setupConfig.projectName || "Repo-Aware Local Model"),
     sourceRoot: resolvePathSetting(body.sourceRoot, sourceRoot),
     dataRoot: resolvePathSetting(body.dataRoot, dataRoot),
     ollamaModels: cleanSetting(body.ollamaModels),
     pythonCommand: cleanSetting(body.pythonCommand) || pythonCommand,
     baseModel: cleanSetting(body.baseModel),
     targetModel: cleanSetting(body.targetModel) || defaultTargetModelName(),
+    sourceIncludes: joinPatternList(body.sourceIncludes),
+    sourceExcludes: joinPatternList(body.sourceExcludes),
     updatedAt: new Date().toISOString()
   };
   const sourceCheck = await pathCheck(nextConfig.sourceRoot);
@@ -575,6 +869,7 @@ async function saveSetupConfig(body = {}) {
   }
   await mkdir(setupConfigDir, { recursive: true });
   await writeJson(setupConfigPath, nextConfig);
+  await upsertCurrentProjectInRegistry();
   return getSetupState();
 }
 
@@ -2559,11 +2854,57 @@ function isLicenseReviewedLabel(label = "") {
   return Boolean(label && !/(pending|missing|unreviewed)/i.test(label));
 }
 
+function normalizeSourcePath(value = "") {
+  return String(value || "").replaceAll("\\", "/").replace(/^\/+/, "").toLowerCase();
+}
+
+function sourcePatternMatches(pathValue = "", pattern = "") {
+  const relPath = normalizeSourcePath(pathValue);
+  const normalized = normalizeSourcePath(pattern).replace(/^\*\//, "");
+  if (!normalized) return false;
+  if (normalized === "*") return true;
+  if (normalized.includes("*")) {
+    const expression = normalized
+      .split("*")
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join(".*");
+    return new RegExp(`^${expression}$`, "i").test(relPath);
+  }
+  if (normalized.endsWith("/")) {
+    return relPath.startsWith(normalized);
+  }
+  return relPath === normalized || relPath.startsWith(`${normalized}/`) || relPath.includes(normalized);
+}
+
+function sourceRulesFromConfig(config = setupConfig) {
+  return {
+    includePatterns: splitPatternList(config.sourceIncludes),
+    excludePatterns: splitPatternList(config.sourceExcludes)
+  };
+}
+
+function sourceRuleDecision(relPath = "", rules = sourceRulesFromConfig()) {
+  const includePatterns = rules.includePatterns || [];
+  const excludePatterns = rules.excludePatterns || [];
+  const excludedBy = excludePatterns.find((pattern) => sourcePatternMatches(relPath, pattern)) || "";
+  if (excludedBy) {
+    return { include: false, reason: `Excluded by ${excludedBy}` };
+  }
+  const includedBy = includePatterns.find((pattern) => sourcePatternMatches(relPath, pattern)) || "";
+  if (includePatterns.length && !includedBy) {
+    return { include: false, reason: "Outside include rules" };
+  }
+  return { include: true, reason: includedBy ? `Included by ${includedBy}` : "Included" };
+}
+
 async function walkSources(root, limit = 450) {
   const rows = [];
   let totalFiles = 0;
   let totalSize = 0;
+  let ruleExcludedFiles = 0;
+  const excludedPreview = [];
   const licenseSignals = await getProjectLicenseSignals(root);
+  const sourceRules = sourceRulesFromConfig();
 
   async function walk(dir) {
     let entries = [];
@@ -2580,7 +2921,8 @@ async function walkSources(root, limit = 450) {
       const rel = relative(root, absolute).replaceAll("\\", "/");
 
       if (entry.isDirectory()) {
-        if (!skippedDirs.has(entry.name)) {
+        const directoryDecision = sourceRuleDecision(`${rel}/`, { includePatterns: [], excludePatterns: sourceRules.excludePatterns });
+        if (!skippedDirs.has(entry.name) && directoryDecision.include) {
           await walk(absolute);
         }
         continue;
@@ -2590,13 +2932,29 @@ async function walkSources(root, limit = 450) {
         continue;
       }
 
-      totalFiles += 1;
       let fileStat;
       try {
         fileStat = await stat(absolute);
       } catch {
         continue;
       }
+
+      const ruleDecision = sourceRuleDecision(rel, sourceRules);
+      if (!ruleDecision.include) {
+        ruleExcludedFiles += 1;
+        if (excludedPreview.length < 12) {
+          excludedPreview.push({
+            path: rel,
+            language: detectLanguage(rel),
+            size: formatBytes(fileStat.size),
+            sizeBytes: fileStat.size,
+            reason: ruleDecision.reason
+          });
+        }
+        continue;
+      }
+
+      totalFiles += 1;
       totalSize += fileStat.size;
 
       if (rows.length >= limit) {
@@ -2638,6 +2996,15 @@ async function walkSources(root, limit = 450) {
     reviewedFiles: reviewed,
     unreviewedFiles: unreviewed,
     licenseSignals,
+    sourceRules: {
+      schema: "modelforge.source_rules.v1",
+      includePatterns: sourceRules.includePatterns,
+      excludePatterns: sourceRules.excludePatterns,
+      includedFiles: totalFiles,
+      excludedFiles: ruleExcludedFiles,
+      scannedFiles: totalFiles + ruleExcludedFiles,
+      excludedPreview
+    },
     rows
   };
 }
@@ -2694,6 +3061,7 @@ async function writeSourceInventory(targetDir, sources, sourceScope = null) {
     reviewedFiles: sources.reviewedFiles,
     unreviewedFiles: sources.unreviewedFiles,
     licenseSignals: sources.licenseSignals,
+    sourceRules: sources.sourceRules || null,
     licenseReview: buildLicenseReview(sources),
     sourceScope: sourceScope ? publicSourceScopeResolution(sourceScope) : null,
     rows: sources.rows
@@ -4381,7 +4749,7 @@ async function getProjectPayload() {
       proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
   );
   return {
-    name: "Repo-Aware Local Model",
+    name: setupConfig.projectName || "Repo-Aware Local Model",
     status: "Active",
     sourceRoot,
     dataRoot,
@@ -4633,6 +5001,35 @@ async function handleApi(request, response, url) {
 
     if (request.method === "GET" && url.pathname === "/api/setup") {
       sendJson(response, 200, await getSetupState());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/projects") {
+      sendJson(response, 200, { ok: true, registry: await getProjectRegistry() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/projects") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await createProject(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/projects/select") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await selectProject(body.projectId));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/projects/archive") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await archiveProject(body.projectId));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/projects/delete") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await deleteProject(body.projectId));
       return;
     }
 

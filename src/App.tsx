@@ -6,10 +6,13 @@ import {
   buildForgeRecipe,
   buildProofBundle,
   buildShareCard,
+  archiveProject,
   cancelBuilderRun,
   cancelRecipePackRun,
   compareModels,
+  createProject,
   createOllamaModel,
+  deleteProject,
   exportModelProfile,
   getBuilderRun,
   getRecipePackRun,
@@ -18,6 +21,7 @@ import {
   getModelLibrary,
   getOllamaStatus,
   getProject,
+  getProjectRegistry,
   getSetupState,
   getSources,
   runFirstSetup,
@@ -26,6 +30,7 @@ import {
   runPipeline,
   saveSetupConfig,
   selectForgeRecipe,
+  selectProject,
   sendChat,
   startBuilderRun
 } from "./lib/api";
@@ -44,6 +49,7 @@ import type {
   ModelLibrary,
   OllamaStatus,
   PipelineStep,
+  ProjectRegistry,
   ProjectPayload,
   ProofBundle,
   RecipePackRun,
@@ -181,6 +187,7 @@ function App() {
   const [recipeHistory, setRecipeHistory] = useState<ForgeRecipe[]>([]);
   const [modelLibrary, setModelLibrary] = useState<ModelLibrary | null>(null);
   const [compareResult, setCompareResult] = useState<ChatCompareResponse | null>(null);
+  const [projectRegistry, setProjectRegistry] = useState<ProjectRegistry | null>(null);
   const packRunMonitorRef = useRef<Set<string>>(new Set());
   const builderRunMonitorRef = useRef<Set<string>>(new Set());
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
@@ -204,6 +211,8 @@ function App() {
   const [packRunBusy, setPackRunBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
   const [compareBusy, setCompareBusy] = useState(false);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [sourceRulesBusy, setSourceRulesBusy] = useState(false);
   const [builderBusy, setBuilderBusy] = useState(false);
   const [builderRunBusy, setBuilderRunBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
@@ -212,14 +221,15 @@ function App() {
     setError("");
     setRefreshing(true);
     try {
-      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload, hardwarePayload, modelLibraryPayload] = await Promise.all([
+      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload, hardwarePayload, modelLibraryPayload, projectRegistryPayload] = await Promise.all([
         getSetupState(),
         getProject(),
         getSources(),
         getOllamaStatus(),
         getLatestExportPack(),
         getHardwareProfile(),
-        getModelLibrary()
+        getModelLibrary(),
+        getProjectRegistry()
       ]);
       setSetupState(setupPayload);
       setProject(projectPayload);
@@ -240,6 +250,7 @@ function App() {
       setBuilderRun(projectPayload.latestBuilderRun || null);
       setBuilderRunHistory(projectPayload.builderRunHistory || []);
       setModelLibrary(modelLibraryPayload.library);
+      setProjectRegistry(projectRegistryPayload.registry);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {
@@ -252,6 +263,35 @@ function App() {
     const modelLibraryPayload = await getModelLibrary();
     setModelLibrary(modelLibraryPayload.library);
     return modelLibraryPayload.library;
+  }, []);
+
+  const applyProjectChange = useCallback(async (result: { setup: SetupState; project: ProjectPayload; registry: ProjectRegistry }) => {
+    const [ollamaPayload, exportPackPayload, hardwarePayload, modelLibraryPayload] = await Promise.all([
+      getOllamaStatus(),
+      getLatestExportPack(),
+      getHardwareProfile(),
+      getModelLibrary()
+    ]);
+    setSetupState(result.setup);
+    setProject(result.project);
+    setSources(result.project.sources);
+    setOllama(ollamaPayload);
+    setHardwareProfile(hardwarePayload);
+    setBuildPlan(result.project.latestBuildPlan || null);
+    setModelExport(result.project.latestModelExport || null);
+    setProof(result.project.latestProof || null);
+    setEvalReport(result.project.latestEval || null);
+    setShareCard(result.project.latestShare || null);
+    setDatasetForge(result.project.latestDataset || null);
+    setForgeRecipe(result.project.latestRecipe || null);
+    setRecipeRun(result.project.latestRecipeRun || null);
+    setRecipeRunHistory(result.project.recipeRunHistory || []);
+    setRecipeHistory(result.project.recipeHistory || []);
+    setBuilderRun(result.project.latestBuilderRun || null);
+    setBuilderRunHistory(result.project.builderRunHistory || []);
+    setExportPack(exportPackPayload.pack || null);
+    setModelLibrary(modelLibraryPayload.library);
+    setProjectRegistry(result.registry);
   }, []);
 
   const handleRefreshHardware = useCallback(async () => {
@@ -330,7 +370,7 @@ function App() {
     setError("");
     try {
       const result = await saveSetupConfig(config);
-      const [sourcePayload, ollamaPayload, exportPackPayload] = await Promise.all([getSources(), getOllamaStatus(), getLatestExportPack()]);
+      const [sourcePayload, ollamaPayload, exportPackPayload, projectRegistryPayload] = await Promise.all([getSources(), getOllamaStatus(), getLatestExportPack(), getProjectRegistry()]);
       setSetupState(result.setup);
       setProject(result.project);
       setSources(sourcePayload);
@@ -347,6 +387,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
+      setProjectRegistry(projectRegistryPayload.registry);
       await refreshModelLibrary();
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : String(setupError));
@@ -355,12 +396,116 @@ function App() {
     }
   }, [refreshModelLibrary]);
 
+  const handleCreateProject = useCallback(async (request: {
+    name: string;
+    sourceRoot: string;
+    dataRoot?: string;
+    targetModel?: string;
+    baseModel?: string;
+    ollamaModels?: string;
+    pythonCommand?: string;
+    sourceIncludes?: string;
+    sourceExcludes?: string;
+  }) => {
+    setProjectBusy(true);
+    setError("");
+    try {
+      const result = await createProject(request);
+      await applyProjectChange(result);
+      setActiveWorkspace("setup");
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : String(projectError));
+    } finally {
+      setProjectBusy(false);
+    }
+  }, [applyProjectChange]);
+
+  const handleSelectProject = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setProjectBusy(true);
+    setError("");
+    try {
+      const result = await selectProject(projectId);
+      await applyProjectChange(result);
+      setActiveWorkspace("setup");
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : String(projectError));
+    } finally {
+      setProjectBusy(false);
+    }
+  }, [applyProjectChange]);
+
+  const handleArchiveProject = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setProjectBusy(true);
+    setError("");
+    try {
+      const result = await archiveProject(projectId);
+      await applyProjectChange(result);
+      setActiveWorkspace("setup");
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : String(projectError));
+    } finally {
+      setProjectBusy(false);
+    }
+  }, [applyProjectChange]);
+
+  const handleDeleteProject = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setProjectBusy(true);
+    setError("");
+    try {
+      const result = await deleteProject(projectId);
+      await applyProjectChange(result);
+      setActiveWorkspace("setup");
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : String(projectError));
+    } finally {
+      setProjectBusy(false);
+    }
+  }, [applyProjectChange]);
+
+  const handleSaveSourceRules = useCallback(async (sourceIncludes: string, sourceExcludes: string) => {
+    if (!setupState?.config) return;
+    setSourceRulesBusy(true);
+    setError("");
+    try {
+      const result = await saveSetupConfig({
+        ...setupState.config,
+        sourceIncludes,
+        sourceExcludes
+      });
+      const [sourcePayload, projectRegistryPayload, modelLibraryPayload] = await Promise.all([getSources(), getProjectRegistry(), getModelLibrary()]);
+      setSetupState(result.setup);
+      setProject(result.project);
+      setSources(sourcePayload);
+      setModelExport(result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
+      setProjectRegistry(projectRegistryPayload.registry);
+      setModelLibrary(modelLibraryPayload.library);
+      setActiveWorkspace("sources");
+    } catch (rulesError) {
+      setError(rulesError instanceof Error ? rulesError.message : String(rulesError));
+    } finally {
+      setSourceRulesBusy(false);
+    }
+  }, [setupState?.config]);
+
   const handleRunFirstSetup = useCallback(async (config: SetupConfig, createModel: boolean) => {
     setSetupRunning(true);
     setError("");
     try {
       const result = await runFirstSetup(config, createModel);
-      const [sourcePayload, ollamaPayload, exportPackPayload] = await Promise.all([getSources(), getOllamaStatus(), getLatestExportPack()]);
+      const [sourcePayload, ollamaPayload, exportPackPayload, projectRegistryPayload] = await Promise.all([getSources(), getOllamaStatus(), getLatestExportPack(), getProjectRegistry()]);
       setSetupState(result.setup);
       setProject(result.project);
       setSources(sourcePayload);
@@ -377,6 +522,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
+      setProjectRegistry(projectRegistryPayload.registry);
       setActiveWorkspace("setup");
       await refreshModelLibrary();
     } catch (setupError) {
@@ -1144,15 +1290,21 @@ function App() {
                   <SetupPanel
                     setup={setupState}
                     project={project}
+                    projectRegistry={projectRegistry}
                     ollama={ollama}
                     saving={setupSaving}
                     running={setupRunning}
+                    projectBusy={projectBusy}
                     onRefresh={refresh}
                     onSave={handleSaveSetup}
                     onRun={handleRunFirstSetup}
+                    onCreateProject={handleCreateProject}
+                    onSelectProject={handleSelectProject}
+                    onArchiveProject={handleArchiveProject}
+                    onDeleteProject={handleDeleteProject}
                   />
                 ) : null}
-                {activeWorkspace === "sources" ? <SourceTable sources={sources || project?.sources} onRefresh={refresh} /> : null}
+                {activeWorkspace === "sources" ? <SourceTable sources={sources || project?.sources} onRefresh={refresh} savingRules={sourceRulesBusy} onSaveSourceRules={handleSaveSourceRules} /> : null}
                 {activeWorkspace === "proof" ? (
                   <ProofViewer
                     proof={proof}

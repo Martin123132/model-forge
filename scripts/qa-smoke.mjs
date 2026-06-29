@@ -35,19 +35,21 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse] = await Promise.all([
+  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
     getJson("/api/setup"),
     getJson("/api/ollama/status"),
     getJson("/api/export/latest"),
     getJson("/api/dataset/latest"),
-    getJson("/api/models/library")
+    getJson("/api/models/library"),
+    getJson("/api/projects")
   ]);
   const evalReport = project.latestEval || null;
   const dataset = project.latestDataset || datasetResponse.dataset || null;
   const exportPack = exportPackResponse.pack || null;
   const modelLibrary = modelLibraryResponse.library || null;
+  const projectRegistry = projectRegistryResponse.registry || null;
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
   const builderStages = latestBuilderRun?.stages || [];
@@ -86,6 +88,21 @@ async function main() {
       "Storage preference",
       Boolean(setup.doctor?.recommended?.dataRoot),
       setup.doctor ? `${setup.doctor.preferredDrive}: ${setup.doctor.recommended.dataRoot}` : "no storage recommendation"
+    ),
+    check(
+      "Project registry",
+      Boolean(
+        projectRegistry?.schema === "modelforge.project_registry.v1" &&
+          projectRegistry.projects?.length &&
+          projectRegistry.activeProjectId &&
+          projectRegistry.projects.some((item) => item.id === projectRegistry.activeProjectId)
+      ),
+      projectRegistry ? `${projectRegistry.summary.active} active, ${projectRegistry.summary.archived} archived, preferred=${projectRegistry.recommended.preferredDrive}` : "no project registry"
+    ),
+    check(
+      "Source rules",
+      Boolean(sources.sourceRules?.schema === "modelforge.source_rules.v1" && Array.isArray(sources.sourceRules.includePatterns) && Array.isArray(sources.sourceRules.excludePatterns)),
+      sources.sourceRules ? `${sources.sourceRules.includedFiles} included, ${sources.sourceRules.excludedFiles} hidden by rules` : "no source rules"
     ),
     check("Tool availability", allToolsAvailable, Object.entries(tools).map(([key, value]) => `${key}=${value.label}`).join(", ")),
     check("Ollama status", ollama.ok, ollama.ok ? `${ollama.selectedModel} running` : ollama.error || "not available", "warn"),

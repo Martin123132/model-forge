@@ -59,7 +59,24 @@ export type SourceSummary = {
   unreviewedFiles: number;
   licenseSignals?: LicenseSignals;
   licenseReview?: LicenseReview;
+  sourceRules?: SourceRules;
   rows: SourceRow[];
+};
+
+export type SourceRules = {
+  schema: string;
+  includePatterns: string[];
+  excludePatterns: string[];
+  includedFiles: number;
+  excludedFiles: number;
+  scannedFiles: number;
+  excludedPreview: Array<{
+    path: string;
+    language: string;
+    size: string;
+    sizeBytes: number;
+    reason: string;
+  }>;
 };
 
 export type SourceScopeRow = {
@@ -352,12 +369,60 @@ export type BuilderRun = {
 export type SetupCheckStatus = "pass" | "warn" | "fail" | "ready" | string;
 
 export type SetupConfig = {
+  projectId?: string;
+  projectName: string;
   sourceRoot: string;
   dataRoot: string;
   ollamaModels: string;
   pythonCommand: string;
   baseModel: string;
   targetModel: string;
+  sourceIncludes: string;
+  sourceExcludes: string;
+};
+
+export type ProjectRegistryEntry = {
+  id: string;
+  name: string;
+  status: "active" | "archived" | string;
+  active: boolean;
+  sourceRoot: string;
+  dataRoot: string;
+  ollamaModels: string;
+  pythonCommand: string;
+  baseModel: string;
+  targetModel: string;
+  sourceIncludes: string;
+  sourceExcludes: string;
+  createdAt: string;
+  updatedAt: string;
+  lastOpenedAt: string;
+  dataOnPreferredDrive: boolean;
+  sourceRules: {
+    includePatterns: string[];
+    excludePatterns: string[];
+    includeCount: number;
+    excludeCount: number;
+  };
+};
+
+export type ProjectRegistry = {
+  schema: string;
+  createdAt: string;
+  updatedAt: string;
+  activeProjectId: string;
+  registryPath: string;
+  recommended: {
+    dataRoot: string;
+    ollamaModels: string;
+    preferredDrive: string;
+  };
+  summary: {
+    total: number;
+    active: number;
+    archived: number;
+  };
+  projects: ProjectRegistryEntry[];
 };
 
 export type SetupCheck = {

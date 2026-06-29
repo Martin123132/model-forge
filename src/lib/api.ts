@@ -13,6 +13,7 @@ import type {
   ModelExport,
   ModelLibrary,
   OllamaStatus,
+  ProjectRegistry,
   ProjectPayload,
   ProofBundle,
   RecipePackRun,
@@ -106,6 +107,48 @@ export function getToolStatus() {
 
 export function getSetupState() {
   return requestJson<SetupState>("/api/setup");
+}
+
+export function getProjectRegistry() {
+  return requestJson<{ ok: boolean; registry: ProjectRegistry }>("/api/projects");
+}
+
+export function createProject(request: {
+  name: string;
+  sourceRoot: string;
+  dataRoot?: string;
+  targetModel?: string;
+  baseModel?: string;
+  ollamaModels?: string;
+  pythonCommand?: string;
+  sourceIncludes?: string;
+  sourceExcludes?: string;
+}) {
+  return requestJson<{ ok: boolean; registry: ProjectRegistry; setup: SetupState; project: ProjectPayload }>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export function selectProject(projectId: string) {
+  return requestJson<{ ok: boolean; registry: ProjectRegistry; setup: SetupState; project: ProjectPayload }>("/api/projects/select", {
+    method: "POST",
+    body: JSON.stringify({ projectId })
+  });
+}
+
+export function archiveProject(projectId: string) {
+  return requestJson<{ ok: boolean; registry: ProjectRegistry; setup: SetupState; project: ProjectPayload }>("/api/projects/archive", {
+    method: "POST",
+    body: JSON.stringify({ projectId })
+  });
+}
+
+export function deleteProject(projectId: string) {
+  return requestJson<{ ok: boolean; registry: ProjectRegistry; setup: SetupState; project: ProjectPayload }>("/api/projects/delete", {
+    method: "POST",
+    body: JSON.stringify({ projectId })
+  });
 }
 
 export function saveSetupConfig(config: SetupConfig) {

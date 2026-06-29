@@ -1,4 +1,4 @@
-import { Check, Copy, RefreshCw, Search } from "lucide-react";
+import { Check, Copy, Filter, RefreshCw, Save, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { writeClipboardText } from "../lib/clipboard";
 import type { SourceRow, SourceSummary } from "../lib/types";
@@ -6,13 +6,18 @@ import type { SourceRow, SourceSummary } from "../lib/types";
 type SourceTableProps = {
   sources?: SourceSummary | null;
   onRefresh: () => void;
+  savingRules?: boolean;
+  onSaveSourceRules?: (sourceIncludes: string, sourceExcludes: string) => void;
 };
 
-export function SourceTable({ sources, onRefresh }: SourceTableProps) {
+export function SourceTable({ sources, onRefresh, savingRules = false, onSaveSourceRules }: SourceTableProps) {
   const rows = sources?.rows || [];
+  const rules = sources?.sourceRules;
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [licenseFilter, setLicenseFilter] = useState("all");
+  const [includeText, setIncludeText] = useState("");
+  const [excludeText, setExcludeText] = useState("");
   const [copiedHash, setCopiedHash] = useState("");
   const [copyNotice, setCopyNotice] = useState("");
   const [manualHash, setManualHash] = useState("");
@@ -30,6 +35,11 @@ export function SourceTable({ sources, onRefresh }: SourceTableProps) {
     };
   }, []);
 
+  useEffect(() => {
+    setIncludeText((rules?.includePatterns || []).join("\n"));
+    setExcludeText((rules?.excludePatterns || []).join("\n"));
+  }, [rules?.excludePatterns, rules?.includePatterns]);
+
   const typeOptions = useMemo(() => uniqueSorted(rows.map((row) => row.type)), [rows]);
   const licenseOptions = useMemo(() => uniqueSorted(rows.map((row) => row.license)), [rows]);
   const visibleRows = useMemo(() => {
@@ -46,6 +56,9 @@ export function SourceTable({ sources, onRefresh }: SourceTableProps) {
     });
   }, [licenseFilter, query, rows, typeFilter]);
   const hasActiveFilters = Boolean(query.trim()) || typeFilter !== "all" || licenseFilter !== "all";
+  const savedIncludeText = (rules?.includePatterns || []).join("\n");
+  const savedExcludeText = (rules?.excludePatterns || []).join("\n");
+  const rulesChanged = includeText !== savedIncludeText || excludeText !== savedExcludeText;
 
   async function copyHash(row: SourceRow) {
     try {
@@ -75,6 +88,10 @@ export function SourceTable({ sources, onRefresh }: SourceTableProps) {
     setManualHash("");
   }
 
+  function saveRules() {
+    onSaveSourceRules?.(includeText, excludeText);
+  }
+
   return (
     <section className="source-section" aria-labelledby="sources-title">
       <div className="source-header">
@@ -85,6 +102,46 @@ export function SourceTable({ sources, onRefresh }: SourceTableProps) {
         <button className="icon-button small" type="button" aria-label="Refresh sources" onClick={onRefresh}>
           <RefreshCw size={16} />
         </button>
+      </div>
+
+      <div className="source-rules-panel" aria-label="Source include and exclude rules">
+        <div className="source-rules-heading">
+          <div>
+            <Filter size={16} />
+            <div>
+              <strong>Source boundary</strong>
+              <span>
+                {rules ? `${rules.includedFiles.toLocaleString()} included, ${rules.excludedFiles.toLocaleString()} hidden by rules` : "Rules apply to the next scan"}
+              </span>
+            </div>
+          </div>
+          <button className="plain-button small" type="button" disabled={!onSaveSourceRules || savingRules || !rulesChanged} onClick={saveRules}>
+            {savingRules ? <RefreshCw className="spin-icon" size={14} /> : <Save size={14} />}
+            <span>{savingRules ? "Saving" : "Save rules"}</span>
+          </button>
+        </div>
+        <div className="source-rules-grid">
+          <label>
+            <span>Include only</span>
+            <textarea value={includeText} onChange={(event) => setIncludeText(event.target.value)} placeholder={"Optional patterns, one per line\nsrc/\ndocs/\n*.md"} />
+          </label>
+          <label>
+            <span>Exclude</span>
+            <textarea value={excludeText} onChange={(event) => setExcludeText(event.target.value)} placeholder={"Optional patterns, one per line\ndist/\n*.png\nsecrets"} />
+          </label>
+          <div className="source-rules-preview">
+            <span>Hidden preview</span>
+            {rules?.excludedPreview?.length ? (
+              rules.excludedPreview.slice(0, 4).map((item) => (
+                <strong key={`${item.path}-${item.reason}`} title={`${item.path} - ${item.reason}`}>
+                  {item.path}
+                </strong>
+              ))
+            ) : (
+              <strong>No rule-hidden files</strong>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="table-toolbar">

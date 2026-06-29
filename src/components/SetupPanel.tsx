@@ -1,27 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Database, FolderCog, HardDrive, LoaderCircle, Play, RefreshCw, Save, TerminalSquare, Wrench } from "lucide-react";
-import type { OllamaStatus, ProjectPayload, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
+import { AlertTriangle, Archive, CheckCircle2, Database, FolderCog, FolderPlus, HardDrive, LoaderCircle, Play, RefreshCw, Save, TerminalSquare, Wrench } from "lucide-react";
+import type { OllamaStatus, ProjectPayload, ProjectRegistry, ProjectRegistryEntry, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 
 type SetupPanelProps = {
   setup: SetupState | null;
   project: ProjectPayload | null;
+  projectRegistry?: ProjectRegistry | null;
   ollama: OllamaStatus | null;
   saving: boolean;
   running: boolean;
+  projectBusy: boolean;
   onRefresh: () => void;
   onSave: (config: SetupConfig) => void;
   onRun: (config: SetupConfig, createModel: boolean) => void;
+  onCreateProject: (request: { name: string; sourceRoot: string; dataRoot?: string; targetModel?: string; baseModel?: string; ollamaModels?: string; pythonCommand?: string; sourceIncludes?: string; sourceExcludes?: string }) => void;
+  onSelectProject: (projectId: string) => void;
+  onArchiveProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
 };
 
 function emptyConfig(): SetupConfig {
   return {
+    projectId: "",
+    projectName: "Repo-Aware Local Model",
     sourceRoot: "",
     dataRoot: "",
     ollamaModels: "",
     pythonCommand: "",
     baseModel: "",
-    targetModel: "modelforge-local:latest"
+    targetModel: "modelforge-local:latest",
+    sourceIncludes: "",
+    sourceExcludes: ""
   };
 }
 
@@ -66,17 +76,56 @@ function CheckCard({ check }: { check: SetupCheck }) {
   );
 }
 
-export function SetupPanel({ setup, project, ollama, saving, running, onRefresh, onSave, onRun }: SetupPanelProps) {
+function compactPath(path?: string) {
+  if (!path) return "Not set";
+  return path.replace(/^([A-Z]:\\Users\\[^\\]+\\Documents\\)/i, "~\\Documents\\");
+}
+
+function projectTone(project: ProjectRegistryEntry): "pass" | "warn" | "neutral" {
+  if (project.status === "archived") return "neutral";
+  if (project.active) return "pass";
+  return project.dataOnPreferredDrive ? "pass" : "warn";
+}
+
+export function SetupPanel({
+  setup,
+  project,
+  projectRegistry,
+  ollama,
+  saving,
+  running,
+  projectBusy,
+  onRefresh,
+  onSave,
+  onRun,
+  onCreateProject,
+  onSelectProject,
+  onArchiveProject,
+  onDeleteProject
+}: SetupPanelProps) {
   const [config, setConfig] = useState<SetupConfig>(emptyConfig);
   const [createModel, setCreateModel] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newSourceRoot, setNewSourceRoot] = useState("");
+  const [newDataRoot, setNewDataRoot] = useState("");
 
   useEffect(() => {
     if (setup?.config) {
-      setConfig(setup.config);
+      const nextConfig = { ...emptyConfig(), ...setup.config };
+      setConfig(nextConfig);
+      setNewProjectName(`${setup.config.projectName || "Local AI"} copy`);
+      setNewSourceRoot(nextConfig.sourceRoot);
     }
   }, [setup?.config]);
 
+  useEffect(() => {
+    if (projectRegistry?.recommended.dataRoot && !newDataRoot) {
+      setNewDataRoot(projectRegistry.recommended.dataRoot);
+    }
+  }, [newDataRoot, projectRegistry?.recommended.dataRoot]);
+
   const readiness = useMemo(() => setup?.checks || [], [setup?.checks]);
+  const projects = useMemo(() => projectRegistry?.projects || [], [projectRegistry?.projects]);
   const allReady = readiness.length > 0 && readiness.every((check) => checkStatus(check) === "pass");
   const sourceCount = setup?.summary.sources ?? project?.sources.totalFiles ?? 0;
   const proofFresh = setup?.summary.proofFresh;
@@ -86,6 +135,20 @@ export function SetupPanel({ setup, project, ollama, saving, running, onRefresh,
 
   function updateConfig(key: keyof SetupConfig, value: string) {
     setConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  function createProjectFromForm() {
+    onCreateProject({
+      name: newProjectName.trim() || config.projectName || "Local AI project",
+      sourceRoot: newSourceRoot.trim() || config.sourceRoot,
+      dataRoot: newDataRoot.trim() || projectRegistry?.recommended.dataRoot || config.dataRoot,
+      targetModel: config.targetModel,
+      baseModel: config.baseModel,
+      ollamaModels: config.ollamaModels,
+      pythonCommand: config.pythonCommand,
+      sourceIncludes: config.sourceIncludes,
+      sourceExcludes: config.sourceExcludes
+    });
   }
 
   function applyDoctorAction(action: SetupDoctorAction) {
@@ -183,6 +246,87 @@ export function SetupPanel({ setup, project, ollama, saving, running, onRefresh,
         </section>
       ) : null}
 
+      <section className="project-manager" aria-labelledby="project-manager-title">
+        <div className="project-manager-heading">
+          <div>
+            <span>Project/Data Manager</span>
+            <h3 id="project-manager-title">Local AI projects</h3>
+            <p>{projectRegistry ? `${projectRegistry.summary.active} active, ${projectRegistry.summary.archived} archived. Registry stays local at ${compactPath(projectRegistry.registryPath)}.` : "Loading local project registry."}</p>
+          </div>
+          <StatusPill status={projectRegistry?.summary.active ? "pass" : "neutral"} label={projectRegistry?.recommended.preferredDrive || "Local"} />
+        </div>
+
+        <div className="project-card-grid">
+          {projects.map((item) => (
+            <article className={`project-card ${item.active ? "active" : ""} ${item.status}`} key={item.id}>
+              <div className="project-card-head">
+                <div>
+                  <span>{item.status === "archived" ? "Archived" : item.active ? "Current" : "Saved"}</span>
+                  <strong title={item.name}>{item.name}</strong>
+                </div>
+                <StatusPill status={projectTone(item)} label={item.active ? "Open" : item.status === "archived" ? "Archived" : "Ready"} />
+              </div>
+              <dl>
+                <div>
+                  <dt>Source</dt>
+                  <dd title={item.sourceRoot}>{compactPath(item.sourceRoot)}</dd>
+                </div>
+                <div>
+                  <dt>Data</dt>
+                  <dd title={item.dataRoot}>{compactPath(item.dataRoot)}</dd>
+                </div>
+                <div>
+                  <dt>Rules</dt>
+                  <dd>{item.sourceRules.includeCount} include, {item.sourceRules.excludeCount} exclude</dd>
+                </div>
+              </dl>
+              <div className="project-card-actions">
+                <button className="plain-button small" type="button" disabled={projectBusy || item.active || item.status === "archived"} onClick={() => onSelectProject(item.id)}>
+                  <FolderCog size={14} />
+                  <span>Select</span>
+                </button>
+                <button className="plain-button small" type="button" disabled={projectBusy || item.status === "archived" || projects.filter((projectItem) => projectItem.status !== "archived").length <= 1} onClick={() => onArchiveProject(item.id)}>
+                  <Archive size={14} />
+                  <span>Archive</span>
+                </button>
+                {item.status === "archived" ? (
+                  <button className="plain-button small" type="button" disabled={projectBusy} onClick={() => onDeleteProject(item.id)}>
+                    <Archive size={14} />
+                    <span>Remove</span>
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="project-create-box">
+          <div className="project-create-title">
+            <FolderPlus size={16} />
+            <div>
+              <strong>New project</strong>
+              <span>Use a separate data root so builds do not crowd the wrong drive.</span>
+            </div>
+          </div>
+          <label>
+            <span>Name</span>
+            <input value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} />
+          </label>
+          <label>
+            <span>Source folder</span>
+            <input value={newSourceRoot} onChange={(event) => setNewSourceRoot(event.target.value)} />
+          </label>
+          <label>
+            <span>Data root</span>
+            <input value={newDataRoot} onChange={(event) => setNewDataRoot(event.target.value)} />
+          </label>
+          <button className="primary-action compact" type="button" disabled={projectBusy || !newSourceRoot.trim()} onClick={createProjectFromForm}>
+            {projectBusy ? <LoaderCircle className="spin-icon" size={15} /> : <FolderPlus size={15} />}
+            <span>{projectBusy ? "Saving" : "Create project"}</span>
+          </button>
+        </div>
+      </section>
+
       <div className="setup-summary-strip">
         <div>
           <FolderCog size={16} />
@@ -208,6 +352,10 @@ export function SetupPanel({ setup, project, ollama, saving, running, onRefresh,
 
       <div className="setup-body">
         <form className="setup-form" onSubmit={(event) => event.preventDefault()}>
+          <label>
+            <span>Project name</span>
+            <input value={config.projectName} onChange={(event) => updateConfig("projectName", event.target.value)} />
+          </label>
           <label>
             <span>Source folder</span>
             <input value={config.sourceRoot} onChange={(event) => updateConfig("sourceRoot", event.target.value)} />
