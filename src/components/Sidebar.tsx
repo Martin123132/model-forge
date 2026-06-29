@@ -1,7 +1,8 @@
-import { Boxes, FileCheck2, Gauge, GitBranch, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Boxes, FileCheck2, Gauge, GitBranch, ShieldCheck, SlidersHorizontal, Wand2 } from "lucide-react";
 import type { WorkspaceView } from "./WorkspaceTabs";
 
 const navItems = [
+  { label: "Builder", icon: Wand2, view: "builder" },
   { label: "Setup", icon: SlidersHorizontal, view: "setup" },
   { label: "Sources", icon: FileCheck2, view: "sources" },
   { label: "Proof", icon: Gauge, view: "proof" },

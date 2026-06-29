@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, spawn } from "node:child_process";
@@ -85,6 +86,8 @@ async function ensureDataRoot() {
   await mkdir(join(dataRoot, "exports"), { recursive: true });
   await mkdir(join(dataRoot, "exports", "runs"), { recursive: true });
   await mkdir(join(dataRoot, "chats"), { recursive: true });
+  await mkdir(join(dataRoot, "builder"), { recursive: true });
+  await mkdir(join(dataRoot, "builder", "history"), { recursive: true });
 }
 
 function commandEnv(extra = {}) {
@@ -445,6 +448,503 @@ function estimateDatasetMetrics(sources) {
     estimatedSize: `${estimatedMegabytes} MB est.`,
     reviewedPercent
   };
+}
+
+function builderPlanId() {
+  return `build-plan-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function parseJsonLoose(text) {
+  try {
+    return JSON.parse(String(text || "").trim());
+  } catch {
+    return null;
+  }
+}
+
+function parseNvidiaGpus(output) {
+  return String(output || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, memory, driverVersion] = line.split(",").map((part) => part.trim());
+      const memoryMb = Math.max(0, Math.round(Number(memory) || 0));
+      return {
+        name: name || "NVIDIA GPU",
+        memoryMb,
+        memory: memoryMb ? `${memoryMb.toLocaleString()} MB` : "Unknown",
+        driverVersion: driverVersion || "",
+        source: "nvidia-smi"
+      };
+    });
+}
+
+function normalizeVideoController(controller) {
+  const adapterBytes = Math.max(0, Number(controller?.AdapterRAM || controller?.adapterRam || 0));
+  const memoryMb = adapterBytes ? Math.round(adapterBytes / 1024 / 1024) : 0;
+  return {
+    name: String(controller?.Name || controller?.name || "Display adapter"),
+    memoryMb,
+    memory: memoryMb ? `${memoryMb.toLocaleString()} MB` : "Unknown",
+    driverVersion: String(controller?.DriverVersion || controller?.driverVersion || ""),
+    source: "Win32_VideoController"
+  };
+}
+
+async function getWindowsVideoControllers() {
+  if (process.platform !== "win32") return [];
+  const script = [
+    "$controllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |",
+    "Select-Object Name,AdapterRAM,DriverVersion;",
+    "if ($controllers) { $controllers | ConvertTo-Json -Compress }"
+  ].join(" ");
+  const result = await runCommand("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { timeout: 6000 });
+  if (!result.ok || !result.stdout.trim()) return [];
+  const parsed = parseJsonLoose(result.stdout);
+  return (Array.isArray(parsed) ? parsed : parsed ? [parsed] : []).map(normalizeVideoController);
+}
+
+async function getDataDriveSpace() {
+  const driveMatch = dataRoot.match(/^([a-z]):/i);
+  if (process.platform === "win32" && driveMatch) {
+    const driveName = driveMatch[1].toUpperCase();
+    const script = [
+      `$drive = Get-PSDrive -Name '${driveName}' -ErrorAction SilentlyContinue;`,
+      "if ($drive) { [pscustomobject]@{ Name=$drive.Name; Root=$drive.Root; Free=$drive.Free; Used=$drive.Used } | ConvertTo-Json -Compress }"
+    ].join(" ");
+    const result = await runCommand("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { timeout: 6000 });
+    const parsed = result.ok ? parseJsonLoose(result.stdout) : null;
+    if (parsed) {
+      const freeBytes = Math.max(0, Number(parsed.Free || 0));
+      const usedBytes = Math.max(0, Number(parsed.Used || 0));
+      return {
+        dataRoot,
+        root: String(parsed.Root || `${driveName}:\\`),
+        freeBytes,
+        free: formatBytes(freeBytes),
+        usedBytes,
+        used: formatBytes(usedBytes),
+        source: "Get-PSDrive"
+      };
+    }
+  }
+
+  if (process.platform !== "win32") {
+    const result = await runCommand("df", ["-k", dataRoot], { timeout: 6000 });
+    const lines = result.stdout.split(/\r?\n/).filter(Boolean);
+    const fields = lines[1]?.trim().split(/\s+/) || [];
+    const freeBytes = Math.max(0, Number(fields[3] || 0) * 1024);
+    const usedBytes = Math.max(0, Number(fields[2] || 0) * 1024);
+    if (freeBytes || usedBytes) {
+      return {
+        dataRoot,
+        root: fields[5] || dataRoot,
+        freeBytes,
+        free: formatBytes(freeBytes),
+        usedBytes,
+        used: formatBytes(usedBytes),
+        source: "df"
+      };
+    }
+  }
+
+  return {
+    dataRoot,
+    root: dataRoot,
+    freeBytes: 0,
+    free: "Unknown",
+    usedBytes: 0,
+    used: "Unknown",
+    source: "unavailable"
+  };
+}
+
+function hardwareTierFor({ totalMemoryBytes, totalVramMb, gpuDetected }) {
+  const totalMemoryGb = totalMemoryBytes / 1024 / 1024 / 1024;
+  if (totalVramMb >= 24576 && totalMemoryGb >= 48) {
+    return {
+      id: "workstation",
+      label: "Workstation builder",
+      detail: "Strong local adapter builds are realistic, with room for larger quantized bases.",
+      canTrainAdapter: true,
+      canRunQuantized: true
+    };
+  }
+  if (totalVramMb >= 12000 && totalMemoryGb >= 24) {
+    return {
+      id: "adapter-ready",
+      label: "Adapter-ready",
+      detail: "LoRA/QLoRA-style adapter builds are plausible once a runner is connected.",
+      canTrainAdapter: true,
+      canRunQuantized: true
+    };
+  }
+  if (totalVramMb >= 8000 && totalMemoryGb >= 16) {
+    return {
+      id: "starter-lora",
+      label: "Starter adapter",
+      detail: "Small adapter experiments may fit, but dataset/export builds are the safer default.",
+      canTrainAdapter: true,
+      canRunQuantized: true
+    };
+  }
+  if (totalMemoryGb >= 16 || gpuDetected) {
+    return {
+      id: "profile-dataset",
+      label: "Profile and dataset builder",
+      detail: "Best route is local profiles, source-grounded datasets, and export packs before training.",
+      canTrainAdapter: false,
+      canRunQuantized: true
+    };
+  }
+  return {
+    id: "small-local",
+    label: "Small local builder",
+    detail: "Keep the build light: proof, dataset, compact local models, and external training later.",
+    canTrainAdapter: false,
+    canRunQuantized: false
+  };
+}
+
+async function getHardwareProfile() {
+  const [nvidia, windowsControllers, disk, ollama] = await Promise.all([
+    runCommand("nvidia-smi", ["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"], { timeout: 6000 }),
+    getWindowsVideoControllers(),
+    getDataDriveSpace(),
+    getOllamaStatus()
+  ]);
+  const nvidiaDevices = nvidia.ok ? parseNvidiaGpus(nvidia.stdout) : [];
+  const fallbackDevices = nvidiaDevices.length ? [] : windowsControllers;
+  const devices = [...nvidiaDevices, ...fallbackDevices];
+  const totalVramMb = devices.reduce((total, device) => total + Math.max(0, Number(device.memoryMb || 0)), 0);
+  const totalMemoryBytes = os.totalmem();
+  const tier = hardwareTierFor({
+    totalMemoryBytes,
+    totalVramMb,
+    gpuDetected: devices.length > 0
+  });
+
+  return {
+    schema: "modelforge.hardware_profile.v1",
+    createdAt: new Date().toISOString(),
+    platform: {
+      os: os.platform(),
+      arch: os.arch(),
+      release: os.release()
+    },
+    cpu: {
+      model: os.cpus()[0]?.model || "Unknown CPU",
+      cores: Math.max(1, Math.ceil((os.cpus().length || 1) / 2)),
+      threads: os.cpus().length || 1
+    },
+    memory: {
+      totalBytes: totalMemoryBytes,
+      total: formatBytes(totalMemoryBytes),
+      freeBytes: os.freemem(),
+      free: formatBytes(os.freemem())
+    },
+    disk,
+    gpu: {
+      detected: devices.length > 0,
+      source: nvidiaDevices.length ? "nvidia-smi" : fallbackDevices.length ? "Win32_VideoController" : "none",
+      totalVramMb,
+      totalVram: totalVramMb ? `${totalVramMb.toLocaleString()} MB` : "Unknown",
+      devices
+    },
+    ollama: {
+      ok: ollama.ok,
+      version: ollama.version,
+      selectedModel: ollama.selectedModel,
+      modelCount: ollama.models.length,
+      modelsRoot: ollama.modelsRoot
+    },
+    tier
+  };
+}
+
+function normalizeBuilderRequest(body = {}) {
+  const rawDataTypes = Array.isArray(body.dataTypes) ? body.dataTypes : [];
+  const dataTypes = rawDataTypes.map((item) => cleanSetting(item).toLowerCase()).filter(Boolean).slice(0, 8);
+  return {
+    intent: cleanSetting(body.intent).slice(0, 1200),
+    audience: cleanSetting(body.audience || "personal").slice(0, 80),
+    personality: cleanSetting(body.personality || "practical").slice(0, 80),
+    privacy: cleanSetting(body.privacy || "local-only").slice(0, 80),
+    qualitySpeed: cleanSetting(body.qualitySpeed || "balanced").slice(0, 80),
+    buildMode: cleanSetting(body.buildMode || "auto").slice(0, 80),
+    targetDevice: cleanSetting(body.targetDevice || "this machine").slice(0, 120),
+    dataTypes: dataTypes.length ? dataTypes : ["code", "documents"]
+  };
+}
+
+function chooseBaseModelRecommendation(request, hardware, ollama) {
+  const intent = request.intent.toLowerCase();
+  const codeHeavy = request.dataTypes.includes("code") || /\b(code|repo|developer|programming|typescript|python)\b/.test(intent);
+  const selected = ollama.selectedModel || hardware.ollama.selectedModel || "";
+  if (hardware.gpu.totalVramMb >= 12000) {
+    return {
+      label: codeHeavy ? "7B code-capable instruct base" : "7B general instruct base",
+      model: selected || (codeHeavy ? "qwen2.5-coder:7b" : "llama3.1:8b"),
+      reason: "This hardware tier can usually handle a useful quantized 7B-class base locally."
+    };
+  }
+  if (hardware.memory.totalBytes >= 16 * 1024 * 1024 * 1024) {
+    return {
+      label: "Compact instruct base",
+      model: selected || "llama3.2:3b",
+      reason: "A compact local base keeps the first build responsive while the dataset and proof path mature."
+    };
+  }
+  return {
+    label: "Small local or external runner base",
+    model: selected || "tinyllama or llama3.2:1b",
+    reason: "The plan should stay light until more RAM or GPU memory is available."
+  };
+}
+
+function chooseBuilderRoute(request, hardware, artifacts) {
+  const wantsAdapter = request.buildMode === "adapter" || request.qualitySpeed === "quality" || request.qualitySpeed === "maximum";
+  const wantsPortable = request.buildMode === "portable" || request.targetDevice.toLowerCase().includes("another");
+  if (!artifacts.sourceReady) {
+    return {
+      id: "source-onboarding",
+      label: "Source setup first",
+      reason: "ModelForge needs a readable source boundary before it can build datasets, recipes, or proof."
+    };
+  }
+  if (hardware.tier.canTrainAdapter && wantsAdapter && artifacts.datasetReady) {
+    return {
+      id: "adapter-lora",
+      label: "LoRA/QLoRA adapter route",
+      reason: "Your hardware has enough GPU memory for a realistic adapter path, and a Dataset Forge pack exists."
+    };
+  }
+  if (hardware.tier.canTrainAdapter && wantsAdapter) {
+    return {
+      id: "dataset-then-adapter",
+      label: "Dataset pack, then adapter",
+      reason: "The machine looks adapter-capable, but the source-grounded dataset should be built before training."
+    };
+  }
+  if (wantsPortable && artifacts.recipeReady) {
+    return {
+      id: "export-runner",
+      label: "Reusable export pack",
+      reason: "A recipe already exists, so the best next move is a portable pack with proof and runner instructions."
+    };
+  }
+  if (artifacts.datasetReady) {
+    return {
+      id: "recipe-export",
+      label: "Recipe and export route",
+      reason: "A dataset exists; turn it into a versioned recipe that can recreate the local target."
+    };
+  }
+  return {
+    id: "dataset-pack",
+    label: "Dataset pack now",
+    reason: "This is the safest non-dev path: build clean JSONL examples with source hashes before any heavier model work."
+  };
+}
+
+function planStep(id, label, status, action, detail, workspace) {
+  return { id, label, status, action, detail, workspace };
+}
+
+async function getLatestBuilderPlan() {
+  return readJsonIfExists(join(dataRoot, "builder", "latest", "build-plan.json"));
+}
+
+async function buildAiBuildPlan(body = {}) {
+  await ensureDataRoot();
+  const createdAt = new Date().toISOString();
+  const planId = builderPlanId();
+  const latestDir = join(dataRoot, "builder", "latest");
+  const versionDir = join(dataRoot, "builder", "history", planId);
+  const request = normalizeBuilderRequest(body);
+  const [hardware, sources, latestModelExport, latestProof, latestEval, latestDataset, latestRecipe, ollama] = await Promise.all([
+    getHardwareProfile(),
+    walkSources(sourceRoot),
+    getLatestModelExport(),
+    getLatestProofBundle(),
+    getLatestEvalReport(),
+    getLatestDatasetForge(),
+    getLatestForgeRecipe(),
+    getOllamaStatus()
+  ]);
+  const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
+  const proofFresh = Boolean(
+    latestProof &&
+      proofSourceSummary &&
+      proofSourceSummary.totalFiles === sources.totalFiles &&
+      proofSourceSummary.sampledFiles === sources.sampledFiles &&
+      proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
+  );
+  const evalFresh = Boolean(latestEval && latestProof && latestEval.proofPath === latestProof.path && proofFresh);
+  const artifacts = {
+    setupConfigured: existsSync(setupConfigPath),
+    sourceReady: sources.totalFiles > 0,
+    datasetReady: Boolean(latestDataset?.summary?.totalExamples),
+    modelProfileReady: Boolean(latestModelExport?.modelfilePath),
+    recipeReady: Boolean(latestRecipe?.recipeId),
+    proofFresh,
+    evalFresh
+  };
+  const route = chooseBuilderRoute(request, hardware, artifacts);
+  const baseModel = chooseBaseModelRecommendation(request, hardware, ollama);
+  const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
+  const estimatedTime = routeNeedsAdapter
+    ? hardware.tier.id === "starter-lora"
+      ? "45-180 minutes after adapter runner wiring"
+      : "30-120 minutes after adapter runner wiring"
+    : artifacts.datasetReady
+      ? "5-20 minutes for recipe/export refresh"
+      : "10-30 minutes for dataset, proof, and recipe artifacts";
+  const estimatedDisk = routeNeedsAdapter
+    ? hardware.gpu.totalVramMb >= 12000
+      ? "8-30 GB depending on base and adapter settings"
+      : "4-12 GB for compact experiments"
+    : "500 MB-3 GB for source, proof, dataset, and export packs";
+  const steps = [
+    planStep(
+      "setup",
+      "Confirm local setup",
+      artifacts.setupConfigured ? "pass" : "ready",
+      "Save source, data root, Ollama model path, base model, and target model.",
+      artifacts.setupConfigured ? "Setup is saved." : "Start here so paths stay on the intended drive.",
+      "setup"
+    ),
+    planStep(
+      "source-boundary",
+      "Scan source boundary",
+      artifacts.sourceReady ? "pass" : "blocked",
+      "Build a source inventory with hashes and license signals.",
+      artifacts.sourceReady ? `${sources.totalFiles.toLocaleString()} files found.` : "Choose a readable source folder first.",
+      "sources"
+    ),
+    planStep(
+      "dataset-forge",
+      "Build Dataset Forge pack",
+      artifacts.datasetReady ? "pass" : artifacts.sourceReady ? "ready" : "blocked",
+      "Create JSONL examples from local source files with hashes and provenance.",
+      artifacts.datasetReady ? `${latestDataset.summary.totalExamples.toLocaleString()} examples ready.` : "This is the next practical build step.",
+      "model"
+    ),
+    planStep(
+      "model-profile",
+      "Export local model profile",
+      artifacts.modelProfileReady ? "pass" : ollama.ok ? "ready" : "warn",
+      "Write an Ollama Modelfile and source-bounded system prompt.",
+      artifacts.modelProfileReady ? latestModelExport.modelName : ollama.ok ? "Ollama is available." : "Start Ollama or keep this as an export-only plan.",
+      "model"
+    ),
+    planStep(
+      "recipe",
+      "Package forge recipe",
+      artifacts.recipeReady ? "pass" : artifacts.datasetReady ? "ready" : "blocked",
+      "Bundle dataset, proof, eval gates, Ollama profile, and runner contracts.",
+      artifacts.recipeReady ? latestRecipe.recipeId : "Build after Dataset Forge exists.",
+      "model"
+    ),
+    planStep(
+      routeNeedsAdapter ? "adapter-runner" : "export-runner",
+      routeNeedsAdapter ? "Prepare adapter runner" : "Run export pack",
+      route.id === "adapter-lora" ? "ready" : artifacts.recipeReady ? "ready" : "blocked",
+      routeNeedsAdapter ? "Use the recipe's LoRA/QLoRA plan without widening the source boundary." : "Recreate the local model target from the exported pack and store the receipt.",
+      routeNeedsAdapter ? "Adapter execution is the next planned capability." : "This proves the pack can rebuild the target.",
+      "model"
+    ),
+    planStep(
+      "proof-release",
+      "Refresh proof and release gates",
+      artifacts.proofFresh && artifacts.evalFresh ? "pass" : latestProof ? "warn" : "ready",
+      "Rebuild proof, run gates, and review license posture before sharing.",
+      artifacts.proofFresh && artifacts.evalFresh ? "Proof and eval match the current source tree." : "Public claims should wait for fresh proof.",
+      "release"
+    )
+  ];
+  const limitations = [
+    routeNeedsAdapter
+      ? "ModelForge exports the adapter plan today; full local LoRA/QLoRA execution is the next runner milestone."
+      : "This plan builds model-ready artifacts and local Ollama targets, not a new foundation model from scratch.",
+    hardware.tier.canTrainAdapter
+      ? "Adapter feasibility still depends on the exact base model, context length, batch size, and quantization."
+      : "No strong local-training GPU was detected, so the recommended route avoids pretending this machine should train heavy adapters.",
+    request.privacy === "local-only"
+      ? "The plan keeps source and artifacts inside the configured local data root."
+      : "If you use an external runner later, rebuild proof before exporting and review license constraints."
+  ];
+  const nextActions = [
+    !artifacts.setupConfigured ? { id: "open-setup", label: "Open Setup", workspace: "setup" } : null,
+    artifacts.sourceReady && !artifacts.datasetReady ? { id: "build-dataset", label: "Build Dataset", workspace: "model" } : null,
+    artifacts.datasetReady && !artifacts.recipeReady ? { id: "build-recipe", label: "Build Recipe", workspace: "model" } : null,
+    artifacts.recipeReady ? { id: "open-model", label: "Open Model Lab", workspace: "model" } : null,
+    !artifacts.proofFresh || !artifacts.evalFresh ? { id: "open-release", label: "Review Gates", workspace: "release" } : null
+  ].filter(Boolean);
+  const plan = {
+    schema: "modelforge.builder_plan.v1",
+    planId,
+    createdAt,
+    intent: request.intent || "Build a useful local AI from this source boundary.",
+    request,
+    sourceRoot,
+    dataRoot,
+    hardware,
+    artifacts,
+    recommendedRoute: route.id,
+    routeLabel: route.label,
+    routeReason: route.reason,
+    baseModelRecommendation: baseModel,
+    estimates: {
+      time: estimatedTime,
+      disk: estimatedDisk,
+      hardwareTier: hardware.tier.label
+    },
+    steps,
+    limitations,
+    nextActions,
+    files: {
+      dir: latestDir,
+      json: join(latestDir, "build-plan.json"),
+      markdown: join(latestDir, "build-plan.md"),
+      versionDir,
+      versionJson: join(versionDir, "build-plan.json"),
+      versionMarkdown: join(versionDir, "build-plan.md")
+    }
+  };
+  const markdown = [
+    "# ModelForge Build Plan",
+    "",
+    `Plan: ${planId}`,
+    `Created: ${createdAt}`,
+    `Route: ${route.label}`,
+    `Reason: ${route.reason}`,
+    `Hardware tier: ${hardware.tier.label}`,
+    `Base model: ${baseModel.model}`,
+    "",
+    "## Intent",
+    "",
+    plan.intent,
+    "",
+    "## Steps",
+    "",
+    ...steps.map((step) => `- ${step.label}: ${step.status}. ${step.action} ${step.detail}`),
+    "",
+    "## Limitations",
+    "",
+    ...limitations.map((item) => `- ${item}`),
+    ""
+  ].join("\n");
+
+  for (const dir of [latestDir, versionDir]) {
+    await mkdir(dir, { recursive: true });
+  }
+  await writeJson(plan.files.json, plan);
+  await writeFile(plan.files.markdown, markdown, "utf-8");
+  await writeJson(plan.files.versionJson, plan);
+  await writeFile(plan.files.versionMarkdown, markdown, "utf-8");
+  return plan;
 }
 
 function datasetForgeId() {
@@ -2237,7 +2737,7 @@ async function getOllamaStatus() {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory] = await Promise.all([
+  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
@@ -2247,7 +2747,8 @@ async function getProjectPayload() {
     getLatestForgeRecipe(),
     getLatestRecipeRun(),
     getRecipeRunHistory(),
-    getForgeRecipeHistory()
+    getForgeRecipeHistory(),
+    getLatestBuilderPlan()
   ]);
   const dataset = estimateDatasetMetrics(sources);
   const modelMetric = latestModelExport ? "Exported" : toolStatus.ollama.ok ? "Profile ready" : "Ollama missing";
@@ -2278,6 +2779,7 @@ async function getProjectPayload() {
     latestRecipeRun,
     recipeRunHistory,
     recipeHistory,
+    latestBuildPlan,
     pipeline: [
       {
         id: "source-pack",
@@ -2533,6 +3035,11 @@ async function handleApi(request, response, url) {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/hardware/profile") {
+      sendJson(response, 200, await getHardwareProfile());
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/sources") {
       sendJson(response, 200, await walkSources(sourceRoot));
       return;
@@ -2540,6 +3047,18 @@ async function handleApi(request, response, url) {
 
     if (request.method === "GET" && url.pathname === "/api/project") {
       sendJson(response, 200, await getProjectPayload());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/plan") {
+      sendJson(response, 200, { ok: true, plan: await getLatestBuilderPlan() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/plan") {
+      const body = await readJsonBody(request);
+      const plan = await buildAiBuildPlan(body);
+      sendJson(response, 200, { ok: true, plan, project: await getProjectPayload() });
       return;
     }
 

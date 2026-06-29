@@ -1,10 +1,13 @@
 import type {
+  BuilderPlan,
+  BuilderPlanRequest,
   ChatMessage,
   ChatResponse,
   DatasetForge,
   EvalReport,
   ExportPackSummary,
   ForgeRecipe,
+  HardwareProfile,
   ModelExport,
   OllamaStatus,
   ProjectPayload,
@@ -54,6 +57,21 @@ export const datasetForgeDownloadUrl = "/api/dataset/download";
 
 export function getOllamaStatus() {
   return requestJson<OllamaStatus>("/api/ollama/status");
+}
+
+export function getHardwareProfile() {
+  return requestJson<HardwareProfile>("/api/hardware/profile");
+}
+
+export function getLatestBuilderPlan() {
+  return requestJson<{ ok: boolean; plan: BuilderPlan | null }>("/api/builder/plan");
+}
+
+export function buildAiBuildPlan(request: BuilderPlanRequest) {
+  return requestJson<{ ok: boolean; plan: BuilderPlan; project: ProjectPayload }>("/api/builder/plan", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
 }
 
 export function getToolStatus() {

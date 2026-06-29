@@ -1,25 +1,27 @@
 # ModelForge
 
 <p align="center">
-  <strong>A local-first AI model forge with receipts.</strong>
+  <strong>A local-first AI builder that tells you what your machine can honestly build.</strong>
 </p>
 
 <p align="center">
-  Turn a repo or folder into source inventories, Dataset Forge JSONL,
-  Ollama profiles, eval gates, export packs, and proof bundles you can inspect
-  before anyone asks you to trust it.
+  ModelForge is heading toward a Build-A-Bear-style workflow for AI: describe
+  the assistant you want, let the app inspect your hardware and source folder,
+  then get a realistic build plan with datasets, model recipes, export packs,
+  and proof bundles you can inspect before anyone asks you to trust it.
 </p>
 
 <p align="center">
   <a href="#why-it-exists">Why</a> |
   <a href="#what-it-does">What it does</a> |
+  <a href="#builder-wizard">Builder Wizard</a> |
   <a href="#screenshots">Screenshots</a> |
   <a href="#quickstart">Quickstart</a> |
   <a href="#proof-posture">Proof posture</a> |
   <a href="#license">License</a>
 </p>
 
-![ModelForge release dashboard](docs/screenshots/model-forge-release.png)
+![ModelForge Builder Wizard](docs/screenshots/model-forge-builder-wizard.png)
 
 ## Why It Exists
 
@@ -38,6 +40,9 @@ ModelForge is a source-available, local-first cockpit for building model-ready
 artifacts from code and project folders.
 
 - Scans a local repo or folder into a source inventory with SHA-256 hashes.
+- Creates hardware-aware build plans from plain-English intent, including CPU,
+  RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and next
+  actions.
 - Builds Dataset Forge JSONL examples with source paths, hashes, license labels,
   and proof-bundle provenance.
 - Reuses local Ollama models and exports an Ollama `Modelfile`.
@@ -54,9 +59,33 @@ This alpha is intentionally focused on the forge layer: source boundary,
 training-ready packs, recipes, evidence, local model profiles, and release
 gates. It is not a full foundation model trainer yet.
 
+## Builder Wizard
+
+The Builder workspace is the non-developer front door. Instead of asking people
+to know whether they need RAG, LoRA, QLoRA, Modelfiles, or runner contracts, it
+asks what the AI should do and then produces a saved build plan.
+
+The plan records:
+
+- What the user wants the AI to do.
+- Local hardware facts: CPU threads, RAM, GPU/VRAM, D-drive space, and Ollama
+  availability.
+- The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
+  prep when the hardware makes that realistic.
+- Ordered next steps mapped back to the app: Setup, Sources, Dataset Forge,
+  Model Lab, export pack run, proof, and release gates.
+- Limitations, so the app stays honest about what is ready today and what needs
+  a future trainer runner.
+
 ## Screenshots
 
 <table>
+  <tr>
+    <td colspan="2">
+      <strong>Builder Wizard</strong><br />
+      <img src="docs/screenshots/model-forge-builder-wizard.png" alt="ModelForge Builder Wizard showing a plain-English AI request, hardware scan, recommended route, and route steps" />
+    </td>
+  </tr>
   <tr>
     <td width="50%">
       <strong>Dataset Forge</strong><br />
@@ -104,10 +133,12 @@ API: http://127.0.0.1:4188
 Web: http://127.0.0.1:5178
 ```
 
-Open the Setup workspace first. Confirm the source folder, data root, Ollama
-model path, Python command, base model, and target model, then run the first
-setup pass to build proof, gates, share card, Dataset Forge JSONL, and recipe
-artifacts.
+Open the Builder workspace first. Describe the AI you want, create a build plan,
+and let ModelForge show the route your current machine can support.
+
+Then open Setup. Confirm the source folder, data root, Ollama model path,
+Python command, base model, and target model, then run the first setup pass to
+build proof, gates, share card, Dataset Forge JSONL, and recipe artifacts.
 
 After setup:
 
@@ -167,7 +198,9 @@ npm.cmd run qa:smoke
 ## Project Map
 
 - `src/` - React cockpit UI
-- `server.mjs` - local API, source inventory, proof, eval, recipe, and export flow
+- `server.mjs` - local API, hardware scan, build plans, source inventory, proof,
+  eval, recipe, and export flow
+- `.modelforge-data/builder/` - ignored local build-plan artifacts
 - `.modelforge-data/datasets/` - ignored local Dataset Forge JSONL packs
 - `scripts/dev.mjs` - D-drive-friendly local dev runner
 - `scripts/qa-smoke.mjs` - public alpha smoke gate
@@ -176,7 +209,8 @@ npm.cmd run qa:smoke
 
 ## Roadmap
 
-- Better project onboarding for choosing any local source folder.
+- More guided Builder Wizard routes for non-developers choosing any local source
+  folder.
 - LoRA/QLoRA runner execution from the existing recipe export.
 - Stronger dataset review queues, chunk controls, and license explainability.
 - Shareable release pages backed by proof-bundle artifacts.

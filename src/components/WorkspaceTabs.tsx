@@ -1,7 +1,7 @@
-import { Bot, FileSearch, PackageCheck, ShieldCheck, SlidersHorizontal } from "lucide-react";
-import type { EvalReport, ModelExport, ProofBundle, SetupState, SourceSummary } from "../lib/types";
+import { Bot, FileSearch, PackageCheck, ShieldCheck, SlidersHorizontal, Wand2 } from "lucide-react";
+import type { BuilderPlan, EvalReport, ModelExport, ProofBundle, SetupState, SourceSummary } from "../lib/types";
 
-export type WorkspaceView = "setup" | "sources" | "proof" | "model" | "release";
+export type WorkspaceView = "builder" | "setup" | "sources" | "proof" | "model" | "release";
 
 type WorkspaceTabsProps = {
   active: WorkspaceView;
@@ -10,10 +10,12 @@ type WorkspaceTabsProps = {
   proof?: ProofBundle | null;
   modelExport?: ModelExport | null;
   evalReport?: EvalReport | null;
+  buildPlan?: BuilderPlan | null;
   onNavigate: (view: WorkspaceView) => void;
 };
 
 const tabs = [
+  { id: "builder", label: "Builder", Icon: Wand2 },
   { id: "setup", label: "Setup", Icon: SlidersHorizontal },
   { id: "sources", label: "Sources", Icon: FileSearch },
   { id: "proof", label: "Proof", Icon: PackageCheck },
@@ -21,8 +23,9 @@ const tabs = [
   { id: "release", label: "Release", Icon: ShieldCheck }
 ] as const;
 
-export function WorkspaceTabs({ active, setup, sources, proof, modelExport, evalReport, onNavigate }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ active, setup, sources, proof, modelExport, evalReport, buildPlan, onNavigate }: WorkspaceTabsProps) {
   function metaFor(id: WorkspaceView) {
+    if (id === "builder") return buildPlan ? buildPlan.routeLabel : "Plan";
     if (id === "setup") return setup?.configured ? "Saved" : "Confirm";
     if (id === "sources") return `${sources?.totalFiles.toLocaleString() || "0"} files`;
     if (id === "proof") return proof ? "Bundle ready" : "Not built";

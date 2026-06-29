@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bot, Database, HardDrive, LoaderCircle, RefreshCw } from "lucide-react";
 import {
+  buildAiBuildPlan,
   buildDatasetForge,
   buildForgeRecipe,
   buildProofBundle,
@@ -10,6 +11,7 @@ import {
   exportModelProfile,
   getRecipePackRun,
   getLatestExportPack,
+  getHardwareProfile,
   getOllamaStatus,
   getProject,
   getSetupState,
@@ -23,11 +25,14 @@ import {
   sendChat
 } from "./lib/api";
 import type {
+  BuilderPlan,
+  BuilderPlanRequest,
   ChatMessage,
   DatasetForge,
   EvalReport,
   ExportPackSummary,
   ForgeRecipe,
+  HardwareProfile,
   ModelExport,
   OllamaStatus,
   PipelineStep,
@@ -48,6 +53,7 @@ import { ProofViewer } from "./components/ProofViewer";
 import { ModelLab } from "./components/ModelLab";
 import { ReleasePanel } from "./components/ReleasePanel";
 import { SetupPanel } from "./components/SetupPanel";
+import { BuilderWizard } from "./components/BuilderWizard";
 import { WorkspaceTabs, type WorkspaceView } from "./components/WorkspaceTabs";
 import { NextActionPanel, type NextAction } from "./components/NextActionPanel";
 
@@ -141,7 +147,7 @@ function StartupPanel({ error, refreshing, onRetry }: StartupPanelProps) {
   );
 }
 
-type GuidedActionKind = "run-pipeline" | "export-profile" | "build-dataset" | "run-eval" | "build-proof" | "open-setup" | "open-sources" | "open-model" | "open-release" | "view-proof";
+type GuidedActionKind = "run-pipeline" | "export-profile" | "build-dataset" | "run-eval" | "build-proof" | "open-builder" | "open-setup" | "open-sources" | "open-model" | "open-release" | "view-proof";
 type GuidedAction = NextAction & {
   kind: GuidedActionKind;
 };
@@ -157,6 +163,8 @@ function App() {
   const [datasetForge, setDatasetForge] = useState<DatasetForge | null>(null);
   const [forgeRecipe, setForgeRecipe] = useState<ForgeRecipe | null>(null);
   const [exportPack, setExportPack] = useState<ExportPackSummary | null>(null);
+  const [hardwareProfile, setHardwareProfile] = useState<HardwareProfile | null>(null);
+  const [buildPlan, setBuildPlan] = useState<BuilderPlan | null>(null);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
   const [recipeRunHistory, setRecipeRunHistory] = useState<RecipePackRun[]>([]);
@@ -165,7 +173,7 @@ function App() {
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const previousWorkspaceRef = useRef<WorkspaceView | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceView>("setup");
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceView>("builder");
   const [error, setError] = useState<string>("");
   const [booting, setBooting] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -182,22 +190,27 @@ function App() {
   const [selectRecipeBusy, setSelectRecipeBusy] = useState(false);
   const [packRunBusy, setPackRunBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
+  const [builderBusy, setBuilderBusy] = useState(false);
+  const [hardwareBusy, setHardwareBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setError("");
     setRefreshing(true);
     try {
-      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload] = await Promise.all([
+      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload, hardwarePayload] = await Promise.all([
         getSetupState(),
         getProject(),
         getSources(),
         getOllamaStatus(),
-        getLatestExportPack()
+        getLatestExportPack(),
+        getHardwareProfile()
       ]);
       setSetupState(setupPayload);
       setProject(projectPayload);
       setSources(sourcePayload);
       setOllama(ollamaPayload);
+      setHardwareProfile(hardwarePayload);
+      setBuildPlan(projectPayload.latestBuildPlan || null);
       setModelExport(projectPayload.latestModelExport || null);
       setProof(projectPayload.latestProof || null);
       setEvalReport(projectPayload.latestEval || null);
@@ -213,6 +226,44 @@ function App() {
     } finally {
       setBooting(false);
       setRefreshing(false);
+    }
+  }, []);
+
+  const handleRefreshHardware = useCallback(async () => {
+    setHardwareBusy(true);
+    setError("");
+    try {
+      setHardwareProfile(await getHardwareProfile());
+    } catch (hardwareError) {
+      setError(hardwareError instanceof Error ? hardwareError.message : String(hardwareError));
+    } finally {
+      setHardwareBusy(false);
+    }
+  }, []);
+
+  const handleBuildPlan = useCallback(async (request: BuilderPlanRequest) => {
+    setBuilderBusy(true);
+    setError("");
+    try {
+      const result = await buildAiBuildPlan(request);
+      setBuildPlan(result.plan);
+      setHardwareProfile(result.plan.hardware);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setModelExport(result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setActiveWorkspace("builder");
+    } catch (planError) {
+      setError(planError instanceof Error ? planError.message : String(planError));
+    } finally {
+      setBuilderBusy(false);
     }
   }, []);
 
@@ -598,7 +649,7 @@ function App() {
     previousWorkspaceRef.current = activeWorkspace;
 
     if (previousWorkspace === activeWorkspace) return;
-    if (previousWorkspace === null && (activeWorkspace === "sources" || activeWorkspace === "setup")) {
+    if (previousWorkspace === null && (activeWorkspace === "builder" || activeWorkspace === "sources" || activeWorkspace === "setup")) {
       return;
     }
 
@@ -616,6 +667,18 @@ function App() {
     const sourceCount = sources?.totalFiles || project?.sources.totalFiles || 0;
     const failedGate = evalReport?.gates.find((gate) => gate.status === "fail" || gate.status === "failed");
     const warningGate = evalReport?.gates.find((gate) => gate.status === "warn" || gate.status === "warning");
+
+    if (!buildPlan) {
+      return {
+        kind: "open-builder",
+        label: "Start here",
+        title: "Describe the AI you want",
+        detail: "Create a hardware-aware build plan before choosing source, dataset, recipe, or release steps.",
+        actionLabel: "Open Builder",
+        tone: "ready",
+        busy: builderBusy
+      };
+    }
 
     if (setupState && !setupState.configured) {
       return {
@@ -778,7 +841,7 @@ function App() {
       meta: proof.size,
       tone: "success"
     };
-  }, [datasetBusy, datasetForge, evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
+  }, [buildPlan, builderBusy, datasetBusy, datasetForge, evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
 
   const handleGuidedAction = useCallback(() => {
     if (guidedAction.kind === "run-pipeline") {
@@ -799,6 +862,10 @@ function App() {
     }
     if (guidedAction.kind === "build-proof") {
       void handleBuildProof();
+      return;
+    }
+    if (guidedAction.kind === "open-builder") {
+      setActiveWorkspace("builder");
       return;
     }
     if (guidedAction.kind === "open-setup") {
@@ -845,13 +912,17 @@ function App() {
         {!projectReady ? (
           <StartupPanel error={error} refreshing={refreshing} onRetry={refresh} />
         ) : (
-          <div className="workspace-grid">
+          <div className={`workspace-grid ${activeWorkspace === "builder" ? "workspace-grid-builder" : ""}`}>
             <div className="work-main">
-              <PipelineRail
-                steps={pipeline}
-                onOpenWorkspace={setActiveWorkspace}
-              />
-              <NextActionPanel action={guidedAction} onAction={handleGuidedAction} />
+              {activeWorkspace === "builder" ? null : (
+                <>
+                  <PipelineRail
+                    steps={pipeline}
+                    onOpenWorkspace={setActiveWorkspace}
+                  />
+                  <NextActionPanel action={guidedAction} onAction={handleGuidedAction} />
+                </>
+              )}
               <WorkspaceTabs
                 active={activeWorkspace}
                 setup={setupState}
@@ -859,9 +930,29 @@ function App() {
                 proof={proof}
                 modelExport={modelExport}
                 evalReport={evalReport}
+                buildPlan={buildPlan}
                 onNavigate={setActiveWorkspace}
               />
               <div className="focused-workspace" ref={focusedWorkspaceRef}>
+                {activeWorkspace === "builder" ? (
+                  <BuilderWizard
+                    hardware={hardwareProfile}
+                    plan={buildPlan}
+                    setup={setupState}
+                    sources={sources || project?.sources}
+                    datasetForge={datasetForge}
+                    recipe={forgeRecipe}
+                    busy={builderBusy}
+                    hardwareBusy={hardwareBusy}
+                    datasetBusy={datasetBusy}
+                    recipeBusy={recipeBusy}
+                    onBuildPlan={handleBuildPlan}
+                    onRefreshHardware={handleRefreshHardware}
+                    onNavigate={setActiveWorkspace}
+                    onBuildDataset={handleBuildDataset}
+                    onBuildRecipe={handleBuildRecipe}
+                  />
+                ) : null}
                 {activeWorkspace === "setup" ? (
                   <SetupPanel
                     setup={setupState}
@@ -931,18 +1022,20 @@ function App() {
                 ) : null}
               </div>
             </div>
-            <Inspector
-              sources={sources || project?.sources}
-              ollama={ollama}
-              proof={proof}
-              modelExport={modelExport}
-              evalReport={evalReport}
-              toolStatus={project?.toolStatus}
-              dataRoot={dataRoot}
-              proofBusy={proofBusy}
-              onOpenProof={() => setActiveWorkspace("proof")}
-              onBuildProof={handleBuildProof}
-            />
+            {activeWorkspace === "builder" ? null : (
+              <Inspector
+                sources={sources || project?.sources}
+                ollama={ollama}
+                proof={proof}
+                modelExport={modelExport}
+                evalReport={evalReport}
+                toolStatus={project?.toolStatus}
+                dataRoot={dataRoot}
+                proofBusy={proofBusy}
+                onOpenProof={() => setActiveWorkspace("proof")}
+                onBuildProof={handleBuildProof}
+              />
+            )}
           </div>
         )}
       </main>

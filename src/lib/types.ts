@@ -90,6 +90,131 @@ export type ToolStatus = {
   ollama: ToolAvailability;
 };
 
+export type HardwareProfile = {
+  schema: string;
+  createdAt: string;
+  platform: {
+    os: string;
+    arch: string;
+    release: string;
+  };
+  cpu: {
+    model: string;
+    cores: number;
+    threads: number;
+  };
+  memory: {
+    totalBytes: number;
+    total: string;
+    freeBytes: number;
+    free: string;
+  };
+  disk: {
+    dataRoot: string;
+    root: string;
+    freeBytes: number;
+    free: string;
+    usedBytes: number;
+    used: string;
+    source: string;
+  };
+  gpu: {
+    detected: boolean;
+    source: string;
+    totalVramMb: number;
+    totalVram: string;
+    devices: Array<{
+      name: string;
+      memoryMb: number;
+      memory: string;
+      driverVersion: string;
+      source: string;
+    }>;
+  };
+  ollama: {
+    ok: boolean;
+    version: string;
+    selectedModel: string;
+    modelCount: number;
+    modelsRoot: string;
+  };
+  tier: {
+    id: string;
+    label: string;
+    detail: string;
+    canTrainAdapter: boolean;
+    canRunQuantized: boolean;
+  };
+};
+
+export type BuilderPlanRequest = {
+  intent: string;
+  audience: string;
+  personality: string;
+  privacy: string;
+  qualitySpeed: string;
+  buildMode: string;
+  targetDevice: string;
+  dataTypes: string[];
+};
+
+export type BuilderPlanStep = {
+  id: string;
+  label: string;
+  status: "pass" | "ready" | "warn" | "blocked" | string;
+  action: string;
+  detail: string;
+  workspace: string;
+};
+
+export type BuilderPlan = {
+  schema: string;
+  planId: string;
+  createdAt: string;
+  intent: string;
+  request: BuilderPlanRequest;
+  sourceRoot: string;
+  dataRoot: string;
+  hardware: HardwareProfile;
+  artifacts: {
+    setupConfigured: boolean;
+    sourceReady: boolean;
+    datasetReady: boolean;
+    modelProfileReady: boolean;
+    recipeReady: boolean;
+    proofFresh: boolean;
+    evalFresh: boolean;
+  };
+  recommendedRoute: string;
+  routeLabel: string;
+  routeReason: string;
+  baseModelRecommendation: {
+    label: string;
+    model: string;
+    reason: string;
+  };
+  estimates: {
+    time: string;
+    disk: string;
+    hardwareTier: string;
+  };
+  steps: BuilderPlanStep[];
+  limitations: string[];
+  nextActions: Array<{
+    id: string;
+    label: string;
+    workspace: string;
+  }>;
+  files: {
+    dir: string;
+    json: string;
+    markdown: string;
+    versionDir: string;
+    versionJson: string;
+    versionMarkdown: string;
+  };
+};
+
 export type SetupCheckStatus = "pass" | "warn" | "fail" | "ready" | string;
 
 export type SetupConfig = {
@@ -431,6 +556,7 @@ export type ProjectPayload = {
   latestRecipeRun?: RecipePackRun | null;
   recipeRunHistory?: RecipePackRun[];
   recipeHistory?: ForgeRecipe[];
+  latestBuildPlan?: BuilderPlan | null;
   pipeline: PipelineStep[];
   sources: SourceSummary;
 };
