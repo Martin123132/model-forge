@@ -3,6 +3,7 @@ dist/
 .venv/
 .modelforge-data/
 .modelforge-local/
+.modelforge-release/
 .cache/
 .env
 .env.*

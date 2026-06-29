@@ -61,16 +61,16 @@ export function ReleasePanel({ evalReport, proof, sources, shareCard, evalBusy, 
     const postureTone: ReadinessTone = gateTone === "fail" ? "fail" : gateTone === "warn" || !shareReady ? "warn" : gateTone;
     const headline =
       postureTone === "fail"
-        ? "Not alpha-ready yet"
+        ? "Not release-ready yet"
         : postureTone === "warn"
-          ? "Alpha review required"
-          : "Alpha evidence ready";
+          ? "Release review required"
+          : "Release evidence ready";
     const detail =
       postureTone === "fail"
         ? "Fix failing gates before any public claim leaves the workspace."
         : postureTone === "warn"
           ? "Safe for local demos, but public release still needs the review item called out below."
-          : "Gates, proof, and share copy are aligned for a measured public alpha.";
+          : "Gates, proof, and share copy are aligned for a measured public release.";
     const items: ReadinessItem[] = [
       {
         label: "Gate posture",
@@ -190,15 +190,15 @@ export function ReleasePanel({ evalReport, proof, sources, shareCard, evalBusy, 
         </div>
       ) : null}
 
-      <div className={`alpha-readiness-card ${readiness.tone}`} aria-label="Public alpha readiness">
-        <div className="alpha-readiness-copy">
-          <span>Public alpha posture</span>
+      <div className={`release-readiness-card ${readiness.tone}`} aria-label="Public release readiness">
+        <div className="release-readiness-copy">
+          <span>Public release posture</span>
           <strong>{readiness.headline}</strong>
           <p>{readiness.detail}</p>
         </div>
-        <div className="alpha-readiness-items">
+        <div className="release-readiness-items">
           {readiness.items.map((item) => (
-            <div className={`alpha-readiness-item ${item.tone}`} key={item.label}>
+            <div className={`release-readiness-item ${item.tone}`} key={item.label}>
               {item.label === "Proof bundle" ? <PackageCheck size={14} /> : item.label === "Share card" ? <FileText size={14} /> : item.tone === "pass" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
               <div>
                 <span>{item.label}</span>

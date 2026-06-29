@@ -25,7 +25,7 @@ export function Sidebar({ activeWorkspace, onNavigate, sourceRoot }: SidebarProp
         <div className="brand-mark">M</div>
         <div>
           <div className="brand-name">ModelForge</div>
-          <div className="brand-version">v0.1.0</div>
+          <div className="brand-version">v1.0.0</div>
         </div>
       </div>
 

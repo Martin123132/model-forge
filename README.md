@@ -78,8 +78,11 @@ artifacts from code and project folders.
   base-vs-forged test playground.
 - Saves multiple local AI projects in a local registry, with separate source
   folders, data roots, model names, and source include/exclude rules.
+- Builds a portable v1 Windows release zip with a double-click launcher, release
+  manifest, changelog, getting-started guide, privacy statement, and known
+  limitations.
 
-This alpha is intentionally focused on the forge layer: source boundary,
+This v1 release is intentionally focused on the forge layer: source boundary,
 training-ready packs, recipes, evidence, local model profiles, and release
 gates. It is not a full foundation model trainer yet.
 
@@ -187,7 +190,7 @@ roots, so proof bundles, datasets, recipes, chat transcripts, and export packs
 stay tied to the selected local project.
 
 The registry lives under `.modelforge-local/projects.json` and stays out of git.
-Archive and remove actions only update the registry in this alpha. The active
+Archive and remove actions only update the registry in this v1 release. The active
 project also has **Reset generated data**, which clears ModelForge outputs such
 as proofs, datasets, recipes, exports, chats, and build receipts inside the
 project's `.modelforge-data` folder while keeping source files, setup config,
@@ -234,6 +237,9 @@ The Sources workspace also has a **Source boundary** editor:
 </table>
 
 ## Quickstart
+
+For the shortest non-developer path, read
+[`docs/GETTING_STARTED_5_MINUTES.md`](docs/GETTING_STARTED_5_MINUTES.md).
 
 Requirements:
 
@@ -306,7 +312,7 @@ environment variables from the process.
 
 ## Proof Posture
 
-The current public alpha smoke target is:
+The current v1 smoke target is:
 
 ```text
 8/8 gates passing, 0 warnings, 0 failures.
@@ -346,6 +352,20 @@ Check README image references before publishing:
 npm.cmd run qa:readme
 ```
 
+Build and check the portable v1 release package:
+
+```powershell
+npm.cmd run release:zip
+npm.cmd run qa:release
+```
+
+Release docs:
+
+- [`CHANGELOG.md`](CHANGELOG.md)
+- [`docs/GETTING_STARTED_5_MINUTES.md`](docs/GETTING_STARTED_5_MINUTES.md)
+- [`docs/PRIVACY_LOCAL_FIRST.md`](docs/PRIVACY_LOCAL_FIRST.md)
+- [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md)
+
 ## Project Map
 
 - `src/` - React cockpit UI
@@ -356,9 +376,12 @@ npm.cmd run qa:readme
 - `.modelforge-data/knowledge/` - ignored local retrieval snippets for Model Lab
   chat
 - `scripts/dev.mjs` - D-drive-friendly local dev runner
-- `scripts/qa-smoke.mjs` - public alpha smoke gate
+- `scripts/build-release.mjs` - portable v1 Windows release zip builder
+- `scripts/qa-release.mjs` - release packaging and docs QA
+- `scripts/qa-smoke.mjs` - v1 smoke gate
 - `docs/screenshots/` - README screenshots
 - `.modelforge-data/` - ignored local proof bundles, evals, models, and exports
+- `.modelforge-release/` - ignored generated portable release folder and zip
 
 ## Roadmap
 

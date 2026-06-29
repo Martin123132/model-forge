@@ -5459,7 +5459,7 @@ h2 {
   line-height: 1.35;
 }
 
-.alpha-readiness-card {
+.release-readiness-card {
   display: grid;
   gap: 12px;
   margin: 10px 14px 0;
@@ -5469,32 +5469,32 @@ h2 {
   background: #f8fafc;
 }
 
-.alpha-readiness-card.pass {
+.release-readiness-card.pass {
   border-color: #bbf7d0;
   background: #f7fef9;
 }
 
-.alpha-readiness-card.warn {
+.release-readiness-card.warn {
   border-color: #fed7aa;
   background: #fffaf1;
 }
 
-.alpha-readiness-card.fail {
+.release-readiness-card.fail {
   border-color: #fecaca;
   background: #fff7f7;
 }
 
-.alpha-readiness-card.ready {
+.release-readiness-card.ready {
   border-color: #c7d8f7;
   background: #f5f9ff;
 }
 
-.alpha-readiness-copy {
+.release-readiness-copy {
   min-width: 0;
 }
 
-.alpha-readiness-copy span,
-.alpha-readiness-item span {
+.release-readiness-copy span,
+.release-readiness-item span {
   display: block;
   color: var(--muted);
   font-size: 10px;
@@ -5502,7 +5502,7 @@ h2 {
   text-transform: uppercase;
 }
 
-.alpha-readiness-copy strong {
+.release-readiness-copy strong {
   display: block;
   margin-top: 3px;
   color: #172236;
@@ -5510,21 +5510,21 @@ h2 {
   font-weight: 820;
 }
 
-.alpha-readiness-copy p,
-.alpha-readiness-item p {
+.release-readiness-copy p,
+.release-readiness-item p {
   margin: 4px 0 0;
   color: #4b5b73;
   font-size: 12px;
   line-height: 1.35;
 }
 
-.alpha-readiness-items {
+.release-readiness-items {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
-.alpha-readiness-item {
+.release-readiness-item {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   gap: 7px;
@@ -5535,12 +5535,12 @@ h2 {
   background: rgba(255, 255, 255, 0.72);
 }
 
-.alpha-readiness-item svg {
+.release-readiness-item svg {
   margin-top: 2px;
   color: #64748b;
 }
 
-.alpha-readiness-item strong {
+.release-readiness-item strong {
   display: block;
   overflow: hidden;
   margin-top: 2px;
@@ -5551,23 +5551,23 @@ h2 {
   white-space: nowrap;
 }
 
-.alpha-readiness-item.pass svg,
-.alpha-readiness-item.pass strong {
+.release-readiness-item.pass svg,
+.release-readiness-item.pass strong {
   color: var(--green);
 }
 
-.alpha-readiness-item.warn svg,
-.alpha-readiness-item.warn strong {
+.release-readiness-item.warn svg,
+.release-readiness-item.warn strong {
   color: var(--amber);
 }
 
-.alpha-readiness-item.fail svg,
-.alpha-readiness-item.fail strong {
+.release-readiness-item.fail svg,
+.release-readiness-item.fail strong {
   color: var(--red);
 }
 
-.alpha-readiness-item.ready svg,
-.alpha-readiness-item.ready strong {
+.release-readiness-item.ready svg,
+.release-readiness-item.ready strong {
   color: var(--blue);
 }
 
@@ -7003,7 +7003,7 @@ h2 {
     min-width: 0;
   }
 
-  .alpha-readiness-items {
+  .release-readiness-items {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

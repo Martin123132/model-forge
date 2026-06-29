@@ -291,7 +291,7 @@ async function main() {
   }
 
   const warnings = checks.filter((item) => !item.ok && item.severity === "warn");
-  console.log(warnings.length ? `Smoke passed with ${warnings.length} alpha warning(s).` : "Smoke passed.");
+  console.log(warnings.length ? `Smoke passed with ${warnings.length} release warning(s).` : "Smoke passed.");
 }
 
 main().catch((error) => {

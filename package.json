@@ -1,6 +1,6 @@
 {
   "name": "model-forge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Source-available local-first AI model forge cockpit with provenance, eval, and proof-bundle workflows.",
   "license": "SEE LICENSE IN LICENSE",
@@ -12,6 +12,8 @@
     "build": "tsc -b && vite build",
     "qa:smoke": "node scripts/qa-smoke.mjs",
     "qa:readme": "node scripts/qa-readme.mjs",
+    "qa:release": "node scripts/qa-release.mjs",
+    "release:zip": "node scripts/build-release.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server.mjs",
     "serve": "npm run build && node server.mjs"
