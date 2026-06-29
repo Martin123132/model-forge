@@ -30,6 +30,7 @@ async function main() {
   const checks = [
     check("Version", packageJson.version === "1.0.0", packageJson.version),
     check("Release script", packageJson.scripts?.["release:zip"] === "node scripts/build-release.mjs", packageJson.scripts?.["release:zip"] || "missing"),
+    check("First-run QA script", packageJson.scripts?.["qa:first-run"] === "node scripts/qa-first-run.mjs", packageJson.scripts?.["qa:first-run"] || "missing"),
     check("Release QA script", packageJson.scripts?.["qa:release"] === "node scripts/qa-release.mjs", packageJson.scripts?.["qa:release"] || "missing"),
     check("Release output ignored", gitignore.includes(".modelforge-release/"), ".modelforge-release/"),
     check("Portable builder exists", existsSync(resolve(repoRoot, "scripts", "build-release.mjs")), "scripts/build-release.mjs"),
@@ -37,7 +38,8 @@ async function main() {
     check("Getting started guide", /Start-ModelForge\.cmd/.test(gettingStarted) && /5 minutes/i.test(gettingStarted), "docs/GETTING_STARTED_5_MINUTES.md"),
     check("Privacy statement", /local-first/i.test(privacy) && /diagnostics/i.test(privacy) && /exports/i.test(privacy), "docs/PRIVACY_LOCAL_FIRST.md"),
     check("Known limitations", /LoRA\/QLoRA/i.test(limitations) && /not a foundation\s+model/i.test(limitations), "docs/KNOWN_LIMITATIONS.md"),
-    check("README release links", readme.includes("docs/GETTING_STARTED_5_MINUTES.md") && readme.includes("npm.cmd run release:zip"), "README.md")
+    check("README release links", readme.includes("docs/GETTING_STARTED_5_MINUTES.md") && readme.includes("npm.cmd run release:zip"), "README.md"),
+    check("README first-run QA", readme.includes("npm.cmd run qa:first-run"), "README.md")
   ];
 
   const latestPath = join(releaseRoot, "latest.json");

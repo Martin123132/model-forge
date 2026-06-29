@@ -20,6 +20,8 @@ forge cockpit.
   source contents.
 - Added First-Run Doctor repair actions for D-drive storage, starting Ollama,
   and installing a small starter model with local receipts.
+- Added clean-machine First-Run Doctor scenario QA for missing tools, stopped
+  services, empty model libraries, bad source folders, and low disk space.
 - Added portable Windows release packaging with a double-click launcher and
   v1 release docs.
 

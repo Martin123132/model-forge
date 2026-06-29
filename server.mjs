@@ -930,7 +930,7 @@ function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus,
       ollamaReady && ollamaHasModels ? "pass" : ollamaReady ? "warn" : "fail",
       ollamaReady ? `${ollama.models.length} model${ollama.models.length === 1 ? "" : "s"}` : "Not running",
       ollamaReady ? (ollamaHasModels ? `${ollama.selectedModel || "A local model"} is available.` : "Ollama is running, but no local model is installed.") : ollama.error || toolStatus.ollama.detail,
-      ollamaReady ? (ollamaHasModels ? "" : "pull-small-model") : "start-ollama"
+      !toolStatus.ollama.ok ? "install-ollama" : ollamaReady ? (ollamaHasModels ? "" : "pull-small-model") : "start-ollama"
     ),
     setupDoctorCheck(
       "ollama-models",
@@ -983,21 +983,29 @@ function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus,
   };
 }
 
-async function getSetupState() {
+async function getSetupDoctorInputs() {
   const config = currentSetupConfig();
   const preferredStorage = await getPreferredStoragePlan();
-  const [sourceCheck, dataCheck, toolStatus, pythonStatus, ollama, hardware, latestProof, latestEval, latestRecipe] = await Promise.all([
+  const [sourceCheck, dataCheck, toolStatus, pythonStatus, ollama, hardware] = await Promise.all([
     pathCheck(sourceRoot),
     pathCheck(dataRoot, { create: true }),
     getToolStatus(),
     getPythonStatus(),
     getOllamaStatus(),
-    getHardwareProfile(),
+    getHardwareProfile()
+  ]);
+  const sources = sourceCheck.ok ? await walkSources(sourceRoot) : null;
+  return { config, preferredStorage, sourceCheck, dataCheck, sources, toolStatus, pythonStatus, ollama, hardware };
+}
+
+async function getSetupState() {
+  const inputs = await getSetupDoctorInputs();
+  const { config, sourceCheck, dataCheck, sources, toolStatus, ollama } = inputs;
+  const [latestProof, latestEval, latestRecipe] = await Promise.all([
     getLatestProofBundle(),
     getLatestEvalReport(),
     getLatestForgeRecipe()
   ]);
-  const sources = sourceCheck.ok ? await walkSources(sourceRoot) : null;
   const configured = existsSync(setupConfigPath);
   const selectedBaseModel = setupConfig.baseModel || ollama.selectedModel || "";
   const modelAvailable = Boolean(!selectedBaseModel || ollama.models.some((model) => model.name === selectedBaseModel));
@@ -1030,7 +1038,7 @@ async function getSetupState() {
       evalFresh,
       recipeReady
     },
-    doctor: buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus, pythonStatus, ollama, hardware, preferredStorage }),
+    doctor: buildSetupDoctor(inputs),
     checks: [
       setupCheck("source-root", "Source folder", sourceCheck.ok && Boolean(sources?.totalFiles), `${sources?.totalFiles || 0} files`, sourceCheck.ok ? "Folder is readable." : sourceCheck.detail, "Choose a folder that exists on this machine."),
       setupCheck("data-root", "Data root", dataCheck.ok, dataRoot, dataCheck.detail, "Use a writable folder, ideally on D:."),
@@ -1039,6 +1047,127 @@ async function getSetupState() {
       setupCheck("ollama", "Ollama", toolStatus.ollama.ok && ollama.ok, ollama.selectedModel || "No model", ollama.ok ? ollama.version : ollama.error || toolStatus.ollama.detail, "Start Ollama and pull a local base model."),
       setupCheck("base-model", "Base model", modelAvailable, selectedBaseModel || "Auto", modelAvailable ? "Base model can be selected for exports." : "Saved base model was not found in Ollama.", "Pick an installed Ollama model.")
     ]
+  };
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+const setupDoctorScenarioSpecs = {
+  ready: {
+    status: "ready",
+    checkStatuses: { "source-folder": "pass", ollama: "pass", python: "pass", "disk-space": "pass" },
+    actionIds: []
+  },
+  "missing-ollama": {
+    status: "blocked",
+    checkStatuses: { ollama: "fail" },
+    actionIds: ["install-ollama"]
+  },
+  "stopped-ollama": {
+    status: "blocked",
+    checkStatuses: { ollama: "fail" },
+    actionIds: ["start-ollama"]
+  },
+  "no-models": {
+    status: "needs-attention",
+    checkStatuses: { ollama: "warn" },
+    actionIds: ["pull-small-model"]
+  },
+  "bad-source-folder": {
+    status: "blocked",
+    checkStatuses: { "source-folder": "fail" },
+    actionIds: []
+  },
+  "missing-python": {
+    status: "needs-attention",
+    checkStatuses: { python: "warn" },
+    actionIds: ["set-python"]
+  },
+  "low-disk": {
+    status: "blocked",
+    checkStatuses: { "disk-space": "fail" },
+    actionIds: []
+  },
+  "c-drive-storage": {
+    status: "needs-attention",
+    checkStatuses: { "data-drive": "warn", "ollama-models": "warn" },
+    actionIds: ["use-d-drive-storage"]
+  }
+};
+
+function applySetupDoctorScenario(inputs, scenario) {
+  const next = cloneJson(inputs);
+  const starterModel = defaultStarterModelName();
+  const simulatedModel = { name: starterModel, id: "simulated", size: "2.0 GB", modified: "simulated" };
+  const missingOllamaDetail = "Ollama CLI was not found in the simulated clean-machine environment.";
+  const stoppedOllamaDetail = "Ollama is installed, but the local server is not responding.";
+
+  next.sourceCheck = { ok: true, detail: "Ready" };
+  next.dataCheck = { ok: true, detail: "Ready" };
+  next.sources = next.sources || { totalFiles: 1, sampledFiles: 1, totalSizeBytes: 1024 };
+  next.toolStatus.ollama = { ok: true, label: "Available", detail: "ollama version is available" };
+  next.ollama = { ...next.ollama, ok: true, version: "ollama version is available", models: [simulatedModel], selectedModel: starterModel, error: "" };
+  next.pythonStatus = { ok: true, label: "Python 3.x", detail: "python responded." };
+  next.hardware.disk = { ...next.hardware.disk, freeBytes: 60 * 1024 * 1024 * 1024, free: "60.00 GB" };
+
+  if (scenario === "missing-ollama") {
+    next.toolStatus.ollama = { ok: false, label: "Missing", detail: missingOllamaDetail };
+    next.ollama = { ...next.ollama, ok: false, version: "Unavailable", models: [], selectedModel: "", error: missingOllamaDetail };
+  } else if (scenario === "stopped-ollama") {
+    next.toolStatus.ollama = { ok: true, label: "Available", detail: "ollama version is available" };
+    next.ollama = { ...next.ollama, ok: false, version: "ollama version is available", models: [], selectedModel: "", error: stoppedOllamaDetail };
+  } else if (scenario === "no-models") {
+    next.toolStatus.ollama = { ok: true, label: "Available", detail: "ollama version is available" };
+    next.ollama = { ...next.ollama, ok: true, version: "ollama version is available", models: [], selectedModel: "", error: "" };
+  } else if (scenario === "bad-source-folder") {
+    next.sourceCheck = { ok: false, detail: "Path does not exist." };
+    next.sources = null;
+    next.config.sourceRoot = "Z:\\missing\\model-forge-source";
+  } else if (scenario === "missing-python") {
+    next.pythonStatus = { ok: false, label: "Missing", detail: "python did not respond." };
+  } else if (scenario === "low-disk") {
+    next.hardware.disk = { ...next.hardware.disk, freeBytes: 5 * 1024 * 1024 * 1024, free: "5.00 GB" };
+  } else if (scenario === "c-drive-storage") {
+    next.preferredStorage = {
+      ...next.preferredStorage,
+      preferredDrive: "D:",
+      canUsePreferred: true,
+      recommendedDataRoot: "D:\\AI\\ModelForge\\.modelforge-data",
+      recommendedOllamaModels: "D:\\AI\\Ollama\\models",
+      detail: "D: is available, so ModelForge can keep heavy artifacts away from C:."
+    };
+    next.config = {
+      ...next.config,
+      dataRoot: "C:\\AI\\ModelForge\\.modelforge-data",
+      ollamaModels: "C:\\AI\\Ollama\\models",
+      baseModel: next.config.baseModel || starterModel
+    };
+    next.ollama = { ...next.ollama, modelsRoot: next.config.ollamaModels };
+  }
+
+  return next;
+}
+
+async function simulateSetupDoctor(body = {}) {
+  const scenario = cleanSetting(body.scenario) || "ready";
+  if (!setupDoctorScenarioSpecs[scenario]) {
+    throw new Error(`Unknown setup doctor scenario: ${scenario}`);
+  }
+  const inputs = applySetupDoctorScenario(await getSetupDoctorInputs(), scenario);
+  const doctor = buildSetupDoctor(inputs);
+  return {
+    ok: true,
+    schema: "modelforge.first_run_doctor_simulation.v1",
+    scenario,
+    expected: setupDoctorScenarioSpecs[scenario],
+    doctor,
+    observed: {
+      status: doctor.status,
+      checkStatuses: Object.fromEntries((doctor.checks || []).map((check) => [check.id, check.status])),
+      actionIds: (doctor.actions || []).map((action) => action.id)
+    }
   };
 }
 
@@ -6446,6 +6575,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/setup/doctor/action") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await runSetupDoctorAction(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/setup/doctor/simulate") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await simulateSetupDoctor(body));
       return;
     }
 

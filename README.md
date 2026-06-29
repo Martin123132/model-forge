@@ -348,6 +348,7 @@ Dataset and export checks also verify:
 Run the repeatable smoke check while `npm.cmd run dev` is active:
 
 ```powershell
+npm.cmd run qa:first-run
 npm.cmd run qa:smoke
 ```
 
@@ -382,6 +383,7 @@ Release docs:
   chat
 - `scripts/dev.mjs` - D-drive-friendly local dev runner
 - `scripts/build-release.mjs` - portable v1 Windows release zip builder
+- `scripts/qa-first-run.mjs` - clean-machine First-Run Doctor scenario QA
 - `scripts/qa-release.mjs` - release packaging and docs QA
 - `scripts/qa-smoke.mjs` - v1 smoke gate
 - `docs/screenshots/` - README screenshots
