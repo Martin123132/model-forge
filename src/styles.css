@@ -1511,6 +1511,218 @@ h2 {
   white-space: nowrap;
 }
 
+.builder-ai-profile-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #cddff7;
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(20, 92, 255, 0.035), rgba(15, 157, 88, 0.025)),
+    #fff;
+}
+
+.builder-contract-overview {
+  margin: 14px 14px 0;
+}
+
+.builder-ai-profile-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.builder-ai-profile-heading > div {
+  min-width: 0;
+}
+
+.builder-ai-profile-heading span {
+  display: block;
+  overflow: hidden;
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.builder-ai-profile-heading h2 {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #172236;
+  font-size: 15px;
+  font-weight: 840;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-ai-profile-heading p,
+.ai-profile-method p {
+  margin: 6px 0 0;
+  color: #4b5b73;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.ai-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-profile-facts div {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 3px 7px;
+  align-items: start;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.ai-profile-facts svg {
+  color: var(--blue);
+}
+
+.ai-profile-facts span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.ai-profile-facts strong,
+.ai-profile-facts em {
+  grid-column: 2;
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-profile-facts strong {
+  color: #172236;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.ai-profile-facts em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 620;
+}
+
+.ai-profile-method,
+.ai-profile-rules,
+.ai-profile-done {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.ai-profile-method > strong,
+.ai-profile-rules > strong,
+.ai-profile-done > strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.ai-profile-rules > div,
+.ai-profile-done > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.ai-profile-rules span,
+.ai-profile-done span {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  min-width: 0;
+  color: #4b5b73;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.ai-profile-rules svg,
+.ai-profile-done svg {
+  margin-top: 1px;
+  color: var(--green);
+}
+
+.ai-profile-output-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.ai-profile-output {
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 96px;
+  padding: 8px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #172236;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-profile-output:hover,
+.ai-profile-output:focus-visible {
+  border-color: #b9d4ff;
+  background: #f8fbff;
+  outline: 0;
+}
+
+.ai-profile-output > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.ai-profile-output strong,
+.ai-profile-output em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-profile-output strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.ai-profile-output em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
 .builder-route-heading {
   display: flex;
   align-items: flex-start;
@@ -6423,6 +6635,10 @@ h2 {
     padding: 12px 0;
   }
 
+  .builder-contract-overview {
+    margin: 12px 0 0;
+  }
+
   .builder-form {
     grid-template-columns: 1fr;
   }
@@ -6457,8 +6673,15 @@ h2 {
 
   .blueprint-metrics,
   .blueprint-capability-grid,
-  .source-scope-preview-lists {
+  .source-scope-preview-lists,
+  .ai-profile-facts,
+  .ai-profile-rules > div,
+  .ai-profile-done > div {
     grid-template-columns: 1fr;
+  }
+
+  .ai-profile-output-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .builder-step {
@@ -6488,6 +6711,11 @@ h2 {
   .builder-handoff-artifact strong,
   .builder-handoff-artifact span,
   .builder-handoff-artifact em,
+  .builder-ai-profile-heading h2,
+  .ai-profile-facts strong,
+  .ai-profile-facts em,
+  .ai-profile-output strong,
+  .ai-profile-output em,
   .builder-run-stage strong,
   .builder-run-stage em,
   .builder-run-output em,

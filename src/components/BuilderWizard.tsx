@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
+  BuilderAiProfile,
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
@@ -370,6 +371,20 @@ function stepLabel(status: string) {
   return status || "Pending";
 }
 
+function outputStatusTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "ready") return "pass";
+  if (status === "blocked") return "fail";
+  if (status === "planned") return "warn";
+  return "neutral";
+}
+
+function outputStatusLabel(status?: string) {
+  if (status === "ready") return "Ready";
+  if (status === "blocked") return "Blocked";
+  if (status === "planned") return "Planned";
+  return status || "Draft";
+}
+
 function runStatusTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
   if (status === "pass") return "pass";
   if (status === "fail") return "fail";
@@ -481,6 +496,125 @@ function createDraftBlueprint({
     watchouts: [
       privacy === "local-only" ? "Local-only builds should stay inside the configured data root." : "Shareable builds need a fresh proof review.",
       "ModelForge will keep the route realistic for this machine."
+    ]
+  };
+}
+
+function audienceDisplay(value = "") {
+  if (value === "team") return "Small team";
+  if (value === "public") return "Public users";
+  return "Personal use";
+}
+
+function personalityDisplay(value = "") {
+  if (value === "teacher") return "Patient teacher";
+  if (value === "operator") return "Direct operator";
+  if (value === "creative") return "Creative helper";
+  return "Practical";
+}
+
+function privacyDisplay(value = "") {
+  if (value === "shareable") return "Shareable with proof review";
+  return "Local-only";
+}
+
+function draftBuildMethod(buildMode: string, sourceCount: number) {
+  if (!sourceCount) return "Scan the source boundary before generating model artifacts.";
+  if (buildMode === "adapter") return "Build a scoped dataset first, then prepare an adapter-ready recipe and runner contract.";
+  if (buildMode === "portable") return "Build a scoped dataset, recipe, proof bundle, and export pack that can move to another machine.";
+  if (buildMode === "profile") return "Export an Ollama Modelfile and source-bounded system prompt before heavier dataset work.";
+  return "Create a scoped Dataset Forge pack, local knowledge pack, Ollama profile, proof gates, and export recipe.";
+}
+
+function createDraftAiProfile({
+  aiType,
+  audience,
+  personality,
+  privacy,
+  buildMode,
+  targetDevice,
+  knowledgeSource,
+  boundaryMode,
+  dataTypes,
+  hardware,
+  sourceScopeOption,
+  planReady
+}: {
+  aiType: string;
+  audience: string;
+  personality: string;
+  privacy: string;
+  buildMode: string;
+  targetDevice: string;
+  knowledgeSource: string;
+  boundaryMode: string;
+  dataTypes: string[];
+  hardware?: HardwareProfile | null;
+  sourceScopeOption: SourceScopeOption;
+  planReady: boolean;
+}): BuilderAiProfile {
+  const aiLabel = optionLabel(aiTypeOptions, aiType);
+  const sourceLabel = optionLabel(knowledgeSourceOptions, knowledgeSource).toLowerCase();
+  const boundaryLabel = optionLabel(boundaryOptions, boundaryMode).toLowerCase();
+  const sourceCount = sourceScopeOption.includedFiles || 0;
+  const baseModel = hardware?.ollama.selectedModel || "best local base";
+  const dataTypeLabel = dataTypes.length ? dataTypes.join(", ") : "selected local files";
+  return {
+    schema: "modelforge.builder_ai_profile.draft.v1",
+    title: `${aiLabel} for ${audienceDisplay(audience).toLowerCase()}`,
+    summary: `A ${aiLabel.toLowerCase()} using ${sourceLabel} from ${sourceCount.toLocaleString()} scoped files.`,
+    audience: audienceDisplay(audience),
+    personality: personalityDisplay(personality),
+    privacy: privacyDisplay(privacy),
+    targetDevice: targetDevice || "this machine",
+    baseModel,
+    route: buildMode === "auto" ? "Auto route" : optionLabel(purposeOptions, buildMode),
+    buildMethod: draftBuildMethod(buildMode, sourceCount),
+    knowledgeBoundary: `${boundaryLabel}; ${privacy === "local-only" ? "keep all source and generated artifacts local" : "prepare proof before sharing"}.`,
+    sourceScope: `${sourceScopeOption.label} with ${sourceCount.toLocaleString()} included files and ${sourceScopeOption.excludedFiles.toLocaleString()} excluded files.`,
+    answerRules: [
+      "Prefer source-backed answers over guesses.",
+      boundaryMode === "strict-citations" ? "Show source paths for claims that depend on local knowledge." : "Separate local evidence from open questions.",
+      boundaryMode === "creative-safe" ? "Creative responses must stay inside the selected lore or knowledge boundary." : "Flag requests that need files outside the selected scope.",
+      privacy === "local-only" ? "Keep prompts, datasets, receipts, and model artifacts on this machine." : "Review license and proof gates before sharing any pack."
+    ],
+    outputs: [
+      {
+        label: "Source scope",
+        detail: `${sourceScopeOption.label} locks the files this AI is allowed to learn from.`,
+        status: sourceCount ? "ready" : "blocked",
+        workspace: "sources"
+      },
+      {
+        label: "Local AI profile",
+        detail: `Ollama Modelfile and system prompt based on ${baseModel}.`,
+        status: sourceCount ? "planned" : "blocked",
+        workspace: "model"
+      },
+      {
+        label: "Dataset and knowledge",
+        detail: `JSONL examples plus retrieval snippets from ${dataTypeLabel}.`,
+        status: sourceCount ? "planned" : "blocked",
+        workspace: "model"
+      },
+      {
+        label: "Recipe and export pack",
+        detail: "Versioned rebuild instructions, runner contract, and copied artifacts.",
+        status: planReady ? "planned" : "blocked",
+        workspace: "model"
+      },
+      {
+        label: "Proof and release gates",
+        detail: "Source hashes, receipts, model card, license review, and freshness checks.",
+        status: sourceCount ? "planned" : "blocked",
+        workspace: "release"
+      }
+    ],
+    doneWhen: [
+      "A build run has a receipt with every stage completed or a clear repair hint.",
+      "The AI can answer a smoke prompt using the selected source boundary.",
+      "Dataset, knowledge pack, recipe, and export pack paths are visible from Model Lab.",
+      "Proof and release gates are fresh before the project is shared."
     ]
   };
 }
@@ -703,6 +837,25 @@ export function BuilderWizard({
       }),
     [aiType, audience, boundaryMode, buildMode, hardware, knowledgeSource, personality, plan?.blueprint, planMatchesForm, privacy, sourceCount, sourceScope, targetDevice, templateId]
   );
+  const aiProfile = useMemo(
+    () =>
+      (planMatchesForm && plan?.aiProfile) ||
+      createDraftAiProfile({
+        aiType,
+        audience,
+        personality,
+        privacy,
+        buildMode,
+        targetDevice,
+        knowledgeSource,
+        boundaryMode,
+        dataTypes,
+        hardware,
+        sourceScopeOption: selectedSourceScope,
+        planReady: Boolean(plan && planMatchesForm)
+      }),
+    [aiType, audience, boundaryMode, buildMode, dataTypes, hardware, knowledgeSource, personality, plan, planMatchesForm, privacy, selectedSourceScope, targetDevice]
+  );
   const activeStage =
     activeRun?.stages.find((stage) => stage.status === "running") ||
     activeRun?.stages.find((stage) => stage.status === "fail" || stage.status === "canceled") ||
@@ -780,6 +933,85 @@ export function BuilderWizard({
               <span>{builderRunBusy ? "Starting" : plan && !planMatchesForm ? "Plan Changed" : "Start Build"}</span>
             </button>
           )}
+        </div>
+      </div>
+
+      <div className="builder-ai-profile-card builder-contract-overview">
+        <div className="builder-ai-profile-heading">
+          <div>
+            <span>AI build contract</span>
+            <h2>{aiProfile.title}</h2>
+            <p>{aiProfile.summary}</p>
+          </div>
+          <StatusPill status={planMatchesForm ? "pass" : "neutral"} label={planMatchesForm ? "Saved" : "Draft"} />
+        </div>
+
+        <div className="ai-profile-facts">
+          <div>
+            <Bot size={15} />
+            <span>Style</span>
+            <strong>{aiProfile.personality}</strong>
+            <em>{aiProfile.audience}</em>
+          </div>
+          <div>
+            <ShieldCheck size={15} />
+            <span>Boundary</span>
+            <strong>{aiProfile.privacy}</strong>
+            <em>{aiProfile.knowledgeBoundary}</em>
+          </div>
+          <div>
+            <BrainCircuit size={15} />
+            <span>Base</span>
+            <strong>{aiProfile.baseModel}</strong>
+            <em>{aiProfile.route}</em>
+          </div>
+          <div>
+            <Database size={15} />
+            <span>Scope</span>
+            <strong>{selectedSourceScope.label}</strong>
+            <em>{aiProfile.sourceScope}</em>
+          </div>
+        </div>
+
+        <div className="ai-profile-method">
+          <strong>How ModelForge will make it</strong>
+          <p>{aiProfile.buildMethod}</p>
+        </div>
+
+        <div className="ai-profile-rules">
+          <strong>Answer rules</strong>
+          <div>
+            {aiProfile.answerRules.map((rule) => (
+              <span key={rule}>
+                <ShieldCheck size={12} />
+                {rule}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="ai-profile-output-list">
+          {aiProfile.outputs.map((output) => (
+            <button className="ai-profile-output" key={output.label} type="button" onClick={() => goToPlanAction(output.workspace)}>
+              <span>
+                <strong>{output.label}</strong>
+                <em>{output.detail}</em>
+              </span>
+              <StatusPill status={outputStatusTone(output.status)} label={outputStatusLabel(output.status)} />
+            </button>
+          ))}
+        </div>
+
+        <div className="ai-profile-done">
+          <strong>Done when</strong>
+          <div>
+            {aiProfile.doneWhen.map((item) => (
+              <span key={item}>
+                <CheckCircle2 size={12} />
+                {item}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1041,6 +1273,7 @@ export function BuilderWizard({
               ))}
             </div>
           </div>
+
         </form>
 
         <aside className="builder-plan" aria-label="Build plan">

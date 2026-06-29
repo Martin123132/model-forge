@@ -49,6 +49,9 @@ artifacts from code and project folders.
   templates, AI type, knowledge source, source scope, answer boundaries, CPU,
   RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and
   next actions.
+- Shows an **AI build contract** before the user starts: what AI is being made,
+  what it is allowed to know, how ModelForge will build it, what artifacts will
+  be produced, and what counts as done.
 - Previews source scopes before building: Whole project, Docs first, Code
   hotspots, and Small safe sample each show included/excluded counts and sample
   paths.
@@ -129,6 +132,8 @@ The plan records:
 - Included/excluded source previews for all four scope modes.
 - A plain-English blueprint with capabilities, watchouts, hardware fit, first
   build action, and release posture.
+- An **AI build contract** with the audience, personality, privacy posture,
+  base model, route, answer rules, expected outputs, and done definition.
 - A first-run checklist that explains whether setup, source boundary, hardware
   route, base model, dataset path, and release proof are ready.
 - Local hardware facts: CPU threads, RAM, GPU/VRAM, D-drive space, and Ollama

@@ -237,6 +237,29 @@ export type BuilderPlanStep = {
   workspace: string;
 };
 
+export type BuilderAiProfile = {
+  schema: string;
+  title: string;
+  summary: string;
+  audience: string;
+  personality: string;
+  privacy: string;
+  targetDevice: string;
+  baseModel: string;
+  route: string;
+  buildMethod: string;
+  knowledgeBoundary: string;
+  sourceScope: string;
+  answerRules: string[];
+  outputs: Array<{
+    label: string;
+    detail: string;
+    status: "ready" | "planned" | "blocked" | string;
+    workspace: string;
+  }>;
+  doneWhen: string[];
+};
+
 export type BuilderPlan = {
   schema: string;
   planId: string;
@@ -260,6 +283,7 @@ export type BuilderPlan = {
   routeLabel: string;
   routeReason: string;
   sourceScopePreview?: SourceScopePreview;
+  aiProfile?: BuilderAiProfile;
   blueprint?: {
     schema: string;
     title: string;

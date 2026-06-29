@@ -176,6 +176,18 @@ async function main() {
       project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"
     ),
     check(
+      "Builder AI profile",
+      Boolean(
+        project.latestBuildPlan?.aiProfile?.schema === "modelforge.builder_ai_profile.v1" &&
+          project.latestBuildPlan.aiProfile.answerRules?.length >= 3 &&
+          project.latestBuildPlan.aiProfile.outputs?.length >= 5 &&
+          project.latestBuildPlan.aiProfile.doneWhen?.length >= 3
+      ),
+      project.latestBuildPlan?.aiProfile
+        ? `${project.latestBuildPlan.aiProfile.title}: ${project.latestBuildPlan.aiProfile.outputs?.length || 0} outputs, ${project.latestBuildPlan.aiProfile.answerRules?.length || 0} rules`
+        : "no AI build contract"
+    ),
+    check(
       "Builder guided setup",
       Boolean(
         project.latestBuildPlan?.request?.templateId &&

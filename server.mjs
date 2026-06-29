@@ -2639,6 +2639,106 @@ function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, so
   };
 }
 
+function audienceLabel(value = "") {
+  if (value === "team") return "Small team";
+  if (value === "public") return "Public users";
+  return "Personal use";
+}
+
+function personalityLabel(value = "") {
+  if (value === "teacher") return "Patient teacher";
+  if (value === "operator") return "Direct operator";
+  if (value === "creative") return "Creative helper";
+  return "Practical";
+}
+
+function privacyLabel(value = "") {
+  if (value === "shareable") return "Shareable with proof review";
+  return "Local-only";
+}
+
+function buildMethodForRoute(route, artifacts) {
+  if (route.id === "source-onboarding") {
+    return "Save setup and scan the source boundary before generating model artifacts.";
+  }
+  if (route.id === "adapter-lora" || route.id === "dataset-then-adapter") {
+    return artifacts.datasetReady
+      ? "Package the existing scoped dataset into an adapter-ready recipe and runner contract."
+      : "Build a scoped Dataset Forge pack first, then prepare an adapter-ready recipe and runner contract.";
+  }
+  if (route.id === "export-runner" || route.id === "recipe-export") {
+    return "Use the scoped dataset, local knowledge pack, Ollama profile, proof gates, and recipe export pack as the rebuildable AI package.";
+  }
+  return "Create a scoped Dataset Forge pack, local knowledge pack, Ollama profile, proof gates, and export recipe before any heavier training route.";
+}
+
+function buildAiProfileContract({ request, route, baseModel, artifacts, sources, sourceScope }) {
+  const type = aiTypeSpec(request.aiType);
+  const sourceLabel = knowledgeSourceLabel(request.knowledgeSource);
+  const boundary = boundaryLabel(request.boundaryMode);
+  const scopedFiles = sourceScope?.includedFiles ?? sources?.totalFiles ?? 0;
+  const dataTypes = request.dataTypes?.length ? request.dataTypes.join(", ") : "selected local files";
+  const localOnly = request.privacy !== "shareable";
+  return {
+    schema: "modelforge.builder_ai_profile.v1",
+    title: `${type.label} for ${audienceLabel(request.audience).toLowerCase()}`,
+    summary: `A ${type.label.toLowerCase()} that ${type.promise}, using ${sourceLabel} from ${scopedFiles.toLocaleString()} scoped files.`,
+    audience: audienceLabel(request.audience),
+    personality: personalityLabel(request.personality),
+    privacy: privacyLabel(request.privacy),
+    targetDevice: request.targetDevice || "this machine",
+    baseModel: baseModel.model,
+    route: route.label,
+    buildMethod: buildMethodForRoute(route, artifacts),
+    knowledgeBoundary: `${boundary}; ${localOnly ? "keep all source and generated artifacts local" : "prepare proof before sharing"}.`,
+    sourceScope: `${sourceScope?.label || sourceScopeLabel(request.sourceScope)} with ${scopedFiles.toLocaleString()} included files and ${(sourceScope?.excludedFiles || 0).toLocaleString()} excluded files.`,
+    answerRules: [
+      "Prefer source-backed answers over guesses.",
+      request.boundaryMode === "strict-citations" ? "Show source paths for claims that depend on local knowledge." : "Separate local evidence from open questions.",
+      request.boundaryMode === "creative-safe" ? "Creative responses must stay inside the selected lore or knowledge boundary." : "Refuse or flag requests that need files outside the selected scope.",
+      localOnly ? "Keep prompts, datasets, receipts, and model artifacts on this machine." : "Review license and proof gates before sharing any pack."
+    ],
+    outputs: [
+      {
+        label: "Source scope",
+        detail: `${sourceScope?.label || "Selected scope"} locks the files this AI is allowed to learn from.`,
+        status: artifacts.sourceReady ? "ready" : "blocked",
+        workspace: "sources"
+      },
+      {
+        label: "Local AI profile",
+        detail: `Ollama Modelfile and system prompt based on ${baseModel.model}.`,
+        status: artifacts.modelProfileReady ? "ready" : artifacts.sourceReady ? "planned" : "blocked",
+        workspace: "model"
+      },
+      {
+        label: "Dataset and knowledge",
+        detail: `JSONL examples plus retrieval snippets from ${dataTypes}.`,
+        status: artifacts.datasetReady && artifacts.knowledgePackReady ? "ready" : artifacts.sourceReady ? "planned" : "blocked",
+        workspace: "model"
+      },
+      {
+        label: "Recipe and export pack",
+        detail: "Versioned rebuild instructions, runner contract, and copied artifacts.",
+        status: artifacts.recipeReady ? "ready" : artifacts.datasetReady ? "planned" : "blocked",
+        workspace: "model"
+      },
+      {
+        label: "Proof and release gates",
+        detail: "Source hashes, receipts, model card, license review, and freshness checks.",
+        status: artifacts.proofFresh && artifacts.evalFresh ? "ready" : artifacts.sourceReady ? "planned" : "blocked",
+        workspace: "release"
+      }
+    ],
+    doneWhen: [
+      "A build run has a receipt with every stage completed or a clear repair hint.",
+      "The AI can answer a smoke prompt using the selected source boundary.",
+      "Dataset, knowledge pack, recipe, and export pack paths are visible from Model Lab.",
+      "Proof and release gates are fresh before the project is shared."
+    ]
+  };
+}
+
 function chooseBaseModelRecommendation(request, hardware, ollama) {
   const intent = request.intent.toLowerCase();
   const codeHeavy = request.aiType === "coding-helper" || request.dataTypes.includes("code") || /\b(code|repo|developer|programming|typescript|python)\b/.test(intent);
@@ -2771,6 +2871,7 @@ async function buildAiBuildPlan(body = {}) {
   const selectedSourceScope = resolveSourceScope(sources, request.sourceScope);
   const sourceScopePreview = buildSourceScopePreview(sources, request.sourceScope);
   const blueprint = buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources, sourceScope: selectedSourceScope });
+  const aiProfile = buildAiProfileContract({ request, route, baseModel, artifacts, sources, sourceScope: selectedSourceScope });
   const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
   const estimatedTime = routeNeedsAdapter
     ? hardware.tier.id === "starter-lora"
@@ -2878,6 +2979,7 @@ async function buildAiBuildPlan(body = {}) {
     routeLabel: route.label,
     routeReason: route.reason,
     sourceScopePreview,
+    aiProfile,
     blueprint,
     baseModelRecommendation: baseModel,
     estimates: {
@@ -2907,6 +3009,7 @@ async function buildAiBuildPlan(body = {}) {
     `Hardware tier: ${hardware.tier.label}`,
     `Base model: ${baseModel.model}`,
     `Blueprint: ${blueprint.summary}`,
+    `AI profile: ${aiProfile.summary}`,
     "",
     "## Intent",
     "",
@@ -2923,6 +3026,30 @@ async function buildAiBuildPlan(body = {}) {
     `Boundaries: ${blueprint.boundaries}`,
     `First build: ${blueprint.firstBuild}`,
     `Release posture: ${blueprint.releasePosture}`,
+    "",
+    "## AI Build Contract",
+    "",
+    `Audience: ${aiProfile.audience}`,
+    `Personality: ${aiProfile.personality}`,
+    `Privacy: ${aiProfile.privacy}`,
+    `Target device: ${aiProfile.targetDevice}`,
+    `Base model: ${aiProfile.baseModel}`,
+    `Route: ${aiProfile.route}`,
+    `Build method: ${aiProfile.buildMethod}`,
+    `Knowledge boundary: ${aiProfile.knowledgeBoundary}`,
+    `Source scope: ${aiProfile.sourceScope}`,
+    "",
+    "### Answer Rules",
+    "",
+    ...aiProfile.answerRules.map((item) => `- ${item}`),
+    "",
+    "### Outputs",
+    "",
+    ...aiProfile.outputs.map((item) => `- ${item.label}: ${item.status}. ${item.detail}`),
+    "",
+    "### Done When",
+    "",
+    ...aiProfile.doneWhen.map((item) => `- ${item}`),
     "",
     "## First-Run Checklist",
     "",

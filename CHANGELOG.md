@@ -7,6 +7,9 @@ forge cockpit.
 
 - Added the Builder Wizard for plain-English AI intent, hardware-aware route
   selection, source scopes, and non-developer starter templates.
+- Added a saved AI build contract to Builder plans so non-developers can see
+  what AI is being made, what it may know, how it will be built, and when it is
+  ready.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,
