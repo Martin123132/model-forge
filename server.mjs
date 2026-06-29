@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, spawn } from "node:child_process";
 
@@ -14,6 +14,8 @@ const projectRegistryPath = join(setupConfigDir, "projects.json");
 const defaultDataRoot = resolve(process.env.MODEL_FORGE_DATA_ROOT || join(projectRoot, ".modelforge-data"));
 const defaultSourceRoot = resolve(process.env.MODEL_FORGE_SOURCE_ROOT || projectRoot);
 const bundledPython = join(projectRoot, ".venv", "Scripts", "python.exe");
+const ollamaCliCache = { expiresAt: 0, promise: null, value: null };
+const ollamaStatusCache = { expiresAt: 0, promise: null, value: null };
 let dataRoot = defaultDataRoot;
 let sourceRoot = defaultSourceRoot;
 let pythonCommand = process.env.MODEL_FORGE_PYTHON || (existsSync(bundledPython) ? bundledPython : "python");
@@ -107,7 +109,7 @@ async function ensureDataRoot() {
 }
 
 function commandEnv(extra = {}) {
-  return {
+  const env = {
     ...process.env,
     TEMP: process.env.TEMP || join(resolve(projectRoot, ".."), ".cache", "temp"),
     TMP: process.env.TMP || join(resolve(projectRoot, ".."), ".cache", "temp"),
@@ -115,6 +117,12 @@ function commandEnv(extra = {}) {
     npm_config_cache: process.env.npm_config_cache || join(resolve(projectRoot, ".."), ".cache", "npm"),
     ...extra
   };
+  const command = ollamaCommand();
+  if (isAbsolute(command)) {
+    const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") || "PATH";
+    env[pathKey] = `${dirname(command)}${process.platform === "win32" ? ";" : ":"}${env[pathKey] || ""}`;
+  }
+  return env;
 }
 
 function runCommand(command, args, options = {}) {
@@ -191,6 +199,20 @@ function defaultTargetModelName() {
 function defaultStarterModelName() {
   const configured = cleanSetting(process.env.MODEL_FORGE_STARTER_MODEL) || "llama3.2:3b";
   return /^[a-z0-9][a-z0-9._:/-]{0,120}$/i.test(configured) ? configured : "llama3.2:3b";
+}
+
+function ollamaCommand() {
+  const configured = cleanSetting(process.env.MODEL_FORGE_OLLAMA_COMMAND || process.env.OLLAMA_EXE);
+  if (configured) return configured;
+  const candidates =
+    process.platform === "win32"
+      ? [
+          "D:\\AI\\Ollama\\app\\ollama.exe",
+          process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "Ollama", "ollama.exe") : "",
+          process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Ollama", "ollama.exe") : ""
+        ]
+      : [];
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || "ollama";
 }
 
 function applySetupConfig(config = {}, { persistEnv = true } = {}) {
@@ -824,13 +846,23 @@ function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus,
       }
     });
   }
-  if (!ollamaReady) {
+  if (!toolStatus.ollama.ok) {
+    actions.push({
+      id: "install-ollama",
+      label: "Install Ollama",
+      kind: "manual",
+      tone: "warning",
+      detail: "Install Ollama for Windows, then press Recheck. ModelForge will detect it automatically."
+    });
+  } else if (!ollamaReady) {
     actions.push({
       id: "start-ollama",
       label: "Start Ollama",
-      kind: "manual",
-      tone: "warning",
-      detail: "Open Ollama, then press Recheck. ModelForge will detect it automatically."
+      kind: "server-action",
+      tone: "primary",
+      detail: "ModelForge will start the local Ollama server, then recheck model readiness.",
+      command: "ollama serve",
+      busyLabel: "Starting"
     });
   } else if (!ollamaHasModels) {
     actions.push({
@@ -840,6 +872,7 @@ function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus,
       tone: "primary",
       detail: `ModelForge will run Ollama's pull step for ${starterModel}, save it as the base model, and write a repair receipt.`,
       command: `ollama pull ${starterModel}`,
+      busyLabel: "Installing",
       modelName: starterModel
     });
   }
@@ -1092,8 +1125,156 @@ function safeModelName(value = "") {
   return /^[a-z0-9][a-z0-9._:/-]{0,120}$/i.test(modelName) ? modelName : "";
 }
 
+function sleep(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function startDetachedCommand(command, args, options = {}) {
+  try {
+    const child = spawn(command, args, {
+      cwd: options.cwd || projectRoot,
+      env: commandEnv(options.env || {}),
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    });
+    child.on("error", () => {});
+    child.unref();
+    return { ok: true, pid: child.pid || 0, error: "" };
+  } catch (error) {
+    return { ok: false, pid: 0, error: String(error?.message || error) };
+  }
+}
+
+async function waitForOllamaReady(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await getOllamaStatus({ force: true });
+  while (!latest.ok && Date.now() < deadline) {
+    await sleep(600);
+    latest = await getOllamaStatus({ force: true });
+  }
+  return latest;
+}
+
+async function runStartOllamaRepair(body = {}) {
+  const actionId = "start-ollama";
+  const startedAt = new Date().toISOString();
+  const receiptDir = join(dataRoot, "setup", "repairs");
+  const receiptPath = join(receiptDir, `repair-${startedAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}.json`);
+  const command = ["ollama", "serve"];
+  const actualCommand = [ollamaCommand(), "serve"];
+  await ensureDataRoot();
+  await mkdir(receiptDir, { recursive: true });
+
+  if (body.dryRun === true) {
+    const dryRunReceipt = {
+      schema: "modelforge.setup_repair.v1",
+      actionId,
+      ok: true,
+      dryRun: true,
+      command,
+      outputPath: receiptPath,
+      summary: "Ready to start Ollama with ollama serve.",
+      startedAt,
+      endedAt: new Date().toISOString()
+    };
+    return {
+      ok: true,
+      repair: dryRunReceipt,
+      setup: await getSetupState(),
+      project: await getProjectPayload(),
+      ollama: await getOllamaStatus({ force: true })
+    };
+  }
+
+  const before = await getOllamaStatus({ force: true });
+  const toolStatus = await getToolStatus();
+  if (!toolStatus.ollama.ok) {
+    const endedAt = new Date().toISOString();
+    const receipt = {
+      schema: "modelforge.setup_repair.v1",
+      actionId,
+      ok: false,
+      dryRun: false,
+      command,
+      processId: 0,
+      beforeOk: before.ok,
+      afterOk: false,
+      outputPath: receiptPath,
+      receipt: commandReceipt({
+        name: "Setup repair: start Ollama",
+        ok: false,
+        status: "failed",
+        command,
+        outputPath: receiptPath,
+        summary: "Ollama CLI is not installed, so ModelForge cannot start it.",
+        stderr: toolStatus.ollama.detail,
+        error: toolStatus.ollama.detail,
+        startedAt,
+        endedAt
+      }),
+      startedAt,
+      endedAt,
+      summary: "Install Ollama before starting it from ModelForge."
+    };
+    await writeJson(receiptPath, receipt);
+    return {
+      ok: false,
+      error: receipt.receipt.error || receipt.summary,
+      repair: receipt,
+      setup: await getSetupState(),
+      project: await getProjectPayload(),
+      ollama: before
+    };
+  }
+
+  const launch = before.ok ? { ok: true, pid: 0, error: "" } : startDetachedCommand(actualCommand[0], actualCommand.slice(1));
+  const after = before.ok ? before : await waitForOllamaReady();
+  const ok = Boolean(after.ok);
+  const endedAt = new Date().toISOString();
+  const receipt = {
+    schema: "modelforge.setup_repair.v1",
+    actionId,
+    ok,
+    dryRun: false,
+    command,
+    processId: launch.pid,
+    beforeOk: before.ok,
+    afterOk: after.ok,
+    outputPath: receiptPath,
+    receipt: commandReceipt({
+      name: "Setup repair: start Ollama",
+      ok,
+      status: ok ? "ok" : "failed",
+      command,
+      outputPath: receiptPath,
+      summary: ok ? "Ollama is responding to local model commands." : "ModelForge could not start or reach Ollama.",
+      stdout: launch.pid ? `Started detached process ${launch.pid}.` : before.ok ? "Ollama was already responding." : "",
+      stderr: after.ok ? "" : after.error || launch.error,
+      error: ok ? "" : after.error || launch.error || "Ollama did not respond before the repair timeout.",
+      startedAt,
+      endedAt
+    }),
+    startedAt,
+    endedAt,
+    summary: ok ? "Ollama is running." : "Start Ollama repair failed."
+  };
+  await writeJson(receiptPath, receipt);
+  return {
+    ok,
+    error: ok ? "" : receipt.receipt.error || receipt.summary,
+    repair: receipt,
+    setup: await getSetupState(),
+    project: await getProjectPayload(),
+    ollama: after
+  };
+}
+
 async function runSetupDoctorAction(body = {}) {
   const actionId = cleanSetting(body.actionId);
+  if (actionId === "start-ollama") {
+    return runStartOllamaRepair(body);
+  }
   if (actionId !== "pull-small-model") {
     throw new Error(`Unsupported setup repair action: ${actionId || "missing"}`);
   }
@@ -1103,6 +1284,7 @@ async function runSetupDoctorAction(body = {}) {
   const receiptDir = join(dataRoot, "setup", "repairs");
   const receiptPath = join(receiptDir, `repair-${startedAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}.json`);
   const command = ["ollama", "pull", modelName];
+  const actualCommand = [ollamaCommand(), "pull", modelName];
   await ensureDataRoot();
   await mkdir(receiptDir, { recursive: true });
 
@@ -1124,13 +1306,13 @@ async function runSetupDoctorAction(body = {}) {
       repair: dryRunReceipt,
       setup: await getSetupState(),
       project: await getProjectPayload(),
-      ollama: await getOllamaStatus()
+      ollama: await getOllamaStatus({ force: true })
     };
   }
 
-  const before = await getOllamaStatus();
-  const result = await runCommand(command[0], command.slice(1), { timeout: 20 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
-  const after = await getOllamaStatus();
+  const before = await getOllamaStatus({ force: true });
+  const result = await runCommand(actualCommand[0], actualCommand.slice(1), { timeout: 20 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
+  const after = await getOllamaStatus({ force: true });
   const installed = after.models.some((model) => model.name === modelName);
   const ok = result.ok && installed;
   if (installed) {
@@ -1209,11 +1391,33 @@ function isInsidePath(parent, candidate) {
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
+async function getOllamaCliStatus({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && ollamaCliCache.value && ollamaCliCache.expiresAt > now) {
+    return ollamaCliCache.value;
+  }
+  if (!force && ollamaCliCache.promise) {
+    return ollamaCliCache.promise;
+  }
+  ollamaCliCache.promise = (async () => {
+    let result = await runCommand(ollamaCommand(), ["--version"], { timeout: 5000 });
+    if (!result.ok) {
+      await sleep(250);
+      result = await runCommand(ollamaCommand(), ["--version"], { timeout: 5000 });
+    }
+    ollamaCliCache.value = result;
+    ollamaCliCache.expiresAt = Date.now() + 2000;
+    ollamaCliCache.promise = null;
+    return result;
+  })();
+  return ollamaCliCache.promise;
+}
+
 async function getToolStatus() {
   const [repomori, agentledger, ollama] = await Promise.all([
     runCommand(pythonCommand, ["-m", "repomori", "--help"], { timeout: 5000 }),
     runCommand(pythonCommand, ["-m", "agentledger", "--version"], { timeout: 5000 }),
-    runCommand("ollama", ["--version"], { timeout: 5000 })
+    getOllamaCliStatus()
   ]);
 
   return {
@@ -1458,6 +1662,7 @@ async function buildDiagnosticsReport() {
         tone: action.tone,
         detail: sanitizeDiagnosticText(action.detail),
         command: Array.isArray(action.command) ? action.command.map(sanitizeDiagnosticText) : sanitizeDiagnosticText(action.command || ""),
+        busyLabel: action.busyLabel || "",
         modelName: action.modelName || ""
       }))
     },
@@ -4352,7 +4557,8 @@ async function exportOllamaProfile(targetDir, options = {}) {
   let createReceipt = null;
   if (options.create === true) {
     const command = ["ollama", "create", modelName, "-f", modelfilePath];
-    const result = await runCommand(command[0], command.slice(1), { timeout: 120000, cwd: modelDir });
+    const actualCommand = [ollamaCommand(), "create", modelName, "-f", modelfilePath];
+    const result = await runCommand(actualCommand[0], actualCommand.slice(1), { timeout: 120000, cwd: modelDir });
     createReceipt = commandReceipt({
       name: "ollama_create",
       ok: result.ok,
@@ -4619,7 +4825,7 @@ async function startRecipePackRun(body = {}) {
   }
 
   try {
-    const child = spawn("ollama", ["create", prepared.targetModel, "-f", prepared.relativeModelfile], {
+    const child = spawn(ollamaCommand(), ["create", prepared.targetModel, "-f", prepared.relativeModelfile], {
       cwd: prepared.exportDir,
       env: commandEnv(),
       windowsHide: true
@@ -5849,21 +6055,45 @@ function parseOllamaList(output) {
   }).filter((model) => model.name && model.name !== "NAME");
 }
 
-async function getOllamaStatus() {
-  const version = await runCommand("ollama", ["--version"], { timeout: 5000 });
-  const list = await runCommand("ollama", ["list"], { timeout: 8000 });
+async function readOllamaStatus() {
+  const command = ollamaCommand();
+  const version = await getOllamaCliStatus();
+  let list = version.ok ? await runCommand(command, ["list"], { timeout: 8000 }) : { ok: false, stdout: "", stderr: "", error: version.error };
+  if (version.ok && !list.ok) {
+    await sleep(250);
+    list = await runCommand(command, ["list"], { timeout: 8000 });
+  }
   const models = list.ok ? parseOllamaList(list.stdout) : [];
   const modelsRoot = process.env.OLLAMA_MODELS || "";
   const configuredBaseModel = setupConfig.baseModel || "";
   const configuredModel = models.find((model) => model.name === configuredBaseModel)?.name || "";
+  const error = !version.ok ? version.error || version.stderr : !list.ok ? list.error || list.stderr || "Ollama is installed but the local server is not responding." : "";
   return {
-    ok: version.ok,
+    ok: version.ok && list.ok,
     version: version.stdout.trim() || version.stderr.trim() || "Unavailable",
     modelsRoot,
     models,
     selectedModel: configuredModel || models.find((model) => model.name.includes("llama3.2"))?.name || models[0]?.name || "",
-    error: version.ok ? "" : version.error || version.stderr
+    error
   };
+}
+
+async function getOllamaStatus({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && ollamaStatusCache.value && ollamaStatusCache.expiresAt > now) {
+    return ollamaStatusCache.value;
+  }
+  if (!force && ollamaStatusCache.promise) {
+    return ollamaStatusCache.promise;
+  }
+  ollamaStatusCache.promise = (async () => {
+    const status = await readOllamaStatus();
+    ollamaStatusCache.value = status;
+    ollamaStatusCache.expiresAt = Date.now() + 1500;
+    ollamaStatusCache.promise = null;
+    return status;
+  })();
+  return ollamaStatusCache.promise;
 }
 
 async function getProjectPayload() {

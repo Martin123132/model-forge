@@ -101,6 +101,8 @@ turns raw machine checks into a short readiness verdict:
 When D: is available and ModelForge is still pointed at another drive, Setup
 shows a **Use D-drive storage** repair button. That updates the data root and
 Ollama model path without asking the user to edit environment variables by hand.
+When Ollama is installed but not responding, Setup shows a **Start Ollama**
+repair button that starts the local server and writes a repair receipt.
 When Ollama is running but no local model is installed, Setup shows an
 **Install starter model** repair button. That runs `ollama pull llama3.2:3b`,
 saves the model as the base model, and writes a local repair receipt.

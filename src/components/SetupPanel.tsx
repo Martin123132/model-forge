@@ -230,6 +230,7 @@ export function SetupPanel({
             <div className="setup-doctor-actions" aria-label="Repair actions">
               {doctor.actions.map((action) => {
                 const isBusy = doctorActionBusy === action.id;
+                const ActionIcon = action.id === "start-ollama" ? Play : Download;
                 return action.kind === "apply-config" ? (
                   <button
                     className={`setup-repair-button ${action.tone === "primary" ? "primary" : ""}`}
@@ -250,8 +251,8 @@ export function SetupPanel({
                     type="button"
                     onClick={() => onDoctorAction(action)}
                   >
-                    {isBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Download size={14} />}
-                    <span>{isBusy ? "Installing" : action.label}</span>
+                    {isBusy ? <LoaderCircle className="spin-icon" size={14} /> : <ActionIcon size={14} />}
+                    <span>{isBusy ? action.busyLabel || "Working" : action.label}</span>
                     {action.command ? <code>{action.command}</code> : null}
                   </button>
                 ) : (

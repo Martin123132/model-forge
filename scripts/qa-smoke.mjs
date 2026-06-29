@@ -47,7 +47,7 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorRepairDryRun] = await Promise.all([
+  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorStartDryRun, doctorRepairDryRun] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
     getJson("/api/setup"),
@@ -57,6 +57,7 @@ async function main() {
     getJson("/api/models/library"),
     getJson("/api/projects"),
     getJson("/api/diagnostics"),
+    postJson("/api/setup/doctor/action", { actionId: "start-ollama", dryRun: true }),
     postJson("/api/setup/doctor/action", { actionId: "pull-small-model", dryRun: true })
   ]);
   const evalReport = project.latestEval || null;
@@ -131,6 +132,16 @@ async function main() {
           diagnostics.setup?.doctorChecks?.length >= 6
       ),
       diagnostics ? `${diagnostics.setup.doctorStatus}: ${diagnostics.files?.downloadName || "no download name"}` : "no diagnostics report"
+    ),
+    check(
+      "Doctor start repair",
+      Boolean(
+        doctorStartDryRun?.repair?.schema === "modelforge.setup_repair.v1" &&
+          doctorStartDryRun.repair.dryRun === true &&
+          doctorStartDryRun.repair.actionId === "start-ollama" &&
+          doctorStartDryRun.repair.command?.join(" ").includes("ollama serve")
+      ),
+      doctorStartDryRun?.repair ? `${doctorStartDryRun.repair.summary} (${doctorStartDryRun.repair.command?.join(" ") || "no command"})` : "no start dry run"
     ),
     check(
       "Doctor model repair",

@@ -18,6 +18,8 @@ forge cockpit.
   rules, and guarded generated-data reset.
 - Added diagnostics export for GitHub issues without environment values or
   source contents.
+- Added First-Run Doctor repair actions for D-drive storage, starting Ollama,
+  and installing a small starter model with local receipts.
 - Added portable Windows release packaging with a double-click launcher and
   v1 release docs.
 

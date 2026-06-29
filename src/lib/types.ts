@@ -504,6 +504,7 @@ export type SetupDoctorAction = {
   detail: string;
   configPatch?: Partial<SetupConfig>;
   command?: string;
+  busyLabel?: string;
   modelName?: string;
 };
 
@@ -514,6 +515,9 @@ export type SetupDoctorRepair = {
   ok: boolean;
   dryRun?: boolean;
   command?: string[];
+  processId?: number;
+  beforeOk?: boolean;
+  afterOk?: boolean;
   outputPath?: string;
   summary: string;
   error?: string;
