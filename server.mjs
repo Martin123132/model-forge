@@ -78,6 +78,8 @@ async function ensureDataRoot() {
   await mkdir(join(dataRoot, "models"), { recursive: true });
   await mkdir(join(dataRoot, "evals"), { recursive: true });
   await mkdir(join(dataRoot, "share"), { recursive: true });
+  await mkdir(join(dataRoot, "datasets"), { recursive: true });
+  await mkdir(join(dataRoot, "datasets", "history"), { recursive: true });
   await mkdir(join(dataRoot, "recipes"), { recursive: true });
   await mkdir(join(dataRoot, "recipes", "history"), { recursive: true });
   await mkdir(join(dataRoot, "exports"), { recursive: true });
@@ -321,6 +323,7 @@ async function runFirstSetup(body = {}) {
   const proofBundle = await buildProofBundle({ requestedBy: "ModelForge setup" });
   const evalReport = await runEvalGates();
   const shareCard = await buildShareCard({ tone: "public" });
+  const datasetForge = await buildDatasetForge({ requestedBy: "ModelForge setup" });
   const recipe = await buildForgeRecipe({ modelName, baseModel: modelExport.baseModel });
   return {
     ok: true,
@@ -330,6 +333,7 @@ async function runFirstSetup(body = {}) {
       proofBundle,
       evalReport,
       shareCard,
+      datasetForge,
       recipe
     },
     project: await getProjectPayload()
@@ -441,6 +445,272 @@ function estimateDatasetMetrics(sources) {
     estimatedSize: `${estimatedMegabytes} MB est.`,
     reviewedPercent
   };
+}
+
+function datasetForgeId() {
+  return `dataset-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function isDatasetForgeCandidate(row) {
+  const extension = extname(row.path || "").toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".gz", ".pdf"].includes(extension)) {
+    return false;
+  }
+  if (row.sizeBytes > 420_000) {
+    return false;
+  }
+  return ["TypeScript", "JavaScript", "Python", "Markdown", "JSON", "JSONL", "TOML", "YAML", "CSS", "HTML", "PowerShell", "Text", "File"].includes(row.language);
+}
+
+function normalizeDatasetText(text, limit = 18_000) {
+  const normalized = String(text || "")
+    .replace(/\u0000/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\t/g, "  ")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit)}\n\n[truncated by ModelForge Dataset Forge]` : normalized;
+}
+
+function datasetInstructionFor(row) {
+  if (row.language === "Markdown") {
+    return `Explain the purpose and reusable knowledge in ${row.path} without making claims outside the file.`;
+  }
+  if (["TypeScript", "JavaScript", "Python"].includes(row.language)) {
+    return `Summarize the implementation responsibilities, public surface, and important constraints in ${row.path}.`;
+  }
+  if (["JSON", "JSONL", "TOML", "YAML"].includes(row.language)) {
+    return `Describe what configuration or structured data ${row.path} controls.`;
+  }
+  return `Describe the useful project knowledge contained in ${row.path}.`;
+}
+
+function datasetAnswerFor(row, text) {
+  const firstLines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8)
+    .join(" ");
+  return [
+    `Source file: ${row.path}`,
+    `Language: ${row.language}`,
+    `License posture: ${row.license}`,
+    `SHA-256: ${row.hash}`,
+    "",
+    "Bounded summary:",
+    firstLines || "No readable text content was available after normalization.",
+    "",
+    "Use this answer only inside the recorded ModelForge source boundary and rebuild the dataset if this file changes."
+  ].join("\n");
+}
+
+async function buildDatasetForge(body = {}) {
+  await ensureDataRoot();
+  const createdAt = new Date().toISOString();
+  const datasetId = datasetForgeId();
+  const latestDir = join(dataRoot, "datasets", "latest");
+  const versionDir = join(dataRoot, "datasets", "history", datasetId);
+  const maxFiles = Math.max(1, Math.min(Number(body.maxFiles || 120), 220));
+  const sources = await walkSources(sourceRoot);
+  const [latestProof, latestEval] = await Promise.all([getLatestProofBundle(), getLatestEvalReport()]);
+  const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
+  const sourcesMatchProof = Boolean(
+    latestProof &&
+      proofSourceSummary &&
+      proofSourceSummary.totalFiles === sources.totalFiles &&
+      proofSourceSummary.sampledFiles === sources.sampledFiles &&
+      proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
+  );
+  const evalMatchesProof = Boolean(latestEval && latestProof && latestEval.proofPath === latestProof.path);
+  const candidateRows = sources.rows.filter(isDatasetForgeCandidate).slice(0, maxFiles);
+  const examples = [];
+  let skippedFiles = sources.rows.length - candidateRows.length;
+
+  for (const row of candidateRows) {
+    const absolutePath = resolve(sourceRoot, row.path);
+    if (!isInsidePath(sourceRoot, absolutePath)) {
+      skippedFiles += 1;
+      continue;
+    }
+    try {
+      const text = normalizeDatasetText(await readFile(absolutePath, "utf-8"));
+      if (!text) {
+        skippedFiles += 1;
+        continue;
+      }
+      const instruction = datasetInstructionFor(row);
+      const output = datasetAnswerFor(row, text);
+      examples.push({
+        id: `example-${String(examples.length + 1).padStart(4, "0")}`,
+        sourcePath: row.path,
+        language: row.language,
+        license: row.license,
+        sha256: row.hash,
+        hashShort: row.hashShort,
+        sizeBytes: row.sizeBytes,
+        kind: "source-grounded-summary",
+        instruction,
+        input: text,
+        output,
+        messages: [
+          {
+            role: "system",
+            content: "You are a local, source-grounded ModelForge assistant. Stay inside the supplied file and recorded source boundary."
+          },
+          {
+            role: "user",
+            content: `${instruction}\n\n${text}`
+          },
+          {
+            role: "assistant",
+            content: output
+          }
+        ],
+        provenance: {
+          sourceRoot,
+          sourcePath: row.path,
+          sha256: row.hash,
+          license: row.license,
+          proofPath: latestProof?.path || ""
+        }
+      });
+    } catch {
+      skippedFiles += 1;
+    }
+  }
+
+  const jsonl = examples.map((example) => JSON.stringify(example)).join("\n") + (examples.length ? "\n" : "");
+  const totalInputBytes = examples.reduce((total, example) => total + Buffer.byteLength(example.input, "utf-8"), 0);
+  const totalOutputBytes = examples.reduce((total, example) => total + Buffer.byteLength(example.output, "utf-8"), 0);
+  const estimatedTokens = Math.max(0, Math.round((totalInputBytes + totalOutputBytes) / 4));
+  const licenseReviewedPercent = sources.totalFiles ? Math.round((sources.reviewedFiles / sources.totalFiles) * 100) : 0;
+  const preview = examples.slice(0, 6).map((example) => ({
+    id: example.id,
+    sourcePath: example.sourcePath,
+    language: example.language,
+    license: example.license,
+    hashShort: example.hashShort,
+    instruction: example.instruction,
+    inputPreview: example.input.slice(0, 220),
+    outputPreview: example.output.slice(0, 260)
+  }));
+  const manifest = {
+    schema: "modelforge.dataset_forge.v1",
+    datasetId,
+    status: examples.length ? "ready" : "empty",
+    createdAt,
+    sourceRoot,
+    dataRoot,
+    requestedBy: body.requestedBy || "ModelForge UI",
+    summary: {
+      totalExamples: examples.length,
+      includedFiles: examples.length,
+      skippedFiles,
+      totalInputBytes,
+      totalOutputBytes,
+      estimatedTokens,
+      estimatedSize: formatBytes(Buffer.byteLength(jsonl, "utf-8")),
+      licenseReviewedPercent
+    },
+    filters: {
+      maxFiles,
+      maxBytesPerFile: 420_000,
+      candidateLanguages: Array.from(new Set(candidateRows.map((row) => row.language))).sort()
+    },
+    provenance: {
+      proofPath: latestProof?.path || "",
+      proofBuiltAt: latestProof?.builtAt || "",
+      evalPath: latestEval ? join(dataRoot, "evals", "latest", "eval-report.json") : "",
+      sourceFiles: sources.totalFiles,
+      sampledFiles: sources.sampledFiles,
+      sourcesMatchProof,
+      evalMatchesProof,
+      licenseSignals: sources.licenseSignals
+    },
+    splits: {
+      train: Math.max(0, examples.length - Math.max(1, Math.round(examples.length * 0.1))),
+      validation: examples.length ? Math.max(1, Math.round(examples.length * 0.1)) : 0
+    },
+    files: {
+      dir: latestDir,
+      manifest: join(latestDir, "dataset-manifest.json"),
+      jsonl: join(latestDir, "dataset.jsonl"),
+      readme: join(latestDir, "README.md"),
+      preview: join(latestDir, "dataset-preview.md"),
+      versionDir,
+      versionManifest: join(versionDir, "dataset-manifest.json"),
+      versionJsonl: join(versionDir, "dataset.jsonl"),
+      versionReadme: join(versionDir, "README.md"),
+      versionPreview: join(versionDir, "dataset-preview.md")
+    },
+    examplesPreview: preview
+  };
+  const previewMarkdown = [
+    "# Dataset Forge Preview",
+    "",
+    `Dataset: ${datasetId}`,
+    `Examples: ${examples.length}`,
+    `Estimated tokens: ${estimatedTokens}`,
+    `Proof fresh: ${sourcesMatchProof ? "yes" : "no"}`,
+    "",
+    ...preview.flatMap((example) => [
+      `## ${example.id} - ${example.sourcePath}`,
+      "",
+      `Language: ${example.language}`,
+      `License: ${example.license}`,
+      `Hash: ${example.hashShort}`,
+      "",
+      example.instruction,
+      "",
+      "```text",
+      example.outputPreview,
+      "```",
+      ""
+    ])
+  ].join("\n");
+  const readme = [
+    "# ModelForge Dataset Pack",
+    "",
+    `Dataset: ${datasetId}`,
+    `Created: ${createdAt}`,
+    `Source root: ${sourceRoot}`,
+    `Examples: ${examples.length}`,
+    `Estimated tokens: ${estimatedTokens}`,
+    `License reviewed: ${licenseReviewedPercent}%`,
+    "",
+    "## Files",
+    "",
+    "- `dataset.jsonl` - chat/instruction examples with source provenance.",
+    "- `dataset-manifest.json` - counts, source boundary, proof freshness, and file paths.",
+    "- `dataset-preview.md` - small human-readable sample.",
+    "",
+    "## Guardrails",
+    "",
+    "- Rebuild after changing the source tree.",
+    "- Keep examples inside the recorded source boundary.",
+    "- Treat this as a local training/export pack, not a claim that a model has learned every file.",
+    ""
+  ].join("\n");
+
+  for (const dir of [latestDir, versionDir]) {
+    await mkdir(dir, { recursive: true });
+  }
+  await writeJson(manifest.files.manifest, manifest);
+  await writeFile(manifest.files.jsonl, jsonl, "utf-8");
+  await writeFile(manifest.files.readme, readme, "utf-8");
+  await writeFile(manifest.files.preview, previewMarkdown, "utf-8");
+  await writeJson(manifest.files.versionManifest, { ...manifest, files: { ...manifest.files, dir: versionDir } });
+  await writeFile(manifest.files.versionJsonl, jsonl, "utf-8");
+  await writeFile(manifest.files.versionReadme, readme, "utf-8");
+  await writeFile(manifest.files.versionPreview, previewMarkdown, "utf-8");
+  return manifest;
+}
+
+async function getLatestDatasetForge() {
+  return readJsonIfExists(join(dataRoot, "datasets", "latest", "dataset-manifest.json"));
 }
 
 function detectLanguage(filePath) {
@@ -1362,12 +1632,13 @@ async function buildForgeRecipe(body = {}) {
   const exportManifestPath = join(exportDir, "model-forge-package.json");
   const exportReadmePath = join(exportDir, "README.md");
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestProof, latestModelExport, latestEval, latestShare, ollama] = await Promise.all([
+  const [toolStatus, latestProof, latestModelExport, latestEval, latestShare, latestDataset, ollama] = await Promise.all([
     getToolStatus(),
     getLatestProofBundle(),
     getLatestModelExport(),
     getLatestEvalReport(),
     getLatestShareCard(),
+    getLatestDatasetForge(),
     getOllamaStatus()
   ]);
   let existingVersionCount = 0;
@@ -1382,6 +1653,7 @@ async function buildForgeRecipe(body = {}) {
   const proofPath = latestProof?.path || "";
   const evalPath = latestEval ? join(dataRoot, "evals", "latest", "eval-report.json") : "";
   const sharePath = latestShare?.files?.json || "";
+  const datasetPath = latestDataset?.files?.jsonl || "";
   const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
   const sourcesMatchProof = Boolean(
     latestProof &&
@@ -1406,9 +1678,9 @@ async function buildForgeRecipe(body = {}) {
     {
       id: "dataset-draft",
       label: "Dataset Draft",
-      status: sources.sampledFiles ? (sourcesMatchProof ? "ready" : "stale") : "blocked",
-      action: "Build rows from sampled files, deduplicate, and retain license/PII review flags.",
-      artifact: proofPath ? join(proofPath, "dataset-card.json") : ""
+      status: latestDataset ? (sourcesMatchProof ? "ready" : "stale") : sources.sampledFiles ? "pending" : "blocked",
+      action: "Build JSONL examples from sampled files, retaining hashes, license labels, and source-boundary provenance.",
+      artifact: datasetPath || (proofPath ? join(proofPath, "dataset-card.json") : "")
     },
     {
       id: "model-profile",
@@ -1451,10 +1723,10 @@ async function buildForgeRecipe(body = {}) {
     {
       id: "lora-qlora-plan",
       label: "LoRA/QLoRA plan",
-      status: sourcesMatchProof && latestEval ? "ready" : "pending",
-      output: "training/lora-plan.json",
+      status: latestDataset && sourcesMatchProof && latestEval ? "ready" : "pending",
+      output: "training/dataset.jsonl",
       command: "Use the reviewed dataset summary as the adapter recipe input.",
-      purpose: "Define adapter intent, source boundary, license posture, and eval gates before training."
+      purpose: "Export source-grounded JSONL examples plus adapter intent before training."
     },
     {
       id: "external-runner",
@@ -1475,7 +1747,10 @@ async function buildForgeRecipe(body = {}) {
       rowEstimate: dataset.rows,
       tokenEstimate: dataset.tokens,
       reviewedFiles: sources.reviewedFiles,
-      sampledFiles: sources.sampledFiles
+      sampledFiles: sources.sampledFiles,
+      forgedExamples: latestDataset?.summary?.totalExamples || 0,
+      forgedTokens: latestDataset?.summary?.estimatedTokens || 0,
+      forgedPath: datasetPath
     },
     runnerPlans,
     gates: latestEval?.gates?.map((gate) => ({ id: gate.id, status: gate.status, value: gate.value })) || []
@@ -1522,6 +1797,7 @@ async function buildForgeRecipe(body = {}) {
       proofPath,
       evalPath,
       sharePath,
+      datasetPath,
       modelProfilePath: latestModelExport?.profilePath || "",
       modelfilePath: latestModelExport?.modelfilePath || ""
     },
@@ -1562,6 +1838,8 @@ async function buildForgeRecipe(body = {}) {
     `- Sampled files: ${sources.sampledFiles}`,
     `- Estimated rows: ${dataset.rows}`,
     `- Estimated tokens: ${dataset.tokens}`,
+    `- Forged examples: ${latestDataset?.summary?.totalExamples || 0}`,
+    `- Forged JSONL: ${datasetPath || "not built"}`,
     `- Estimated size: ${dataset.estimatedSize}`,
     `- License reviewed: ${dataset.reviewedPercent}%`,
     `- Proof source files: ${proofSourceSummary?.totalFiles || 0}`,
@@ -1595,6 +1873,7 @@ async function buildForgeRecipe(body = {}) {
     "",
     `- Proof bundle: ${proofPath || "not built"}`,
     `- Eval report: ${evalPath || "not run"}`,
+    `- Dataset pack: ${datasetPath || "not built"}`,
     `- Eval/proof match: ${evalMatchesProof ? "yes" : "no"}`,
     `- Modelfile: ${latestModelExport?.modelfilePath || "not exported"}`,
     `- Share card: ${sharePath || "not built"}`,
@@ -1627,6 +1906,10 @@ async function buildForgeRecipe(body = {}) {
     [proofPath ? join(proofPath, "source-summary.md") : "", join(exportDir, "proof", "source-summary.md"), "proof/source-summary.md"],
     [evalPath, join(exportDir, "eval-report.json"), "eval-report.json"],
     [sharePath, join(exportDir, "share-card.json"), "share-card.json"],
+    [latestDataset?.files?.jsonl, join(exportDir, "training", "dataset.jsonl"), "training/dataset.jsonl"],
+    [latestDataset?.files?.manifest, join(exportDir, "training", "dataset-manifest.json"), "training/dataset-manifest.json"],
+    [latestDataset?.files?.readme, join(exportDir, "training", "dataset-readme.md"), "training/dataset-readme.md"],
+    [latestDataset?.files?.preview, join(exportDir, "training", "dataset-preview.md"), "training/dataset-preview.md"],
     ["", join(exportDir, "training", "lora-plan.json"), "training/lora-plan.json"],
     ["", join(exportDir, "runner", "adapter-contract.json"), "runner/adapter-contract.json"]
   ];
@@ -1640,7 +1923,7 @@ async function buildForgeRecipe(body = {}) {
         createdAt,
         recipeId,
         targetModel,
-        requiredInputs: ["forge-recipe.json", "training/lora-plan.json", "proof/evidence-manifest.json", "eval-report.json"],
+        requiredInputs: ["forge-recipe.json", "training/dataset.jsonl", "training/lora-plan.json", "proof/evidence-manifest.json", "eval-report.json"],
         evidenceBoundary: recipe.evidence,
         freshness: recipe.freshness,
         license: publicPositioning,
@@ -1669,6 +1952,15 @@ async function buildForgeRecipe(body = {}) {
     publicPositioning: "Source-available model forge with receipts.",
     copiedArtifacts,
     modelPlan: trainingPlan,
+    datasetForge: latestDataset
+      ? {
+          datasetId: latestDataset.datasetId,
+          examples: latestDataset.summary.totalExamples,
+          estimatedTokens: latestDataset.summary.estimatedTokens,
+          manifest: "training/dataset-manifest.json",
+          jsonl: "training/dataset.jsonl"
+        }
+      : null,
     runner: {
       kind: "ollama",
       createCommand: ["ollama", "create", targetModel, "-f", "ollama/Modelfile"],
@@ -1703,6 +1995,12 @@ async function buildForgeRecipe(body = {}) {
     ...runnerPlans.flatMap((plan) => [
       `- ${plan.label}: ${plan.status}; output ${plan.output}`
     ]),
+    "",
+    "## Dataset Forge",
+    "",
+    latestDataset
+      ? `- Examples: ${latestDataset.summary.totalExamples}\n- Estimated tokens: ${latestDataset.summary.estimatedTokens}\n- JSONL: training/dataset.jsonl`
+      : "- Dataset pack has not been built yet.",
     "",
     "## Evidence",
     "",
@@ -1939,12 +2237,13 @@ async function getOllamaStatus() {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory] = await Promise.all([
+  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
     getLatestEvalReport(),
     getLatestShareCard(),
+    getLatestDatasetForge(),
     getLatestForgeRecipe(),
     getLatestRecipeRun(),
     getRecipeRunHistory(),
@@ -1974,6 +2273,7 @@ async function getProjectPayload() {
     latestProof,
     latestEval,
     latestShare,
+    latestDataset,
     latestRecipe,
     latestRecipeRun,
     recipeRunHistory,
@@ -1991,11 +2291,11 @@ async function getProjectPayload() {
       {
         id: "dataset-draft",
         index: 2,
-        title: "Dataset Draft",
-        description: "Chunk, dedup, license scan, PII scan",
-        status: sources.totalFiles > 0 ? "complete" : "ready",
-        metric: `${dataset.rows.toLocaleString()} rows`,
-        detail: dataset.estimatedSize
+        title: "Dataset Forge",
+        description: "Build JSONL examples with source provenance",
+        status: latestDataset ? "complete" : sources.totalFiles > 0 ? "ready" : "ready",
+        metric: latestDataset ? `${latestDataset.summary.totalExamples.toLocaleString()} examples` : `${dataset.rows.toLocaleString()} est.`,
+        detail: latestDataset ? `${latestDataset.summary.estimatedTokens.toLocaleString()} tokens` : "Build JSONL"
       },
       {
         id: "ollama-profile",
@@ -2151,6 +2451,15 @@ function sendJsonDownload(response, filename, payload) {
   response.end(JSON.stringify(payload, null, 2));
 }
 
+function sendTextDownload(response, filename, text, contentType = "text/plain; charset=utf-8") {
+  response.writeHead(200, {
+    "content-type": contentType,
+    "content-disposition": `attachment; filename="${filename.replace(/[^a-z0-9._-]/gi, "-")}"`,
+    "cache-control": "no-store"
+  });
+  response.end(text);
+}
+
 function sendText(response, statusCode, text) {
   response.writeHead(statusCode, { "content-type": "text/plain; charset=utf-8" });
   response.end(text);
@@ -2231,6 +2540,28 @@ async function handleApi(request, response, url) {
 
     if (request.method === "GET" && url.pathname === "/api/project") {
       sendJson(response, 200, await getProjectPayload());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/dataset/latest") {
+      sendJson(response, 200, { ok: true, dataset: await getLatestDatasetForge() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/dataset/build") {
+      const body = await readJsonBody(request);
+      const dataset = await buildDatasetForge(body);
+      sendJson(response, 200, { ok: true, dataset, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/dataset/download") {
+      const dataset = await getLatestDatasetForge();
+      if (!dataset?.files?.jsonl || !existsSync(dataset.files.jsonl)) {
+        sendJson(response, 404, { ok: false, error: "Build a Dataset Forge pack before downloading JSONL." });
+        return;
+      }
+      sendTextDownload(response, `${dataset.datasetId}-dataset.jsonl`, await readFile(dataset.files.jsonl, "utf-8"), "application/x-ndjson; charset=utf-8");
       return;
     }
 

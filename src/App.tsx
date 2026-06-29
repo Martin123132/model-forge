@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bot, Database, HardDrive, LoaderCircle, RefreshCw } from "lucide-react";
 import {
+  buildDatasetForge,
   buildForgeRecipe,
   buildProofBundle,
   buildShareCard,
@@ -23,6 +24,7 @@ import {
 } from "./lib/api";
 import type {
   ChatMessage,
+  DatasetForge,
   EvalReport,
   ExportPackSummary,
   ForgeRecipe,
@@ -139,7 +141,7 @@ function StartupPanel({ error, refreshing, onRetry }: StartupPanelProps) {
   );
 }
 
-type GuidedActionKind = "run-pipeline" | "export-profile" | "run-eval" | "build-proof" | "open-setup" | "open-sources" | "open-model" | "open-release" | "view-proof";
+type GuidedActionKind = "run-pipeline" | "export-profile" | "build-dataset" | "run-eval" | "build-proof" | "open-setup" | "open-sources" | "open-model" | "open-release" | "view-proof";
 type GuidedAction = NextAction & {
   kind: GuidedActionKind;
 };
@@ -152,6 +154,7 @@ function App() {
   const [modelExport, setModelExport] = useState<ModelExport | null>(null);
   const [evalReport, setEvalReport] = useState<EvalReport | null>(null);
   const [shareCard, setShareCard] = useState<ShareCard | null>(null);
+  const [datasetForge, setDatasetForge] = useState<DatasetForge | null>(null);
   const [forgeRecipe, setForgeRecipe] = useState<ForgeRecipe | null>(null);
   const [exportPack, setExportPack] = useState<ExportPackSummary | null>(null);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
@@ -172,6 +175,7 @@ function App() {
   const [createBusy, setCreateBusy] = useState(false);
   const [evalBusy, setEvalBusy] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
+  const [datasetBusy, setDatasetBusy] = useState(false);
   const [recipeBusy, setRecipeBusy] = useState(false);
   const [setupSaving, setSetupSaving] = useState(false);
   const [setupRunning, setSetupRunning] = useState(false);
@@ -198,6 +202,7 @@ function App() {
       setProof(projectPayload.latestProof || null);
       setEvalReport(projectPayload.latestEval || null);
       setShareCard(projectPayload.latestShare || null);
+      setDatasetForge(projectPayload.latestDataset || null);
       setForgeRecipe(projectPayload.latestRecipe || null);
       setExportPack(exportPackPayload.pack || null);
       setRecipeRun(projectPayload.latestRecipeRun || null);
@@ -226,6 +231,7 @@ function App() {
       setProof(result.project.latestProof || null);
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
       setForgeRecipe(result.project.latestRecipe || null);
       setExportPack((await getLatestExportPack()).pack || null);
       setRecipeRun(result.project.latestRecipeRun || null);
@@ -252,6 +258,7 @@ function App() {
       setProof(result.project.latestProof || null);
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
       setForgeRecipe(result.project.latestRecipe || null);
       setExportPack(exportPackPayload.pack || null);
       setRecipeRun(result.project.latestRecipeRun || null);
@@ -278,6 +285,7 @@ function App() {
       setProof(result.results.proofBundle || result.project.latestProof || null);
       setEvalReport(result.results.evalReport || result.project.latestEval || null);
       setShareCard(result.results.shareCard || result.project.latestShare || null);
+      setDatasetForge(result.results.datasetForge || result.project.latestDataset || null);
       setForgeRecipe(result.results.recipe || result.project.latestRecipe || null);
       setExportPack(exportPackPayload.pack || null);
       setRecipeRun(result.project.latestRecipeRun || null);
@@ -331,6 +339,7 @@ function App() {
       setModelExport(result.modelExport);
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
       setForgeRecipe(result.project.latestRecipe || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
@@ -354,6 +363,7 @@ function App() {
       setSources(result.project.sources);
       setModelExport(result.project.latestModelExport || null);
       setProof(result.project.latestProof || null);
+      setDatasetForge(result.project.latestDataset || null);
       setForgeRecipe(result.project.latestRecipe || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
@@ -374,6 +384,7 @@ function App() {
       setShareCard(result.shareCard);
       setProject(result.project);
       setEvalReport(result.project.latestEval || null);
+      setDatasetForge(result.project.latestDataset || null);
       setForgeRecipe(result.project.latestRecipe || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
@@ -394,6 +405,30 @@ function App() {
     void buildShareForWorkspace("proof");
   }, [buildShareForWorkspace]);
 
+  const handleBuildDataset = useCallback(async () => {
+    setDatasetBusy(true);
+    setError("");
+    try {
+      const result = await buildDatasetForge();
+      setDatasetForge(result.dataset);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setModelExport(result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setActiveWorkspace("model");
+    } catch (datasetError) {
+      setError(datasetError instanceof Error ? datasetError.message : String(datasetError));
+    } finally {
+      setDatasetBusy(false);
+    }
+  }, []);
+
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
     setError("");
@@ -407,6 +442,7 @@ function App() {
       setProof(result.project.latestProof || null);
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
@@ -441,6 +477,7 @@ function App() {
       setProof(result.project.latestProof || null);
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
@@ -462,6 +499,7 @@ function App() {
     setProof(projectPayload.latestProof || null);
     setEvalReport(projectPayload.latestEval || null);
     setShareCard(projectPayload.latestShare || null);
+    setDatasetForge(projectPayload.latestDataset || null);
     setForgeRecipe(projectPayload.latestRecipe || null);
     setRecipeRun(projectPayload.latestRecipeRun || fallbackRun || null);
     setRecipeRunHistory(projectPayload.recipeRunHistory || []);
@@ -637,6 +675,18 @@ function App() {
       };
     }
 
+    if (!datasetForge) {
+      return {
+        kind: "build-dataset",
+        label: "Dataset Forge",
+        title: "Build the training JSONL pack",
+        detail: "Turn the source inventory into source-grounded examples before building the next export recipe.",
+        actionLabel: "Build dataset",
+        tone: "ready",
+        busy: datasetBusy
+      };
+    }
+
     if (!modelExport.created) {
       return {
         kind: "open-model",
@@ -728,7 +778,7 @@ function App() {
       meta: proof.size,
       tone: "success"
     };
-  }, [evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
+  }, [datasetBusy, datasetForge, evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
 
   const handleGuidedAction = useCallback(() => {
     if (guidedAction.kind === "run-pipeline") {
@@ -737,6 +787,10 @@ function App() {
     }
     if (guidedAction.kind === "export-profile") {
       void handleExportModel();
+      return;
+    }
+    if (guidedAction.kind === "build-dataset") {
+      void handleBuildDataset();
       return;
     }
     if (guidedAction.kind === "run-eval") {
@@ -764,7 +818,7 @@ function App() {
       return;
     }
     setActiveWorkspace("proof");
-  }, [guidedAction.kind, handleBuildProof, handleExportModel, handleRun, handleRunEval]);
+  }, [guidedAction.kind, handleBuildDataset, handleBuildProof, handleExportModel, handleRun, handleRunEval]);
 
   return (
     <div className="app-shell">
@@ -842,16 +896,19 @@ function App() {
                   <ModelLab
                     ollama={ollama}
                     modelExport={modelExport}
+                    datasetForge={datasetForge}
                     recipe={forgeRecipe}
                     recipeRun={recipeRun}
                     recipeRunHistory={recipeRunHistory}
                     recipeHistory={recipeHistory}
                     recipeBusy={recipeBusy}
+                    datasetBusy={datasetBusy}
                     selectRecipeBusy={selectRecipeBusy}
                     packRunBusy={packRunBusy || recipeRun?.status === "running"}
                     createBusy={createBusy}
                     chatBusy={chatBusy}
                     chatMessages={chatMessages}
+                    onBuildDataset={handleBuildDataset}
                     onBuildRecipe={handleBuildRecipe}
                     onSelectRecipe={handleSelectRecipe}
                     onRunPack={handleRunRecipePack}

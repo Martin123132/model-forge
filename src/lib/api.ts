@@ -1,6 +1,7 @@
 import type {
   ChatMessage,
   ChatResponse,
+  DatasetForge,
   EvalReport,
   ExportPackSummary,
   ForgeRecipe,
@@ -38,6 +39,19 @@ export function getSources() {
   return requestJson<SourceSummary>("/api/sources");
 }
 
+export function getLatestDatasetForge() {
+  return requestJson<{ ok: boolean; dataset: DatasetForge | null }>("/api/dataset/latest");
+}
+
+export function buildDatasetForge() {
+  return requestJson<{ ok: boolean; dataset: DatasetForge; project: ProjectPayload }>("/api/dataset/build", {
+    method: "POST",
+    body: JSON.stringify({ requestedBy: "ModelForge UI" })
+  });
+}
+
+export const datasetForgeDownloadUrl = "/api/dataset/download";
+
 export function getOllamaStatus() {
   return requestJson<OllamaStatus>("/api/ollama/status");
 }
@@ -67,6 +81,7 @@ export function runFirstSetup(config: SetupConfig, createModel: boolean) {
       proofBundle: ProofBundle;
       evalReport: EvalReport;
       shareCard: ShareCard;
+      datasetForge: DatasetForge;
       recipe: ForgeRecipe;
     };
   }>("/api/setup/run", {

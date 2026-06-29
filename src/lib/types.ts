@@ -223,6 +223,69 @@ export type ExportPackSummary = {
   };
 };
 
+export type DatasetForgePreview = {
+  id: string;
+  sourcePath: string;
+  language: string;
+  license: string;
+  hashShort: string;
+  instruction: string;
+  inputPreview: string;
+  outputPreview: string;
+};
+
+export type DatasetForge = {
+  schema: string;
+  datasetId: string;
+  status: "ready" | "empty" | string;
+  createdAt: string;
+  sourceRoot: string;
+  dataRoot: string;
+  requestedBy: string;
+  summary: {
+    totalExamples: number;
+    includedFiles: number;
+    skippedFiles: number;
+    totalInputBytes: number;
+    totalOutputBytes: number;
+    estimatedTokens: number;
+    estimatedSize: string;
+    licenseReviewedPercent: number;
+  };
+  filters: {
+    maxFiles: number;
+    maxBytesPerFile: number;
+    candidateLanguages: string[];
+  };
+  provenance: {
+    proofPath: string;
+    proofBuiltAt: string;
+    evalPath: string;
+    sourceFiles: number;
+    sampledFiles: number;
+    sourcesMatchProof: boolean;
+    evalMatchesProof: boolean;
+    licenseSignals?: LicenseSignals;
+  };
+  splits: {
+    train: number;
+    validation: number;
+  };
+  files: {
+    dir: string;
+    manifest: string;
+    jsonl: string;
+    readme: string;
+    preview: string;
+    versionDir?: string;
+    versionManifest?: string;
+    versionJsonl?: string;
+    versionReadme?: string;
+    versionPreview?: string;
+  };
+  examplesPreview: DatasetForgePreview[];
+};
+
 export type ForgeRecipeStage = {
   id: string;
   label: string;
@@ -251,6 +314,9 @@ export type ForgeRecipeModelPlan = {
     tokenEstimate: number;
     reviewedFiles: number;
     sampledFiles: number;
+    forgedExamples?: number;
+    forgedTokens?: number;
+    forgedPath?: string;
   };
   runnerPlans: ForgeRecipeRunnerPlan[];
   gates: Array<{
@@ -301,6 +367,7 @@ export type ForgeRecipe = {
     proofPath: string;
     evalPath: string;
     sharePath: string;
+    datasetPath?: string;
     modelProfilePath: string;
     modelfilePath: string;
   };
@@ -359,6 +426,7 @@ export type ProjectPayload = {
   latestProof?: ProofBundle | null;
   latestEval?: EvalReport | null;
   latestShare?: ShareCard | null;
+  latestDataset?: DatasetForge | null;
   latestRecipe?: ForgeRecipe | null;
   latestRecipeRun?: RecipePackRun | null;
   recipeRunHistory?: RecipePackRun[];

@@ -34,12 +34,17 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, ollama] = await Promise.all([
+  const [project, sources, ollama, exportPackResponse, datasetResponse] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
-    getJson("/api/ollama/status")
+    getJson("/api/ollama/status"),
+    getJson("/api/export/latest"),
+    getJson("/api/dataset/latest")
   ]);
   const evalReport = project.latestEval || null;
+  const dataset = project.latestDataset || datasetResponse.dataset || null;
+  const exportPack = exportPackResponse.pack || null;
+  const latestPackRun = project.latestRecipeRun || null;
   const gates = evalReport?.gates || [];
   const counts = gateCounts(gates);
   const tools = project.toolStatus || {};
@@ -71,6 +76,22 @@ async function main() {
     ),
     check("Eval report", gates.length > 0, evalReport?.summary || "no eval report"),
     check("Eval freshness", evalFresh, evalReport?.proofPath ? `eval proof path: ${evalReport.proofPath}` : "no eval proof path"),
+    check(
+      "Dataset Forge",
+      Boolean(dataset?.summary?.totalExamples),
+      dataset ? `${dataset.summary.totalExamples} examples, ${dataset.summary.estimatedTokens} tokens` : "no dataset pack"
+    ),
+    check(
+      "Export dataset artifacts",
+      Boolean(exportPack?.copiedArtifacts?.includes("training/dataset.jsonl") && exportPack?.copiedArtifacts?.includes("training/dataset-manifest.json")),
+      exportPack ? `${exportPack.artifactCount} artifacts in ${exportPack.recipeId}` : "no export pack"
+    ),
+    check(
+      "Export pack run receipt",
+      latestPackRun?.status === "pass" && latestPackRun?.recipeId === exportPack?.recipeId,
+      latestPackRun ? `${latestPackRun.status}: ${latestPackRun.summary}` : "pack has not been run yet",
+      "warn"
+    ),
     check("Release failures", counts.fail === 0, `${counts.fail} failing gates`),
     check(
       "License review",

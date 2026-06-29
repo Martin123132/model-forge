@@ -1,22 +1,26 @@
-import { Copy, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, Send, XCircle } from "lucide-react";
+import { Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, Send, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { datasetForgeDownloadUrl } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
-import type { ChatMessage, ForgeRecipe, ModelExport, OllamaStatus, RecipePackRun } from "../lib/types";
+import type { ChatMessage, DatasetForge, ForgeRecipe, ModelExport, OllamaStatus, RecipePackRun } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 
 type ModelLabProps = {
   ollama?: OllamaStatus | null;
   modelExport?: ModelExport | null;
+  datasetForge?: DatasetForge | null;
   recipe?: ForgeRecipe | null;
   recipeRun?: RecipePackRun | null;
   recipeRunHistory?: RecipePackRun[];
   recipeHistory?: ForgeRecipe[];
   recipeBusy: boolean;
+  datasetBusy: boolean;
   selectRecipeBusy: boolean;
   packRunBusy: boolean;
   createBusy: boolean;
   chatBusy: boolean;
   chatMessages: ChatMessage[];
+  onBuildDataset: () => void;
   onBuildRecipe: () => void;
   onSelectRecipe: (recipeId: string) => void;
   onRunPack: (recipeId: string, modelName?: string) => void;
@@ -95,19 +99,26 @@ function runStamp(run: RecipePackRun) {
   return stamp ? new Date(stamp).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "No timestamp";
 }
 
+function datasetStamp(dataset?: DatasetForge | null) {
+  return dataset?.createdAt ? new Date(dataset.createdAt).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "Not built";
+}
+
 export function ModelLab({
   ollama,
   modelExport,
+  datasetForge,
   recipe,
   recipeRun,
   recipeRunHistory = [],
   recipeHistory = [],
   recipeBusy,
+  datasetBusy,
   selectRecipeBusy,
   packRunBusy,
   createBusy,
   chatBusy,
   chatMessages,
+  onBuildDataset,
   onBuildRecipe,
   onSelectRecipe,
   onRunPack,
@@ -153,6 +164,11 @@ export function ModelLab({
   const runnerPlans = recipe?.modelPlan?.runnerPlans || [];
   const readyRunnerPlans = runnerPlans.filter((plan) => planTone(plan.status) === "pass").length;
   const modelPlanLabel = runnerPlans.length ? `${readyRunnerPlans}/${runnerPlans.length} ready` : "No plan";
+  const datasetReady = Boolean(datasetForge?.status === "ready" && datasetForge.summary.totalExamples > 0);
+  const datasetFresh = Boolean(datasetForge?.provenance.sourcesMatchProof && datasetForge?.provenance.evalMatchesProof);
+  const datasetStatus = datasetReady ? (datasetFresh ? "pass" : "warn") : "neutral";
+  const datasetStatusLabel = datasetReady ? (datasetFresh ? "Fresh" : "Review") : "Not built";
+  const datasetExampleLabel = datasetForge ? `${datasetForge.summary.totalExamples.toLocaleString()} examples` : "No dataset";
   const currentRecipeRun = recipeRun?.recipeId === recipe?.recipeId ? recipeRun : recipeRuns[0] || null;
   const currentRunStatus = packRunBusy ? "running" : currentRecipeRun?.status || "";
   const packRunState = currentRunStatus === "running" ? "running" : currentRunStatus === "pass" ? "pass" : currentRecipeRun ? "fail" : "";
@@ -194,6 +210,16 @@ export function ModelLab({
     }
   }
 
+  function downloadDataset() {
+    if (!datasetForge) return;
+    const anchor = document.createElement("a");
+    anchor.href = datasetForgeDownloadUrl;
+    anchor.download = `${datasetForge.datasetId}-dataset.jsonl`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
   return (
     <section className="workbench-panel model-lab" aria-labelledby="model-lab-title">
       <div className="panel-title-row">
@@ -218,6 +244,16 @@ export function ModelLab({
             <button className="plain-button small" type="button" onClick={onBuildRecipe} disabled={recipeBusy}>
               <FileText size={15} />
               <span>{recipeBusy ? "Building" : "Build"}</span>
+            </button>
+            <button
+              className="plain-button small"
+              type="button"
+              onClick={() => recipe?.recipeId && onRunPack(recipe.recipeId, recipe.targetModel)}
+              disabled={packRunDisabled}
+              title={allowCreate ? "Run this export pack with Ollama" : "Enable Allow Ollama create before running this pack"}
+            >
+              <Play size={15} />
+              <span>{packRunBusy ? "Running" : "Run Pack"}</span>
             </button>
           </div>
         </div>
@@ -280,6 +316,66 @@ export function ModelLab({
                 <span>Build recipe</span>
                 <strong>Runner plan pending</strong>
                 <p>Create a recipe to generate Ollama, adapter, and external-runner instructions.</p>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="dataset-forge-strip" aria-label="Dataset Forge">
+          <div className="dataset-forge-heading">
+            <div className="dataset-forge-title">
+              <Database size={16} />
+              <div>
+                <span>Dataset Forge</span>
+                <strong>{datasetExampleLabel}</strong>
+              </div>
+            </div>
+            <div className="dataset-forge-actions">
+              <StatusPill status={datasetStatus} label={datasetStatusLabel} />
+              <button className="plain-button small" type="button" onClick={onBuildDataset} disabled={datasetBusy}>
+                <Database size={14} />
+                <span>{datasetBusy ? "Building" : "Build JSONL"}</span>
+              </button>
+              <button className="plain-button small" type="button" onClick={downloadDataset} disabled={!datasetForge}>
+                <Download size={14} />
+                <span>Download</span>
+              </button>
+            </div>
+          </div>
+          <div className="dataset-forge-metrics">
+            <div>
+              <span>Tokens</span>
+              <strong>{datasetForge ? datasetForge.summary.estimatedTokens.toLocaleString() : "Waiting"}</strong>
+            </div>
+            <div>
+              <span>Size</span>
+              <strong>{datasetForge?.summary.estimatedSize || "Waiting"}</strong>
+            </div>
+            <div>
+              <span>License</span>
+              <strong>{datasetForge ? `${datasetForge.summary.licenseReviewedPercent}%` : "Waiting"}</strong>
+            </div>
+            <div>
+              <span>Built</span>
+              <strong>{datasetStamp(datasetForge)}</strong>
+            </div>
+          </div>
+          <div className="dataset-forge-path">
+            <span>JSONL</span>
+            <strong title={datasetForge?.files.jsonl}>{compactPath(datasetForge?.files.jsonl)}</strong>
+          </div>
+          <div className="dataset-preview-list">
+            {datasetForge?.examplesPreview.length ? (
+              datasetForge.examplesPreview.slice(0, 3).map((example) => (
+                <article key={example.id}>
+                  <span>{example.language}</span>
+                  <strong title={example.sourcePath}>{example.sourcePath}</strong>
+                  <p>{example.instruction}</p>
+                </article>
+              ))
+            ) : (
+              <div className="empty-row">
+                <Database size={16} />
+                <span>Build Dataset Forge to create source-grounded JSONL examples.</span>
               </div>
             )}
           </div>

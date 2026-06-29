@@ -5,8 +5,9 @@
 </p>
 
 <p align="center">
-  Turn a repo or folder into source inventories, dataset drafts, Ollama profiles,
-  eval gates, and proof bundles you can inspect before anyone asks you to trust it.
+  Turn a repo or folder into source inventories, Dataset Forge JSONL,
+  Ollama profiles, eval gates, export packs, and proof bundles you can inspect
+  before anyone asks you to trust it.
 </p>
 
 <p align="center">
@@ -37,7 +38,8 @@ ModelForge is a source-available, local-first cockpit for building model-ready
 artifacts from code and project folders.
 
 - Scans a local repo or folder into a source inventory with SHA-256 hashes.
-- Drafts dataset and source summaries from the reviewed project boundary.
+- Builds Dataset Forge JSONL examples with source paths, hashes, license labels,
+  and proof-bundle provenance.
 - Reuses local Ollama models and exports an Ollama `Modelfile`.
 - Runs release gates for source hashes, proof freshness, receipts, license
   review, PII filename sweeps, model profile creation, and tool availability.
@@ -45,22 +47,34 @@ artifacts from code and project folders.
   AgentLedger run records, and local evidence paths.
 - Exports model-building recipes for Ollama now, with LoRA/QLoRA and external
   runner adapter plans shaped for the next stage.
+- Runs exported Ollama packs back from the export folder and stores receipts so
+  the pack proves it can recreate the local target.
 
-This alpha is intentionally focused on the forge layer: source boundary, recipe,
-evidence, local model profile, and release gates. It is not a full foundation
-model trainer yet.
+This alpha is intentionally focused on the forge layer: source boundary,
+training-ready packs, recipes, evidence, local model profiles, and release
+gates. It is not a full foundation model trainer yet.
 
 ## Screenshots
 
 <table>
   <tr>
     <td width="50%">
+      <strong>Dataset Forge</strong><br />
+      <img src="docs/screenshots/model-forge-dataset-forge.png" alt="ModelForge Dataset Forge showing JSONL examples, token estimate, and export pack controls" />
+    </td>
+    <td width="50%">
       <strong>Model Lab</strong><br />
       <img src="docs/screenshots/model-forge-model-lab.png" alt="ModelForge Model Lab showing a fresh forge recipe and runner plan" />
     </td>
+  </tr>
+  <tr>
     <td width="50%">
       <strong>Source Browser</strong><br />
       <img src="docs/screenshots/model-forge-sources.png" alt="ModelForge source browser showing hashed local project files" />
+    </td>
+    <td width="50%">
+      <strong>Release Gates</strong><br />
+      <img src="docs/screenshots/model-forge-release.png" alt="ModelForge release dashboard showing passing proof and license gates" />
     </td>
   </tr>
 </table>
@@ -92,7 +106,17 @@ Web: http://127.0.0.1:5178
 
 Open the Setup workspace first. Confirm the source folder, data root, Ollama
 model path, Python command, base model, and target model, then run the first
-setup pass to build proof, gates, share card, and recipe artifacts.
+setup pass to build proof, gates, share card, Dataset Forge JSONL, and recipe
+artifacts.
+
+After setup:
+
+1. Open **Model Lab**.
+2. Use **Dataset Forge** to rebuild or download `dataset.jsonl`.
+3. Build a **Forge Recipe** to package the dataset, proof, eval report, Ollama
+   profile, LoRA/QLoRA plan, and runner contract.
+4. Enable **Allow Ollama create**, then run the export pack to produce a receipt
+   proving the exported folder can recreate the local model target.
 
 The dev script defaults the data root to `.modelforge-data` inside the repo and
 keeps npm/temp/browser caches beside the workspace instead of leaning on a small
@@ -127,6 +151,13 @@ The gates check:
 - The local Ollama create step completed.
 - Required local tools are available.
 
+Dataset and export checks also verify:
+
+- Dataset Forge has produced JSONL examples.
+- Export packs include `training/dataset.jsonl` and
+  `training/dataset-manifest.json`.
+- Pack runs write receipts in the export folder and in the local run history.
+
 Run the repeatable smoke check while `npm.cmd run dev` is active:
 
 ```powershell
@@ -137,6 +168,7 @@ npm.cmd run qa:smoke
 
 - `src/` - React cockpit UI
 - `server.mjs` - local API, source inventory, proof, eval, recipe, and export flow
+- `.modelforge-data/datasets/` - ignored local Dataset Forge JSONL packs
 - `scripts/dev.mjs` - D-drive-friendly local dev runner
 - `scripts/qa-smoke.mjs` - public alpha smoke gate
 - `docs/screenshots/` - README screenshots
@@ -145,8 +177,8 @@ npm.cmd run qa:smoke
 ## Roadmap
 
 - Better project onboarding for choosing any local source folder.
-- LoRA/QLoRA runner package generation from the existing recipe export.
-- Stronger dataset review queues and license explainability.
+- LoRA/QLoRA runner execution from the existing recipe export.
+- Stronger dataset review queues, chunk controls, and license explainability.
 - Shareable release pages backed by proof-bundle artifacts.
 - CI-friendly proof checks for public repository releases.
 
