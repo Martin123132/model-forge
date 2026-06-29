@@ -21,6 +21,7 @@ const apiOnly = process.argv.includes("--api-only");
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || process.env.MODEL_FORGE_PORT || (apiOnly ? 4188 : 4178));
 const recipeRunJobs = new Map();
+const builderRunJobs = new Map();
 
 const skippedDirs = new Set([
   ".git",
@@ -88,6 +89,7 @@ async function ensureDataRoot() {
   await mkdir(join(dataRoot, "chats"), { recursive: true });
   await mkdir(join(dataRoot, "builder"), { recursive: true });
   await mkdir(join(dataRoot, "builder", "history"), { recursive: true });
+  await mkdir(join(dataRoot, "builder", "runs"), { recursive: true });
 }
 
 function commandEnv(extra = {}) {
@@ -607,6 +609,66 @@ function hardwareTierFor({ totalMemoryBytes, totalVramMb, gpuDetected }) {
   };
 }
 
+function fitStatus(rank) {
+  if (rank >= 3) return "comfortable";
+  if (rank === 2) return "possible";
+  if (rank === 1) return "tight";
+  return "avoid";
+}
+
+function estimateModelFit(hardwareInput) {
+  const memoryGb = hardwareInput.totalMemoryBytes / 1024 / 1024 / 1024;
+  const vramGb = hardwareInput.totalVramMb / 1024;
+  const hasGpu = hardwareInput.gpuDetected;
+  const candidates = [
+    {
+      id: "small-instruct",
+      label: "1B-3B instruct",
+      localUse: fitStatus(memoryGb >= 12 ? 3 : memoryGb >= 8 ? 2 : 1),
+      buildUse: fitStatus(memoryGb >= 16 ? 3 : memoryGb >= 8 ? 2 : 1),
+      detail: "Best first target for laptops and proof-aware assistants."
+    },
+    {
+      id: "seven-b-quantized",
+      label: "7B/8B quantized",
+      localUse: fitStatus(vramGb >= 8 || memoryGb >= 24 ? 3 : vramGb >= 6 || memoryGb >= 16 ? 2 : 0),
+      buildUse: fitStatus(vramGb >= 12 ? 3 : vramGb >= 8 ? 2 : vramGb >= 6 ? 1 : 0),
+      detail: "Useful general local model class; GPU memory decides comfort."
+    },
+    {
+      id: "fourteen-b-quantized",
+      label: "13B/14B quantized",
+      localUse: fitStatus(vramGb >= 16 || memoryGb >= 48 ? 3 : vramGb >= 12 || memoryGb >= 32 ? 2 : 0),
+      buildUse: fitStatus(vramGb >= 20 ? 3 : vramGb >= 16 ? 2 : vramGb >= 12 ? 1 : 0),
+      detail: "Better reasoning, but expensive for mid-range machines."
+    },
+    {
+      id: "lora-adapter",
+      label: "LoRA adapter training",
+      localUse: fitStatus(vramGb >= 16 ? 3 : vramGb >= 8 ? 2 : vramGb >= 6 ? 1 : 0),
+      buildUse: fitStatus(vramGb >= 16 ? 3 : vramGb >= 8 ? 2 : vramGb >= 6 ? 1 : 0),
+      detail: "Real adapter training wants more VRAM than simple local inference."
+    },
+    {
+      id: "multimodal",
+      label: "Vision/audio models",
+      localUse: fitStatus(vramGb >= 16 ? 3 : vramGb >= 12 ? 2 : hasGpu ? 1 : 0),
+      buildUse: fitStatus(vramGb >= 24 ? 3 : vramGb >= 16 ? 2 : vramGb >= 12 ? 1 : 0),
+      detail: "Keep this as a later route unless the GPU has generous memory."
+    }
+  ];
+  const bestLocal = candidates.find((candidate) => candidate.localUse === "comfortable") || candidates.find((candidate) => candidate.localUse === "possible") || candidates[0];
+  const adapterCandidate = candidates.find((candidate) => candidate.id === "lora-adapter");
+  return {
+    schema: "modelforge.model_fit.v1",
+    createdAt: new Date().toISOString(),
+    summary: bestLocal
+      ? `Best local fit: ${bestLocal.label}. Adapter training: ${adapterCandidate?.buildUse || "avoid"}.`
+      : "No model fit estimate is available.",
+    candidates
+  };
+}
+
 async function getHardwareProfile() {
   const [nvidia, windowsControllers, disk, ollama] = await Promise.all([
     runCommand("nvidia-smi", ["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"], { timeout: 6000 }),
@@ -620,6 +682,11 @@ async function getHardwareProfile() {
   const totalVramMb = devices.reduce((total, device) => total + Math.max(0, Number(device.memoryMb || 0)), 0);
   const totalMemoryBytes = os.totalmem();
   const tier = hardwareTierFor({
+    totalMemoryBytes,
+    totalVramMb,
+    gpuDetected: devices.length > 0
+  });
+  const modelFit = estimateModelFit({
     totalMemoryBytes,
     totalVramMb,
     gpuDetected: devices.length > 0
@@ -659,7 +726,8 @@ async function getHardwareProfile() {
       modelCount: ollama.models.length,
       modelsRoot: ollama.modelsRoot
     },
-    tier
+    tier,
+    modelFit
   };
 }
 
@@ -754,6 +822,18 @@ function planStep(id, label, status, action, detail, workspace) {
 
 async function getLatestBuilderPlan() {
   return readJsonIfExists(join(dataRoot, "builder", "latest", "build-plan.json"));
+}
+
+async function getBuilderPlanById(planId = "") {
+  const safePlanId = String(planId || "").trim();
+  if (!safePlanId) return getLatestBuilderPlan();
+  if (!/^build-plan-\d{4}-\d{2}-\d{2}T/.test(safePlanId)) {
+    throw new Error("A valid builder plan id is required.");
+  }
+  const fromHistory = await readJsonIfExists(join(dataRoot, "builder", "history", safePlanId, "build-plan.json"));
+  if (fromHistory) return fromHistory;
+  const latest = await getLatestBuilderPlan();
+  return latest?.planId === safePlanId ? latest : null;
 }
 
 async function buildAiBuildPlan(body = {}) {
@@ -945,6 +1025,397 @@ async function buildAiBuildPlan(body = {}) {
   await writeJson(plan.files.versionJson, plan);
   await writeFile(plan.files.versionMarkdown, markdown, "utf-8");
   return plan;
+}
+
+function builderRunId() {
+  return `builder-run-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function builderRunTerminalStatus(status) {
+  return ["pass", "fail", "canceled"].includes(String(status || ""));
+}
+
+function builderStage(id, label, action) {
+  return {
+    id,
+    label,
+    action,
+    status: "ready",
+    summary: "Waiting",
+    artifact: "",
+    startedAt: "",
+    endedAt: "",
+    error: ""
+  };
+}
+
+function createBuilderRunStages(plan) {
+  const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(plan?.recommendedRoute);
+  return [
+    builderStage("preflight", "Preflight", "Confirm the saved setup, plan, and local build roots."),
+    builderStage("source-boundary", "Source Boundary", "Record the current source inventory for this build run."),
+    builderStage("model-profile", "Model Profile", "Export the local Ollama profile and system prompt."),
+    builderStage("proof-gates", "Proof And Gates", "Build proof, run eval gates, and prepare share evidence."),
+    builderStage("dataset-forge", "Dataset Forge", "Create source-grounded JSONL examples with provenance."),
+    builderStage("recipe", "Forge Recipe", "Package dataset, proof, eval, profile, and runner contracts."),
+    builderStage(routeNeedsAdapter ? "adapter-pack" : "export-pack", routeNeedsAdapter ? "Adapter Pack" : "Export Pack", routeNeedsAdapter ? "Export the adapter-ready package and runner contract." : "Run the exported Ollama pack and store the receipt."),
+    builderStage("finalize", "Ready Pack", "Refresh the build plan and write the final run receipt.")
+  ];
+}
+
+async function getLatestBuilderRun() {
+  return readJsonIfExists(join(dataRoot, "builder", "latest", "build-run.json"));
+}
+
+async function getBuilderRun(runId = "") {
+  const safeRunId = String(runId || "").trim();
+  if (safeRunId && builderRunJobs.has(safeRunId)) {
+    return builderRunJobs.get(safeRunId).run;
+  }
+  if (safeRunId) {
+    if (!/^builder-run-\d{4}-\d{2}-\d{2}T/.test(safeRunId)) {
+      throw new Error("A valid builder run id is required.");
+    }
+    const fromHistory = await readJsonIfExists(join(dataRoot, "builder", "runs", safeRunId, "build-run.json"));
+    if (fromHistory) return fromHistory;
+  }
+  return getLatestBuilderRun();
+}
+
+async function getBuilderRunHistory(limit = 8) {
+  const historyRoot = join(dataRoot, "builder", "runs");
+  let entries = [];
+  try {
+    entries = await readdir(historyRoot, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const runs = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && /^builder-run-\d{4}-\d{2}-\d{2}T/.test(entry.name))
+      .map((entry) => readJsonIfExists(join(historyRoot, entry.name, "build-run.json")))
+  );
+  return runs
+    .filter(Boolean)
+    .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+    .slice(0, limit);
+}
+
+async function persistBuilderRun(run) {
+  await writeJson(run.files.json, run);
+  await writeJson(join(dataRoot, "builder", "latest", "build-run.json"), run);
+}
+
+function getBuilderStage(run, stageId) {
+  return run.stages.find((stage) => stage.id === stageId);
+}
+
+async function updateBuilderStage(job, stageId, updates = {}) {
+  const stage = getBuilderStage(job.run, stageId);
+  if (!stage) return;
+  Object.assign(stage, updates);
+  job.run.updatedAt = new Date().toISOString();
+  await persistBuilderRun(job.run);
+}
+
+function ensureBuilderJobActive(job) {
+  if (job.cancelRequested) {
+    const error = new Error(`Canceled builder run ${job.run.runId}.`);
+    error.code = "BUILDER_RUN_CANCELED";
+    throw error;
+  }
+}
+
+async function runBuilderStage(job, stageId, work) {
+  ensureBuilderJobActive(job);
+  const startedAt = new Date().toISOString();
+  await updateBuilderStage(job, stageId, {
+    status: "running",
+    summary: "Running",
+    startedAt,
+    endedAt: "",
+    error: ""
+  });
+  try {
+    const result = await work();
+    ensureBuilderJobActive(job);
+    await updateBuilderStage(job, stageId, {
+      status: "pass",
+      summary: result?.summary || "Complete",
+      artifact: result?.artifact || "",
+      endedAt: new Date().toISOString()
+    });
+    return result?.value ?? result;
+  } catch (error) {
+    const canceled = error?.code === "BUILDER_RUN_CANCELED";
+    await updateBuilderStage(job, stageId, {
+      status: canceled ? "canceled" : "fail",
+      summary: canceled ? "Canceled" : "Failed",
+      error: String(error?.message || error),
+      endedAt: new Date().toISOString()
+    });
+    throw error;
+  }
+}
+
+async function writeBuilderRunReceipt(run) {
+  const lines = [
+    "# ModelForge Builder Run",
+    "",
+    `Run: ${run.runId}`,
+    `Plan: ${run.planId}`,
+    `Status: ${run.status}`,
+    `Started: ${run.startedAt}`,
+    `Ended: ${run.endedAt || ""}`,
+    "",
+    "## Summary",
+    "",
+    run.summary,
+    "",
+    "## Stages",
+    "",
+    ...run.stages.map((stage) => `- ${stage.label}: ${stage.status}. ${stage.summary}${stage.artifact ? ` Artifact: ${stage.artifact}` : ""}`),
+    "",
+    "## Outputs",
+    "",
+    `- Build plan: ${run.outputs.buildPlanPath || ""}`,
+    `- Source inventory: ${run.outputs.sourceInventoryPath || ""}`,
+    `- Model profile: ${run.outputs.modelProfilePath || ""}`,
+    `- Proof bundle: ${run.outputs.proofPath || ""}`,
+    `- Eval report: ${run.outputs.evalPath || ""}`,
+    `- Dataset: ${run.outputs.datasetPath || ""}`,
+    `- Recipe: ${run.outputs.recipePath || ""}`,
+    `- Export pack: ${run.outputs.exportDir || ""}`,
+    `- Pack receipt: ${run.outputs.packRunReceiptPath || ""}`,
+    ""
+  ];
+  await writeFile(run.files.receipt, lines.join("\n"), "utf-8");
+}
+
+async function finishBuilderRun(job, { ok, status, summary, error = "" }) {
+  if (builderRunTerminalStatus(job.run.status)) return job.run;
+  const endedAt = new Date().toISOString();
+  job.run.ok = ok;
+  job.run.status = status;
+  job.run.summary = summary;
+  job.run.error = error;
+  job.run.endedAt = endedAt;
+  job.run.updatedAt = endedAt;
+  await writeBuilderRunReceipt(job.run);
+  await persistBuilderRun(job.run);
+  builderRunJobs.delete(job.run.runId);
+  return job.run;
+}
+
+async function startBuilderRun(body = {}) {
+  await ensureDataRoot();
+  let plan = body.planId ? await getBuilderPlanById(body.planId) : await getLatestBuilderPlan();
+  if (!plan && body.request) {
+    plan = await buildAiBuildPlan(body.request);
+  }
+  if (!plan) {
+    throw new Error("Create a Builder plan before starting a build.");
+  }
+  const runId = builderRunId();
+  const runDir = join(dataRoot, "builder", "runs", runId);
+  const startedAt = new Date().toISOString();
+  const run = {
+    schema: "modelforge.builder_run.v1",
+    runId,
+    planId: plan.planId,
+    ok: false,
+    status: "running",
+    summary: `Starting build from plan ${plan.planId}.`,
+    error: "",
+    startedAt,
+    updatedAt: startedAt,
+    endedAt: "",
+    sourceRoot,
+    dataRoot,
+    plan,
+    stages: createBuilderRunStages(plan),
+    outputs: {
+      buildPlanPath: plan.files?.json || "",
+      sourceInventoryPath: "",
+      modelProfilePath: "",
+      proofPath: "",
+      evalPath: "",
+      sharePath: "",
+      datasetPath: "",
+      recipePath: "",
+      exportDir: "",
+      packRunId: "",
+      packRunReceiptPath: "",
+      finalPlanPath: ""
+    },
+    files: {
+      dir: runDir,
+      json: join(runDir, "build-run.json"),
+      receipt: join(runDir, "build-run-receipt.md")
+    }
+  };
+  await mkdir(runDir, { recursive: true });
+  await persistBuilderRun(run);
+  const job = {
+    run,
+    cancelRequested: false,
+    currentPackRunId: ""
+  };
+  builderRunJobs.set(runId, job);
+  void executeBuilderRun(runId);
+  return run;
+}
+
+async function waitForRecipePackRun(runId, job) {
+  for (let index = 0; index < 300; index += 1) {
+    ensureBuilderJobActive(job);
+    const run = await getRecipePackRun(runId);
+    if (!run || run.status !== "running") return run;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+  }
+  throw new Error("Timed out waiting for export pack run.");
+}
+
+async function executeBuilderRun(runId) {
+  const job = builderRunJobs.get(runId);
+  if (!job) return null;
+  try {
+    let activePlan = job.run.plan;
+    await runBuilderStage(job, "preflight", async () => {
+      const setup = await getSetupState();
+      if (!setup.configured) {
+        throw new Error("Setup must be saved before Build From Plan can run.");
+      }
+      return {
+        summary: `Setup saved. Data root: ${dataRoot}`,
+        artifact: setupConfigPath
+      };
+    });
+
+    const sources = await runBuilderStage(job, "source-boundary", async () => {
+      const nextSources = await walkSources(sourceRoot);
+      const inventory = await writeSourceInventory(job.run.files.dir, nextSources);
+      return {
+        summary: `Recorded ${nextSources.totalFiles.toLocaleString()} files and ${nextSources.sampledFiles.toLocaleString()} sampled rows.`,
+        artifact: inventory.inventoryPath,
+        value: nextSources
+      };
+    });
+    job.run.outputs.sourceInventoryPath = join(job.run.files.dir, "source-inventory.json");
+
+    const modelExport = await runBuilderStage(job, "model-profile", async () => {
+      const exported = await exportOllamaProfile(join(dataRoot, "models", "latest"), {
+        baseModel: activePlan.baseModelRecommendation?.model || setupConfig.baseModel,
+        modelName: defaultTargetModelName(),
+        create: false
+      });
+      return {
+        summary: exported.summary,
+        artifact: exported.profilePath,
+        value: exported
+      };
+    });
+    job.run.outputs.modelProfilePath = modelExport.profilePath;
+
+    const proofGateResult = await runBuilderStage(job, "proof-gates", async () => {
+      const proofBundle = await buildProofBundle({ requestedBy: `Builder run ${runId}` });
+      const evalReport = await runEvalGates();
+      const shareCard = await buildShareCard({ tone: "public" });
+      return {
+        summary: evalReport.summary,
+        artifact: proofBundle.path,
+        value: { proofBundle, evalReport, shareCard }
+      };
+    });
+    job.run.outputs.proofPath = proofGateResult.proofBundle.path;
+    job.run.outputs.evalPath = join(dataRoot, "evals", "latest", "eval-report.json");
+    job.run.outputs.sharePath = proofGateResult.shareCard.files?.json || "";
+
+    const dataset = await runBuilderStage(job, "dataset-forge", async () => {
+      const nextDataset = await buildDatasetForge({ requestedBy: `Builder run ${runId}` });
+      return {
+        summary: `${nextDataset.summary.totalExamples.toLocaleString()} examples, ${nextDataset.summary.estimatedTokens.toLocaleString()} estimated tokens.`,
+        artifact: nextDataset.files.jsonl,
+        value: nextDataset
+      };
+    });
+    job.run.outputs.datasetPath = dataset.files.jsonl;
+
+    const recipe = await runBuilderStage(job, "recipe", async () => {
+      const nextRecipe = await buildForgeRecipe({
+        modelName: modelExport.modelName,
+        baseModel: modelExport.baseModel
+      });
+      return {
+        summary: `${nextRecipe.recipeId} is ${nextRecipe.status}.`,
+        artifact: nextRecipe.files.json,
+        value: nextRecipe
+      };
+    });
+    job.run.outputs.recipePath = recipe.files.json;
+    job.run.outputs.exportDir = recipe.files.exportDir || "";
+
+    const exportStageId = ["adapter-lora", "dataset-then-adapter"].includes(activePlan.recommendedRoute) ? "adapter-pack" : "export-pack";
+    const packRun = await runBuilderStage(job, exportStageId, async () => {
+      const nextPackRun = await startRecipePackRun({ recipeId: recipe.recipeId, modelName: recipe.targetModel });
+      job.currentPackRunId = nextPackRun.runId || "";
+      const finished = await waitForRecipePackRun(job.currentPackRunId, job);
+      if (!finished || finished.status !== "pass") {
+        throw new Error(finished?.summary || "Export pack did not complete.");
+      }
+      return {
+        summary: finished.summary,
+        artifact: finished.receiptPath,
+        value: finished
+      };
+    });
+    job.run.outputs.packRunId = packRun.runId || "";
+    job.run.outputs.packRunReceiptPath = packRun.receiptPath || "";
+
+    activePlan = await runBuilderStage(job, "finalize", async () => {
+      const finalPlan = await buildAiBuildPlan(activePlan.request || {});
+      return {
+        summary: `${finalPlan.routeLabel}. ${sources.totalFiles.toLocaleString()} files, ${dataset.summary.totalExamples.toLocaleString()} examples, pack receipt ready.`,
+        artifact: finalPlan.files.json,
+        value: finalPlan
+      };
+    });
+    job.run.outputs.finalPlanPath = activePlan.files?.json || "";
+    job.run.plan = activePlan;
+    await finishBuilderRun(job, {
+      ok: true,
+      status: "pass",
+      summary: `Build complete: ${activePlan.routeLabel}. Export pack receipt is ready.`
+    });
+  } catch (error) {
+    const canceled = error?.code === "BUILDER_RUN_CANCELED" || job.cancelRequested;
+    await finishBuilderRun(job, {
+      ok: false,
+      status: canceled ? "canceled" : "fail",
+      summary: canceled ? `Canceled build from plan ${job.run.planId}.` : `Build from plan ${job.run.planId} failed.`,
+      error: String(error?.message || error)
+    });
+  }
+  return builderRunJobs.get(runId)?.run || getBuilderRun(runId);
+}
+
+async function cancelBuilderRun(runId = "") {
+  const safeRunId = String(runId || "").trim();
+  if (!safeRunId) {
+    throw new Error("A builder run id is required.");
+  }
+  const job = builderRunJobs.get(safeRunId);
+  if (!job) {
+    return getBuilderRun(safeRunId);
+  }
+  job.cancelRequested = true;
+  job.run.summary = `Cancel requested for builder run ${safeRunId}.`;
+  job.run.updatedAt = new Date().toISOString();
+  if (job.currentPackRunId) {
+    await cancelRecipePackRun(job.currentPackRunId);
+  }
+  await persistBuilderRun(job.run);
+  return job.run;
 }
 
 function datasetForgeId() {
@@ -2737,7 +3208,7 @@ async function getOllamaStatus() {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan] = await Promise.all([
+  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, builderRunHistory] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
@@ -2748,7 +3219,9 @@ async function getProjectPayload() {
     getLatestRecipeRun(),
     getRecipeRunHistory(),
     getForgeRecipeHistory(),
-    getLatestBuilderPlan()
+    getLatestBuilderPlan(),
+    getLatestBuilderRun(),
+    getBuilderRunHistory()
   ]);
   const dataset = estimateDatasetMetrics(sources);
   const modelMetric = latestModelExport ? "Exported" : toolStatus.ollama.ok ? "Profile ready" : "Ollama missing";
@@ -2780,6 +3253,8 @@ async function getProjectPayload() {
     recipeRunHistory,
     recipeHistory,
     latestBuildPlan,
+    latestBuilderRun,
+    builderRunHistory,
     pipeline: [
       {
         id: "source-pack",
@@ -3059,6 +3534,29 @@ async function handleApi(request, response, url) {
       const body = await readJsonBody(request);
       const plan = await buildAiBuildPlan(body);
       sendJson(response, 200, { ok: true, plan, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/run") {
+      sendJson(response, 200, { ok: true, run: await getBuilderRun(url.searchParams.get("runId") || "") });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/runs") {
+      sendJson(response, 200, { ok: true, runs: await getBuilderRunHistory() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/run") {
+      const body = await readJsonBody(request);
+      const run = await startBuilderRun(body);
+      sendJson(response, 202, { ok: true, run });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/run/cancel") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { ok: true, run: await cancelBuilderRun(body.runId) });
       return;
     }
 

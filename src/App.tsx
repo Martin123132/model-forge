@@ -6,9 +6,11 @@ import {
   buildForgeRecipe,
   buildProofBundle,
   buildShareCard,
+  cancelBuilderRun,
   cancelRecipePackRun,
   createOllamaModel,
   exportModelProfile,
+  getBuilderRun,
   getRecipePackRun,
   getLatestExportPack,
   getHardwareProfile,
@@ -22,11 +24,13 @@ import {
   runPipeline,
   saveSetupConfig,
   selectForgeRecipe,
-  sendChat
+  sendChat,
+  startBuilderRun
 } from "./lib/api";
 import type {
   BuilderPlan,
   BuilderPlanRequest,
+  BuilderRun,
   ChatMessage,
   DatasetForge,
   EvalReport,
@@ -165,11 +169,14 @@ function App() {
   const [exportPack, setExportPack] = useState<ExportPackSummary | null>(null);
   const [hardwareProfile, setHardwareProfile] = useState<HardwareProfile | null>(null);
   const [buildPlan, setBuildPlan] = useState<BuilderPlan | null>(null);
+  const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
+  const [builderRunHistory, setBuilderRunHistory] = useState<BuilderRun[]>([]);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
   const [recipeRunHistory, setRecipeRunHistory] = useState<RecipePackRun[]>([]);
   const [recipeHistory, setRecipeHistory] = useState<ForgeRecipe[]>([]);
   const packRunMonitorRef = useRef<Set<string>>(new Set());
+  const builderRunMonitorRef = useRef<Set<string>>(new Set());
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const previousWorkspaceRef = useRef<WorkspaceView | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -191,6 +198,7 @@ function App() {
   const [packRunBusy, setPackRunBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
   const [builderBusy, setBuilderBusy] = useState(false);
+  const [builderRunBusy, setBuilderRunBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -221,6 +229,8 @@ function App() {
       setRecipeRun(projectPayload.latestRecipeRun || null);
       setRecipeRunHistory(projectPayload.recipeRunHistory || []);
       setRecipeHistory(projectPayload.recipeHistory || []);
+      setBuilderRun(projectPayload.latestBuilderRun || null);
+      setBuilderRunHistory(projectPayload.builderRunHistory || []);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {
@@ -259,6 +269,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("builder");
     } catch (planError) {
       setError(planError instanceof Error ? planError.message : String(planError));
@@ -288,6 +300,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
     } finally {
@@ -315,6 +329,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : String(setupError));
     } finally {
@@ -342,6 +358,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("setup");
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : String(setupError));
@@ -395,6 +413,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setOllama(await getOllamaStatus());
       setActiveWorkspace("model");
     } catch (createError) {
@@ -419,6 +439,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("release");
     } catch (evalError) {
       setError(evalError instanceof Error ? evalError.message : String(evalError));
@@ -440,6 +462,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace(nextWorkspace);
     } catch (shareError) {
       setError(shareError instanceof Error ? shareError.message : String(shareError));
@@ -472,6 +496,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("model");
     } catch (datasetError) {
       setError(datasetError instanceof Error ? datasetError.message : String(datasetError));
@@ -497,6 +523,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace(nextWorkspace);
     } catch (recipeError) {
@@ -532,6 +560,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace("model");
     } catch (selectError) {
@@ -555,6 +585,8 @@ function App() {
     setRecipeRun(projectPayload.latestRecipeRun || fallbackRun || null);
     setRecipeRunHistory(projectPayload.recipeRunHistory || []);
     setRecipeHistory(projectPayload.recipeHistory || []);
+    setBuilderRun(projectPayload.latestBuilderRun || null);
+    setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
   }, []);
 
@@ -619,6 +651,96 @@ function App() {
       void monitorRecipePackRun(runId);
     }
   }, [monitorRecipePackRun, recipeRun?.runId, recipeRun?.status]);
+
+  const refreshAfterBuilderRun = useCallback(async (fallbackRun?: BuilderRun | null) => {
+    const [projectPayload, ollamaPayload, exportPackPayload, hardwarePayload] = await Promise.all([
+      getProject(),
+      getOllamaStatus(),
+      getLatestExportPack(),
+      getHardwareProfile()
+    ]);
+    setProject(projectPayload);
+    setSources(projectPayload.sources);
+    setOllama(ollamaPayload);
+    setHardwareProfile(hardwarePayload);
+    setBuildPlan(projectPayload.latestBuildPlan || null);
+    setModelExport(projectPayload.latestModelExport || null);
+    setProof(projectPayload.latestProof || null);
+    setEvalReport(projectPayload.latestEval || null);
+    setShareCard(projectPayload.latestShare || null);
+    setDatasetForge(projectPayload.latestDataset || null);
+    setForgeRecipe(projectPayload.latestRecipe || null);
+    setRecipeRun(projectPayload.latestRecipeRun || null);
+    setRecipeRunHistory(projectPayload.recipeRunHistory || []);
+    setRecipeHistory(projectPayload.recipeHistory || []);
+    setBuilderRun(projectPayload.latestBuilderRun || fallbackRun || null);
+    setBuilderRunHistory(projectPayload.builderRunHistory || []);
+    setExportPack(exportPackPayload.pack || null);
+  }, []);
+
+  const monitorBuilderRun = useCallback(async (runId: string) => {
+    if (!runId || builderRunMonitorRef.current.has(runId)) return;
+    builderRunMonitorRef.current.add(runId);
+    try {
+      for (let index = 0; index < 360; index += 1) {
+        const result = await getBuilderRun(runId);
+        if (!result.run) break;
+        const nextRun = result.run;
+        setBuilderRun(nextRun);
+        setBuilderRunHistory((history) => [nextRun, ...history.filter((run) => run.runId !== nextRun.runId)].slice(0, 8));
+        if (nextRun.status !== "running") {
+          setBuilderRunBusy(false);
+          await refreshAfterBuilderRun(nextRun);
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+    } catch (pollError) {
+      setError(pollError instanceof Error ? pollError.message : String(pollError));
+      setBuilderRunBusy(false);
+    } finally {
+      builderRunMonitorRef.current.delete(runId);
+    }
+  }, [refreshAfterBuilderRun]);
+
+  const handleStartBuilderRun = useCallback(async () => {
+    if (!buildPlan) return;
+    setBuilderRunBusy(true);
+    setError("");
+    try {
+      const result = await startBuilderRun(buildPlan.planId, buildPlan.request);
+      setBuilderRun(result.run);
+      setBuilderRunHistory((history) => [result.run, ...history.filter((run) => run.runId !== result.run.runId)].slice(0, 8));
+      setActiveWorkspace("builder");
+      if (result.run.runId) {
+        void monitorBuilderRun(result.run.runId);
+      }
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : String(runError));
+      setBuilderRunBusy(false);
+    }
+  }, [buildPlan, monitorBuilderRun]);
+
+  const handleCancelBuilderRun = useCallback(async (runId: string) => {
+    if (!runId) return;
+    try {
+      const result = await cancelBuilderRun(runId);
+      if (result.run) {
+        setBuilderRun(result.run);
+        setBuilderRunHistory((history) => [result.run as BuilderRun, ...history.filter((run) => run.runId !== result.run?.runId)].slice(0, 8));
+      }
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : String(cancelError));
+    }
+  }, []);
+
+  useEffect(() => {
+    const runId = builderRun?.runId;
+    if (runId && builderRun.status === "running") {
+      setBuilderRunBusy(true);
+      void monitorBuilderRun(runId);
+    }
+  }, [builderRun?.runId, builderRun?.status, monitorBuilderRun]);
 
   const handleSendChat = useCallback(async (prompt: string, modelName: string) => {
     const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", content: prompt, createdAt: new Date().toISOString() }];
@@ -700,6 +822,18 @@ function App() {
         actionLabel: "Running",
         tone: "running",
         busy: true
+      };
+    }
+
+    if (builderRun?.status === "running") {
+      return {
+        kind: "open-builder",
+        label: "Builder",
+        title: "Build From Plan is running",
+        detail: "Watch the source boundary, proof gates, dataset, recipe, and export stages from the Builder.",
+        actionLabel: "Open Builder",
+        meta: builderRun.plan?.routeLabel,
+        tone: "running"
       };
     }
 
@@ -841,7 +975,7 @@ function App() {
       meta: proof.size,
       tone: "success"
     };
-  }, [buildPlan, builderBusy, datasetBusy, datasetForge, evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
+  }, [buildPlan, builderBusy, builderRun, datasetBusy, datasetForge, evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
 
   const handleGuidedAction = useCallback(() => {
     if (guidedAction.kind === "run-pipeline") {
@@ -942,11 +1076,16 @@ function App() {
                     sources={sources || project?.sources}
                     datasetForge={datasetForge}
                     recipe={forgeRecipe}
+                    builderRun={builderRun}
+                    builderRunHistory={builderRunHistory}
                     busy={builderBusy}
+                    builderRunBusy={builderRunBusy || builderRun?.status === "running"}
                     hardwareBusy={hardwareBusy}
                     datasetBusy={datasetBusy}
                     recipeBusy={recipeBusy}
                     onBuildPlan={handleBuildPlan}
+                    onStartBuild={handleStartBuilderRun}
+                    onCancelBuild={handleCancelBuilderRun}
                     onRefreshHardware={handleRefreshHardware}
                     onNavigate={setActiveWorkspace}
                     onBuildDataset={handleBuildDataset}

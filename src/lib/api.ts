@@ -1,6 +1,7 @@
 import type {
   BuilderPlan,
   BuilderPlanRequest,
+  BuilderRun,
   ChatMessage,
   ChatResponse,
   DatasetForge,
@@ -72,6 +73,29 @@ export function buildAiBuildPlan(request: BuilderPlanRequest) {
     method: "POST",
     body: JSON.stringify(request)
   });
+}
+
+export function startBuilderRun(planId?: string, request?: BuilderPlanRequest) {
+  return requestJson<{ ok: boolean; run: BuilderRun }>("/api/builder/run", {
+    method: "POST",
+    body: JSON.stringify({ planId, request })
+  });
+}
+
+export function getBuilderRun(runId?: string) {
+  const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+  return requestJson<{ ok: boolean; run: BuilderRun | null }>(`/api/builder/run${query}`);
+}
+
+export function cancelBuilderRun(runId: string) {
+  return requestJson<{ ok: boolean; run: BuilderRun | null }>("/api/builder/run/cancel", {
+    method: "POST",
+    body: JSON.stringify({ runId })
+  });
+}
+
+export function getBuilderRunHistory() {
+  return requestJson<{ ok: boolean; runs: BuilderRun[] }>("/api/builder/runs");
 }
 
 export function getToolStatus() {

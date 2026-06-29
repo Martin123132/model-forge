@@ -43,6 +43,11 @@ artifacts from code and project folders.
 - Creates hardware-aware build plans from plain-English intent, including CPU,
   RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and next
   actions.
+- Estimates which model sizes are comfortable, possible, tight, or unrealistic
+  for the current machine before a user starts building.
+- Runs **Build From Plan** as one guided job: source boundary, Ollama profile,
+  proof gates, Dataset Forge, recipe, export pack, receipts, and a refreshed
+  plan at the end.
 - Builds Dataset Forge JSONL examples with source paths, hashes, license labels,
   and proof-bundle provenance.
 - Reuses local Ollama models and exports an Ollama `Modelfile`.
@@ -76,6 +81,11 @@ The plan records:
   Model Lab, export pack run, proof, and release gates.
 - Limitations, so the app stays honest about what is ready today and what needs
   a future trainer runner.
+
+Once a plan exists, **Start Build** runs the complete local forge route and shows
+each stage as it completes. The run writes a receipt under
+`.modelforge-data/builder/runs/`, so someone who is not a developer can still see
+what happened and where the artifacts landed.
 
 ## Screenshots
 
@@ -140,7 +150,7 @@ Then open Setup. Confirm the source folder, data root, Ollama model path,
 Python command, base model, and target model, then run the first setup pass to
 build proof, gates, share card, Dataset Forge JSONL, and recipe artifacts.
 
-After setup:
+After setup, or after a successful **Build From Plan** run:
 
 1. Open **Model Lab**.
 2. Use **Dataset Forge** to rebuild or download `dataset.jsonl`.
@@ -188,6 +198,7 @@ Dataset and export checks also verify:
 - Export packs include `training/dataset.jsonl` and
   `training/dataset-manifest.json`.
 - Pack runs write receipts in the export folder and in the local run history.
+- Build From Plan has completed every stage and written a builder receipt.
 
 Run the repeatable smoke check while `npm.cmd run dev` is active:
 
@@ -211,7 +222,8 @@ npm.cmd run qa:smoke
 
 - More guided Builder Wizard routes for non-developers choosing any local source
   folder.
-- LoRA/QLoRA runner execution from the existing recipe export.
+- LoRA/QLoRA runner execution from the existing recipe export and adapter-pack
+  route.
 - Stronger dataset review queues, chunk controls, and license explainability.
 - Shareable release pages backed by proof-bundle artifacts.
 - CI-friendly proof checks for public repository releases.

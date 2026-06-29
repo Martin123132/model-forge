@@ -2,21 +2,25 @@ import {
   Bot,
   BrainCircuit,
   CheckCircle2,
+  CircleStop,
+  Clock3,
   Cpu,
   Database,
   FileText,
   Gauge,
   HardDrive,
+  ListChecks,
   LoaderCircle,
   PackageCheck,
   Play,
   RefreshCw,
+  Rocket,
   ShieldCheck,
   Sparkles,
   Wand2
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { BuilderPlan, BuilderPlanRequest, DatasetForge, ForgeRecipe, HardwareProfile, SetupState, SourceSummary } from "../lib/types";
+import type { BuilderPlan, BuilderPlanRequest, BuilderRun, DatasetForge, ForgeRecipe, HardwareProfile, SetupState, SourceSummary } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 import type { WorkspaceView } from "./WorkspaceTabs";
 
@@ -27,11 +31,16 @@ type BuilderWizardProps = {
   sources?: SourceSummary | null;
   datasetForge?: DatasetForge | null;
   recipe?: ForgeRecipe | null;
+  builderRun?: BuilderRun | null;
+  builderRunHistory?: BuilderRun[];
   busy: boolean;
+  builderRunBusy: boolean;
   hardwareBusy: boolean;
   datasetBusy: boolean;
   recipeBusy: boolean;
   onBuildPlan: (request: BuilderPlanRequest) => void;
+  onStartBuild: () => void;
+  onCancelBuild: (runId: string) => void;
   onRefreshHardware: () => void;
   onNavigate: (view: WorkspaceView) => void;
   onBuildDataset: () => void;
@@ -79,6 +88,35 @@ function stepLabel(status: string) {
   return status || "Pending";
 }
 
+function runStatusTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "pass") return "pass";
+  if (status === "fail") return "fail";
+  if (status === "running") return "warn";
+  return "neutral";
+}
+
+function runStatusLabel(status?: string) {
+  if (status === "pass") return "Complete";
+  if (status === "fail") return "Failed";
+  if (status === "running") return "Running";
+  if (status === "canceled") return "Canceled";
+  return "Ready";
+}
+
+function buildRunProgress(run?: BuilderRun | null) {
+  const stages = run?.stages || [];
+  const total = stages.length;
+  const complete = stages.filter((stage) => ["pass", "fail", "canceled"].includes(stage.status)).length;
+  return { complete, total, percent: total ? Math.round((complete / total) * 100) : 0 };
+}
+
+function fitTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "comfortable") return "pass";
+  if (status === "possible" || status === "tight") return "warn";
+  if (status === "avoid") return "fail";
+  return "neutral";
+}
+
 function formatStamp(value?: string) {
   return value ? new Date(value).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "No plan yet";
 }
@@ -95,11 +133,16 @@ export function BuilderWizard({
   sources,
   datasetForge,
   recipe,
+  builderRun,
+  builderRunHistory = [],
   busy,
+  builderRunBusy,
   hardwareBusy,
   datasetBusy,
   recipeBusy,
   onBuildPlan,
+  onStartBuild,
+  onCancelBuild,
   onRefreshHardware,
   onNavigate,
   onBuildDataset,
@@ -146,6 +189,11 @@ export function BuilderWizard({
     ] as const;
   }, [datasetForge, recipe, setup?.configured, sources?.totalFiles]);
 
+  const activeRun = builderRun || builderRunHistory[0] || null;
+  const runProgress = buildRunProgress(activeRun);
+  const fitCandidates = hardware?.modelFit?.candidates || [];
+  const runIsActive = activeRun?.status === "running";
+
   function toggleDataType(id: string) {
     setDataTypes((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
@@ -185,6 +233,17 @@ export function BuilderWizard({
             {busy ? <LoaderCircle className="spin-icon" size={15} /> : <Wand2 size={15} />}
             <span>{busy ? "Creating" : "Create Build Plan"}</span>
           </button>
+          {runIsActive && activeRun ? (
+            <button className="danger-action compact" type="button" onClick={() => onCancelBuild(activeRun.runId)}>
+              <CircleStop size={15} />
+              <span>Cancel Build</span>
+            </button>
+          ) : (
+            <button className="primary-action compact" type="button" onClick={onStartBuild} disabled={!plan || builderRunBusy}>
+              {builderRunBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Rocket size={15} />}
+              <span>{builderRunBusy ? "Starting" : "Start Build"}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -308,6 +367,28 @@ export function BuilderWizard({
             </div>
           </div>
 
+          {fitCandidates.length ? (
+            <div className="builder-model-fit" aria-label="Model fit estimator">
+              <div className="builder-subheading">
+                <BrainCircuit size={16} />
+                <strong>Model fit</strong>
+              </div>
+              <p>{hardware?.modelFit?.summary}</p>
+              <div className="fit-card-grid">
+                {fitCandidates.map((candidate) => (
+                  <div className="fit-card" key={candidate.id}>
+                    <strong>{candidate.label}</strong>
+                    <span>{candidate.detail}</span>
+                    <div>
+                      <StatusPill status={fitTone(candidate.localUse)} label={`Local ${candidate.localUse}`} />
+                      <StatusPill status={fitTone(candidate.buildUse)} label={`Build ${candidate.buildUse}`} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="builder-route-card">
             <div className="builder-route-heading">
               <div>
@@ -335,6 +416,55 @@ export function BuilderWizard({
                 <dd>{plan?.estimates.disk || hardware?.disk.free || "Checking"}</dd>
               </div>
             </dl>
+          </div>
+
+          <div className={`builder-run-card ${activeRun?.status || "ready"}`} aria-live="polite">
+            <div className="builder-run-heading">
+              <div>
+                <span>Build From Plan</span>
+                <h2>{activeRun ? activeRun.plan?.routeLabel || activeRun.runId : "One-click local forge"}</h2>
+              </div>
+              <StatusPill status={runStatusTone(activeRun?.status)} label={runStatusLabel(activeRun?.status)} />
+            </div>
+            <p>
+              {activeRun?.summary ||
+                (plan
+                  ? "Run the full chain: setup checks, source boundary, model profile, proof gates, dataset, recipe, and export pack."
+                  : "Create a build plan first, then ModelForge can run the complete local chain for you.")}
+            </p>
+            {activeRun ? (
+              <>
+                <div className="builder-run-progress" aria-label={`${runProgress.complete} of ${runProgress.total} stages complete`}>
+                  <span style={{ width: `${runProgress.percent}%` }} />
+                </div>
+                <div className="builder-run-meta">
+                  <span>
+                    <ListChecks size={14} />
+                    {runProgress.complete}/{runProgress.total} stages
+                  </span>
+                  <span>
+                    <Clock3 size={14} />
+                    {formatStamp(activeRun.updatedAt || activeRun.startedAt)}
+                  </span>
+                </div>
+                <div className="builder-run-stages">
+                  {activeRun.stages.map((stage) => (
+                    <div className="builder-run-stage" key={stage.id}>
+                      <StatusPill status={runStatusTone(stage.status)} label={runStatusLabel(stage.status)} />
+                      <span>
+                        <strong>{stage.label}</strong>
+                        <em>{stage.summary || stage.action}</em>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {activeRun.files?.receipt ? (
+                  <div className="builder-path-note" title={activeRun.files.receipt}>
+                    {compactPath(activeRun.files.receipt)}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
           </div>
 
           <div className="builder-readiness">

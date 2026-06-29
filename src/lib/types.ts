@@ -145,6 +145,18 @@ export type HardwareProfile = {
     canTrainAdapter: boolean;
     canRunQuantized: boolean;
   };
+  modelFit?: {
+    schema: string;
+    createdAt: string;
+    summary: string;
+    candidates: Array<{
+      id: string;
+      label: string;
+      localUse: "comfortable" | "possible" | "tight" | "avoid" | string;
+      buildUse: "comfortable" | "possible" | "tight" | "avoid" | string;
+      detail: string;
+    }>;
+  };
 };
 
 export type BuilderPlanRequest = {
@@ -212,6 +224,54 @@ export type BuilderPlan = {
     versionDir: string;
     versionJson: string;
     versionMarkdown: string;
+  };
+};
+
+export type BuilderRunStage = {
+  id: string;
+  label: string;
+  action: string;
+  status: "ready" | "running" | "pass" | "fail" | "canceled" | string;
+  summary: string;
+  artifact: string;
+  startedAt: string;
+  endedAt: string;
+  error: string;
+};
+
+export type BuilderRun = {
+  schema: string;
+  runId: string;
+  planId: string;
+  ok: boolean;
+  status: "running" | "pass" | "fail" | "canceled" | string;
+  summary: string;
+  error: string;
+  startedAt: string;
+  updatedAt: string;
+  endedAt: string;
+  sourceRoot: string;
+  dataRoot: string;
+  plan: BuilderPlan;
+  stages: BuilderRunStage[];
+  outputs: {
+    buildPlanPath: string;
+    sourceInventoryPath: string;
+    modelProfilePath: string;
+    proofPath: string;
+    evalPath: string;
+    sharePath: string;
+    datasetPath: string;
+    recipePath: string;
+    exportDir: string;
+    packRunId: string;
+    packRunReceiptPath: string;
+    finalPlanPath: string;
+  };
+  files: {
+    dir: string;
+    json: string;
+    receipt: string;
   };
 };
 
@@ -557,6 +617,8 @@ export type ProjectPayload = {
   recipeRunHistory?: RecipePackRun[];
   recipeHistory?: ForgeRecipe[];
   latestBuildPlan?: BuilderPlan | null;
+  latestBuilderRun?: BuilderRun | null;
+  builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];
   sources: SourceSummary;
 };

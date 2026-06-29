@@ -45,6 +45,8 @@ async function main() {
   const dataset = project.latestDataset || datasetResponse.dataset || null;
   const exportPack = exportPackResponse.pack || null;
   const latestPackRun = project.latestRecipeRun || null;
+  const latestBuilderRun = project.latestBuilderRun || null;
+  const builderStages = latestBuilderRun?.stages || [];
   const gates = evalReport?.gates || [];
   const counts = gateCounts(gates);
   const tools = project.toolStatus || {};
@@ -66,6 +68,16 @@ async function main() {
     check("Source inventory", sources.totalFiles > 0 && sources.rows?.length > 0, `${sources.totalFiles || 0} files, ${sources.rows?.length || 0} rows`),
     check("Tool availability", allToolsAvailable, Object.entries(tools).map(([key, value]) => `${key}=${value.label}`).join(", ")),
     check("Ollama status", ollama.ok, ollama.ok ? `${ollama.selectedModel} running` : ollama.error || "not available", "warn"),
+    check(
+      "Builder plan",
+      Boolean(project.latestBuildPlan?.planId),
+      project.latestBuildPlan ? `${project.latestBuildPlan.routeLabel} / ${project.latestBuildPlan.planId}` : "no builder plan"
+    ),
+    check(
+      "Model fit estimator",
+      Boolean(project.latestBuildPlan?.hardware?.modelFit?.candidates?.length),
+      project.latestBuildPlan?.hardware?.modelFit?.summary || "no hardware fit estimate"
+    ),
     check("Proof bundle", Boolean(project.latestProof?.path), project.latestProof?.path || "no proof bundle"),
     check(
       "Proof freshness",
@@ -91,6 +103,11 @@ async function main() {
       latestPackRun?.status === "pass" && latestPackRun?.recipeId === exportPack?.recipeId,
       latestPackRun ? `${latestPackRun.status}: ${latestPackRun.summary}` : "pack has not been run yet",
       "warn"
+    ),
+    check(
+      "Build From Plan receipt",
+      latestBuilderRun?.status === "pass" && builderStages.length > 0 && builderStages.every((stage) => stage.status === "pass"),
+      latestBuilderRun ? `${latestBuilderRun.status}: ${latestBuilderRun.summary}` : "builder run has not been run yet"
     ),
     check("Release failures", counts.fail === 0, `${counts.fail} failing gates`),
     check(
