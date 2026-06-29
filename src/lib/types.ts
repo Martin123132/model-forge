@@ -397,13 +397,35 @@ export type ProjectRegistryEntry = {
   createdAt: string;
   updatedAt: string;
   lastOpenedAt: string;
+  lastDataResetAt?: string;
   dataOnPreferredDrive: boolean;
+  dataResetReady?: boolean;
+  dataResetReason?: string;
   sourceRules: {
     includePatterns: string[];
     excludePatterns: string[];
     includeCount: number;
     excludeCount: number;
   };
+};
+
+export type ProjectDataReset = {
+  schema: string;
+  createdAt: string;
+  projectId: string;
+  projectName: string;
+  dataRoot: string;
+  summary: string;
+  kept: string[];
+  removed: Array<{
+    name: string;
+    type: string;
+  }>;
+  skipped: Array<{
+    name: string;
+    reason: string;
+  }>;
+  receiptPath: string;
 };
 
 export type ProjectRegistry = {

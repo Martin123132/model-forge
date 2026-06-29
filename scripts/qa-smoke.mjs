@@ -50,6 +50,7 @@ async function main() {
   const exportPack = exportPackResponse.pack || null;
   const modelLibrary = modelLibraryResponse.library || null;
   const projectRegistry = projectRegistryResponse.registry || null;
+  const activeRegistryProject = projectRegistry?.projects?.find((item) => item.id === projectRegistry.activeProjectId) || null;
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
   const builderStages = latestBuilderRun?.stages || [];
@@ -98,6 +99,11 @@ async function main() {
           projectRegistry.projects.some((item) => item.id === projectRegistry.activeProjectId)
       ),
       projectRegistry ? `${projectRegistry.summary.active} active, ${projectRegistry.summary.archived} archived, preferred=${projectRegistry.recommended.preferredDrive}` : "no project registry"
+    ),
+    check(
+      "Project data reset",
+      Boolean(activeRegistryProject?.dataResetReady && String(activeRegistryProject.dataRoot || "").toLowerCase().endsWith(".modelforge-data")),
+      activeRegistryProject ? `${activeRegistryProject.name}: ${activeRegistryProject.dataResetReason || "reset contract ready"}` : "no active project"
     ),
     check(
       "Source rules",

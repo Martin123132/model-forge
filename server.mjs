@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -72,25 +72,30 @@ const mimeTypes = new Map([
   [".json", "application/json; charset=utf-8"]
 ]);
 
+async function ensureDataRootAt(root = dataRoot) {
+  await mkdir(join(root, "runs"), { recursive: true });
+  await mkdir(join(root, "proofs"), { recursive: true });
+  await mkdir(join(root, "sources"), { recursive: true });
+  await mkdir(join(root, "repomori"), { recursive: true });
+  await mkdir(join(root, "agentledger"), { recursive: true });
+  await mkdir(join(root, "models"), { recursive: true });
+  await mkdir(join(root, "evals"), { recursive: true });
+  await mkdir(join(root, "share"), { recursive: true });
+  await mkdir(join(root, "datasets"), { recursive: true });
+  await mkdir(join(root, "datasets", "history"), { recursive: true });
+  await mkdir(join(root, "recipes"), { recursive: true });
+  await mkdir(join(root, "recipes", "history"), { recursive: true });
+  await mkdir(join(root, "exports"), { recursive: true });
+  await mkdir(join(root, "exports", "runs"), { recursive: true });
+  await mkdir(join(root, "chats"), { recursive: true });
+  await mkdir(join(root, "builder"), { recursive: true });
+  await mkdir(join(root, "builder", "history"), { recursive: true });
+  await mkdir(join(root, "builder", "runs"), { recursive: true });
+  await mkdir(join(root, "logs"), { recursive: true });
+}
+
 async function ensureDataRoot() {
-  await mkdir(join(dataRoot, "runs"), { recursive: true });
-  await mkdir(join(dataRoot, "proofs"), { recursive: true });
-  await mkdir(join(dataRoot, "sources"), { recursive: true });
-  await mkdir(join(dataRoot, "repomori"), { recursive: true });
-  await mkdir(join(dataRoot, "agentledger"), { recursive: true });
-  await mkdir(join(dataRoot, "models"), { recursive: true });
-  await mkdir(join(dataRoot, "evals"), { recursive: true });
-  await mkdir(join(dataRoot, "share"), { recursive: true });
-  await mkdir(join(dataRoot, "datasets"), { recursive: true });
-  await mkdir(join(dataRoot, "datasets", "history"), { recursive: true });
-  await mkdir(join(dataRoot, "recipes"), { recursive: true });
-  await mkdir(join(dataRoot, "recipes", "history"), { recursive: true });
-  await mkdir(join(dataRoot, "exports"), { recursive: true });
-  await mkdir(join(dataRoot, "exports", "runs"), { recursive: true });
-  await mkdir(join(dataRoot, "chats"), { recursive: true });
-  await mkdir(join(dataRoot, "builder"), { recursive: true });
-  await mkdir(join(dataRoot, "builder", "history"), { recursive: true });
-  await mkdir(join(dataRoot, "builder", "runs"), { recursive: true });
+  await ensureDataRootAt(dataRoot);
 }
 
 function commandEnv(extra = {}) {
@@ -269,6 +274,7 @@ function projectEntryFromConfig(config = {}, overrides = {}) {
     createdAt: config.createdAt || now,
     updatedAt: config.updatedAt || now,
     lastOpenedAt: config.lastOpenedAt || "",
+    lastDataResetAt: config.lastDataResetAt || "",
     ...overrides
   };
 }
@@ -288,6 +294,8 @@ function summarizeProjectEntry(project, preferredStorage) {
     ...project,
     active: project.id === setupConfig.projectId || (!setupConfig.projectId && project.sourceRoot === sourceRoot && project.dataRoot === dataRoot),
     dataOnPreferredDrive: !preferredStorage?.canUsePreferred || isWindowsPathOnDrive(project.dataRoot, "D"),
+    dataResetReady: projectDataRootSafety(project).ok,
+    dataResetReason: projectDataRootSafety(project).reason,
     sourceRules: {
       includePatterns,
       excludePatterns,
@@ -490,6 +498,148 @@ async function deleteProject(projectId = "") {
   await writeProjectRegistry({ ...registry, activeProjectId, projects });
   return {
     ok: true,
+    project: await getProjectPayload(),
+    setup: await getSetupState(),
+    registry: await getProjectRegistry()
+  };
+}
+
+function normalizedLocalPath(pathValue = "") {
+  return resolve(pathValue).replace(/[\\/]+$/g, "").replaceAll("/", "\\").toLowerCase();
+}
+
+function projectDataRootSafety(project = {}) {
+  const rawDataRoot = cleanSetting(project.dataRoot);
+  if (!rawDataRoot) {
+    return { ok: false, path: "", reason: "No data root is configured." };
+  }
+
+  const resolvedDataRoot = resolve(rawDataRoot);
+  const dataPath = normalizedLocalPath(resolvedDataRoot);
+  const sourcePath = project.sourceRoot ? normalizedLocalPath(project.sourceRoot) : "";
+  const rootPath = normalizedLocalPath(projectRoot);
+  const homePath = os.homedir() ? normalizedLocalPath(os.homedir()) : "";
+
+  if (!dataPath.endsWith("\\.modelforge-data")) {
+    return {
+      ok: false,
+      path: resolvedDataRoot,
+      reason: "Data reset only runs inside a folder named .modelforge-data."
+    };
+  }
+  if (sourcePath && dataPath === sourcePath) {
+    return {
+      ok: false,
+      path: resolvedDataRoot,
+      reason: "The data root matches the source folder, so ModelForge will not reset it."
+    };
+  }
+  if (dataPath === rootPath) {
+    return {
+      ok: false,
+      path: resolvedDataRoot,
+      reason: "The data root matches the app folder, so ModelForge will not reset it."
+    };
+  }
+  if (homePath && dataPath === homePath) {
+    return {
+      ok: false,
+      path: resolvedDataRoot,
+      reason: "The data root matches the user home folder, so ModelForge will not reset it."
+    };
+  }
+  if (/^[a-z]:$/i.test(dataPath) || /^[a-z]:\\$/i.test(dataPath)) {
+    return {
+      ok: false,
+      path: resolvedDataRoot,
+      reason: "The data root is a drive root, so ModelForge will not reset it."
+    };
+  }
+
+  return {
+    ok: true,
+    path: resolvedDataRoot,
+    reason: "Only generated ModelForge data inside this .modelforge-data folder will be reset."
+  };
+}
+
+function hasRunningProjectJobs() {
+  const recipeRunning = [...recipeRunJobs.values()].some((job) => job?.run?.status === "running");
+  const builderRunning = [...builderRunJobs.values()].some((job) => job?.run?.status === "running");
+  return recipeRunning || builderRunning;
+}
+
+async function resetProjectData(body = {}) {
+  if (body.confirmed !== true) {
+    throw new Error("Confirm the generated-data reset before running it.");
+  }
+
+  const registry = await readProjectRegistry();
+  const projectId = cleanSetting(body.projectId || registry.activeProjectId || setupConfig.projectId);
+  const target = registry.projects.find((project) => project.id === projectId);
+  if (!target) {
+    throw new Error("Project was not found.");
+  }
+
+  const safety = projectDataRootSafety(target);
+  if (!safety.ok) {
+    throw new Error(safety.reason);
+  }
+
+  const resetActiveProject = projectId === registry.activeProjectId || projectId === setupConfig.projectId;
+  if (resetActiveProject && hasRunningProjectJobs()) {
+    throw new Error("Wait for the active build or export job to finish before resetting project data.");
+  }
+
+  await mkdir(safety.path, { recursive: true });
+  const entries = await readdir(safety.path, { withFileTypes: true }).catch(() => []);
+  const removed = [];
+  const skipped = [];
+
+  for (const entry of entries) {
+    const entryPath = resolve(safety.path, entry.name);
+    if (!isInsidePath(safety.path, entryPath)) {
+      skipped.push({ name: entry.name, reason: "Outside data root" });
+      continue;
+    }
+    await rm(entryPath, { recursive: true, force: true });
+    removed.push({
+      name: entry.name,
+      type: entry.isDirectory() ? "folder" : "file"
+    });
+  }
+
+  await ensureDataRootAt(safety.path);
+  const resetAt = new Date().toISOString();
+  const resetReceipt = {
+    schema: "modelforge.project_data_reset.v1",
+    createdAt: resetAt,
+    projectId: target.id,
+    projectName: target.name,
+    dataRoot: safety.path,
+    summary: removed.length
+      ? `Reset generated data for ${target.name}: ${removed.length} item${removed.length === 1 ? "" : "s"} cleared.`
+      : `Reset generated data for ${target.name}: data root was already clean.`,
+    kept: ["source folder", "project registry", "setup config"],
+    removed,
+    skipped,
+    receiptPath: join(safety.path, "logs", "latest-data-reset.json")
+  };
+  await writeJson(resetReceipt.receiptPath, resetReceipt);
+
+  const updatedProjects = registry.projects.map((project) =>
+    project.id === target.id
+      ? projectEntryFromConfig(project, {
+          lastDataResetAt: resetAt,
+          updatedAt: resetAt
+        })
+      : project
+  );
+  await writeProjectRegistry({ ...registry, projects: updatedProjects });
+
+  return {
+    ok: true,
+    reset: resetReceipt,
     project: await getProjectPayload(),
     setup: await getSetupState(),
     registry: await getProjectRegistry()
@@ -5030,6 +5180,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/projects/delete") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await deleteProject(body.projectId));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/projects/reset-data") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await resetProjectData(body));
       return;
     }
 

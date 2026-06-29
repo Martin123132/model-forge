@@ -13,6 +13,7 @@ import type {
   ModelExport,
   ModelLibrary,
   OllamaStatus,
+  ProjectDataReset,
   ProjectRegistry,
   ProjectPayload,
   ProofBundle,
@@ -148,6 +149,13 @@ export function deleteProject(projectId: string) {
   return requestJson<{ ok: boolean; registry: ProjectRegistry; setup: SetupState; project: ProjectPayload }>("/api/projects/delete", {
     method: "POST",
     body: JSON.stringify({ projectId })
+  });
+}
+
+export function resetProjectData(projectId: string) {
+  return requestJson<{ ok: boolean; reset: ProjectDataReset; registry: ProjectRegistry; setup: SetupState; project: ProjectPayload }>("/api/projects/reset-data", {
+    method: "POST",
+    body: JSON.stringify({ projectId, confirmed: true })
   });
 }
 

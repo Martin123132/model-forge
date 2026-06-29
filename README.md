@@ -174,8 +174,11 @@ roots, so proof bundles, datasets, recipes, chat transcripts, and export packs
 stay tied to the selected local project.
 
 The registry lives under `.modelforge-local/projects.json` and stays out of git.
-Archive and remove actions only update the registry in this alpha; they do not
-delete project folders from disk.
+Archive and remove actions only update the registry in this alpha. The active
+project also has **Reset generated data**, which clears ModelForge outputs such
+as proofs, datasets, recipes, exports, chats, and build receipts inside the
+project's `.modelforge-data` folder while keeping source files, setup config,
+and the registry.
 
 The Sources workspace also has a **Source boundary** editor:
 

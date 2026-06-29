@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Archive, CheckCircle2, Database, FolderCog, FolderPlus, HardDrive, LoaderCircle, Play, RefreshCw, Save, TerminalSquare, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Database, FolderCog, FolderPlus, HardDrive, LoaderCircle, Play, RefreshCw, RotateCcw, Save, TerminalSquare, Trash2, Wrench } from "lucide-react";
 import type { OllamaStatus, ProjectPayload, ProjectRegistry, ProjectRegistryEntry, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 
@@ -18,6 +18,7 @@ type SetupPanelProps = {
   onSelectProject: (projectId: string) => void;
   onArchiveProject: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
+  onResetProjectData: (projectId: string) => void;
 };
 
 function emptyConfig(): SetupConfig {
@@ -101,7 +102,8 @@ export function SetupPanel({
   onCreateProject,
   onSelectProject,
   onArchiveProject,
-  onDeleteProject
+  onDeleteProject,
+  onResetProjectData
 }: SetupPanelProps) {
   const [config, setConfig] = useState<SetupConfig>(emptyConfig);
   const [createModel, setCreateModel] = useState(false);
@@ -132,6 +134,7 @@ export function SetupPanel({
   const evalFresh = setup?.summary.evalFresh;
   const recipeReady = setup?.summary.recipeReady;
   const doctor = setup?.doctor;
+  const activeProject = useMemo(() => projects.find((item) => item.active) || projects.find((item) => item.id === projectRegistry?.activeProjectId) || null, [projectRegistry?.activeProjectId, projects]);
 
   function updateConfig(key: keyof SetupConfig, value: string) {
     setConfig((current) => ({ ...current, [key]: value }));
@@ -159,6 +162,14 @@ export function SetupPanel({
     };
     setConfig(repairedConfig);
     onSave(repairedConfig);
+  }
+
+  function resetActiveProjectData() {
+    if (!activeProject) return;
+    const confirmed = window.confirm(`Reset generated data for "${activeProject.name}"?\n\nThis clears proof bundles, datasets, recipes, exports, chats, and local build receipts. It keeps the source folder and project settings.`);
+    if (confirmed) {
+      onResetProjectData(activeProject.id);
+    }
   }
 
   return (
@@ -291,13 +302,28 @@ export function SetupPanel({
                 </button>
                 {item.status === "archived" ? (
                   <button className="plain-button small" type="button" disabled={projectBusy} onClick={() => onDeleteProject(item.id)}>
-                    <Archive size={14} />
-                    <span>Remove</span>
+                    <Trash2 size={14} />
+                    <span>Remove from list</span>
                   </button>
                 ) : null}
               </div>
             </article>
           ))}
+        </div>
+
+        <div className="project-maintenance-box" aria-label="Project data reset">
+          <div className="project-create-title">
+            <RotateCcw size={16} />
+            <div>
+              <strong>Reset generated data</strong>
+              <span>{activeProject ? `Clear build outputs for ${activeProject.name}; keep sources and settings.` : "Open a project before resetting data."}</span>
+            </div>
+          </div>
+          <p>{activeProject?.dataResetReady === false ? activeProject.dataResetReason : "Use this when a project needs a clean rebuild, or when generated artifacts are taking too much space."}</p>
+          <button className="danger-action compact" type="button" disabled={projectBusy || !activeProject || activeProject.dataResetReady === false} onClick={resetActiveProjectData}>
+            {projectBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Trash2 size={15} />}
+            <span>{projectBusy ? "Resetting" : "Reset data"}</span>
+          </button>
         </div>
 
         <div className="project-create-box">

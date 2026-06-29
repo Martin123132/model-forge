@@ -2565,6 +2565,38 @@ h2 {
   background: #fff;
 }
 
+.project-maintenance-box {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 7px;
+  background: #fffafa;
+}
+
+.project-maintenance-box .project-create-title svg {
+  color: var(--danger);
+}
+
+.project-maintenance-box .project-create-title strong,
+.project-maintenance-box .project-create-title span {
+  overflow: visible;
+  white-space: normal;
+}
+
+.project-maintenance-box p {
+  overflow: visible;
+  margin: 0;
+  color: #7f1d1d;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: normal;
+}
+
 .project-create-title {
   align-self: center;
   gap: 8px;
@@ -5884,6 +5916,15 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .project-maintenance-box {
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr);
+  }
+
+  .project-maintenance-box .danger-action {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+
   .project-create-title {
     grid-column: 1 / -1;
   }
@@ -6111,8 +6152,18 @@ h2 {
 
   .project-card-grid,
   .project-create-box,
+  .project-maintenance-box,
   .source-rules-grid {
     grid-template-columns: 1fr;
+  }
+
+  .project-maintenance-box .danger-action {
+    width: 100%;
+  }
+
+  .project-maintenance-box p {
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .project-manager-heading {

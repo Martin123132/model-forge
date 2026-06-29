@@ -31,6 +31,7 @@ import {
   saveSetupConfig,
   selectForgeRecipe,
   selectProject,
+  resetProjectData,
   sendChat,
   startBuilderRun
 } from "./lib/api";
@@ -456,6 +457,21 @@ function App() {
     setError("");
     try {
       const result = await deleteProject(projectId);
+      await applyProjectChange(result);
+      setActiveWorkspace("setup");
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : String(projectError));
+    } finally {
+      setProjectBusy(false);
+    }
+  }, [applyProjectChange]);
+
+  const handleResetProjectData = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setProjectBusy(true);
+    setError("");
+    try {
+      const result = await resetProjectData(projectId);
       await applyProjectChange(result);
       setActiveWorkspace("setup");
     } catch (projectError) {
@@ -1302,6 +1318,7 @@ function App() {
                     onSelectProject={handleSelectProject}
                     onArchiveProject={handleArchiveProject}
                     onDeleteProject={handleDeleteProject}
+                    onResetProjectData={handleResetProjectData}
                   />
                 ) : null}
                 {activeWorkspace === "sources" ? <SourceTable sources={sources || project?.sources} onRefresh={refresh} savingRules={sourceRulesBusy} onSaveSourceRules={handleSaveSourceRules} /> : null}
