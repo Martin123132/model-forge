@@ -8,12 +8,14 @@ import {
   buildShareCard,
   cancelBuilderRun,
   cancelRecipePackRun,
+  compareModels,
   createOllamaModel,
   exportModelProfile,
   getBuilderRun,
   getRecipePackRun,
   getLatestExportPack,
   getHardwareProfile,
+  getModelLibrary,
   getOllamaStatus,
   getProject,
   getSetupState,
@@ -31,6 +33,7 @@ import type {
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
+  ChatCompareResponse,
   ChatMessage,
   DatasetForge,
   EvalReport,
@@ -38,6 +41,7 @@ import type {
   ForgeRecipe,
   HardwareProfile,
   ModelExport,
+  ModelLibrary,
   OllamaStatus,
   PipelineStep,
   ProjectPayload,
@@ -175,6 +179,8 @@ function App() {
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
   const [recipeRunHistory, setRecipeRunHistory] = useState<RecipePackRun[]>([]);
   const [recipeHistory, setRecipeHistory] = useState<ForgeRecipe[]>([]);
+  const [modelLibrary, setModelLibrary] = useState<ModelLibrary | null>(null);
+  const [compareResult, setCompareResult] = useState<ChatCompareResponse | null>(null);
   const packRunMonitorRef = useRef<Set<string>>(new Set());
   const builderRunMonitorRef = useRef<Set<string>>(new Set());
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
@@ -197,6 +203,7 @@ function App() {
   const [selectRecipeBusy, setSelectRecipeBusy] = useState(false);
   const [packRunBusy, setPackRunBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
+  const [compareBusy, setCompareBusy] = useState(false);
   const [builderBusy, setBuilderBusy] = useState(false);
   const [builderRunBusy, setBuilderRunBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
@@ -205,13 +212,14 @@ function App() {
     setError("");
     setRefreshing(true);
     try {
-      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload, hardwarePayload] = await Promise.all([
+      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload, hardwarePayload, modelLibraryPayload] = await Promise.all([
         getSetupState(),
         getProject(),
         getSources(),
         getOllamaStatus(),
         getLatestExportPack(),
-        getHardwareProfile()
+        getHardwareProfile(),
+        getModelLibrary()
       ]);
       setSetupState(setupPayload);
       setProject(projectPayload);
@@ -231,12 +239,19 @@ function App() {
       setRecipeHistory(projectPayload.recipeHistory || []);
       setBuilderRun(projectPayload.latestBuilderRun || null);
       setBuilderRunHistory(projectPayload.builderRunHistory || []);
+      setModelLibrary(modelLibraryPayload.library);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {
       setBooting(false);
       setRefreshing(false);
     }
+  }, []);
+
+  const refreshModelLibrary = useCallback(async () => {
+    const modelLibraryPayload = await getModelLibrary();
+    setModelLibrary(modelLibraryPayload.library);
+    return modelLibraryPayload.library;
   }, []);
 
   const handleRefreshHardware = useCallback(async () => {
@@ -302,12 +317,13 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
+      await refreshModelLibrary();
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
     } finally {
       setRunning(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleSaveSetup = useCallback(async (config: SetupConfig) => {
     setSetupSaving(true);
@@ -331,12 +347,13 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
+      await refreshModelLibrary();
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : String(setupError));
     } finally {
       setSetupSaving(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleRunFirstSetup = useCallback(async (config: SetupConfig, createModel: boolean) => {
     setSetupRunning(true);
@@ -361,12 +378,13 @@ function App() {
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("setup");
+      await refreshModelLibrary();
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : String(setupError));
     } finally {
       setSetupRunning(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleBuildProof = useCallback(async () => {
     setProofBusy(true);
@@ -377,12 +395,13 @@ function App() {
       setModelExport(result.bundle.manifest?.modelProfile || null);
       setExportPack((await getLatestExportPack()).pack || null);
       setActiveWorkspace("proof");
+      await refreshModelLibrary();
     } catch (proofError) {
       setError(proofError instanceof Error ? proofError.message : String(proofError));
     } finally {
       setProofBusy(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleExportModel = useCallback(async () => {
     setModelBusy(true);
@@ -391,12 +410,13 @@ function App() {
       const result = await exportModelProfile();
       setModelExport(result.modelExport);
       setActiveWorkspace("model");
+      await refreshModelLibrary();
     } catch (modelError) {
       setError(modelError instanceof Error ? modelError.message : String(modelError));
     } finally {
       setModelBusy(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleCreateModel = useCallback(async (modelName: string) => {
     setCreateBusy(true);
@@ -417,12 +437,13 @@ function App() {
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setOllama(await getOllamaStatus());
       setActiveWorkspace("model");
+      await refreshModelLibrary();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
     } finally {
       setCreateBusy(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleRunEval = useCallback(async () => {
     setEvalBusy(true);
@@ -442,12 +463,13 @@ function App() {
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("release");
+      await refreshModelLibrary();
     } catch (evalError) {
       setError(evalError instanceof Error ? evalError.message : String(evalError));
     } finally {
       setEvalBusy(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const buildShareForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setShareBusy(true);
@@ -465,12 +487,13 @@ function App() {
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace(nextWorkspace);
+      await refreshModelLibrary();
     } catch (shareError) {
       setError(shareError instanceof Error ? shareError.message : String(shareError));
     } finally {
       setShareBusy(false);
     }
-  }, []);
+  }, [refreshModelLibrary]);
 
   const handleBuildShare = useCallback(() => {
     void buildShareForWorkspace("release");
@@ -499,12 +522,13 @@ function App() {
       setBuilderRun(result.project.latestBuilderRun || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("model");
+      await refreshModelLibrary();
     } catch (datasetError) {
       setError(datasetError instanceof Error ? datasetError.message : String(datasetError));
     } finally {
       setDatasetBusy(false);
     }
-  }, [buildPlan?.request]);
+  }, [buildPlan?.request, refreshModelLibrary]);
 
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
@@ -527,12 +551,13 @@ function App() {
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace(nextWorkspace);
+      await refreshModelLibrary();
     } catch (recipeError) {
       setError(recipeError instanceof Error ? recipeError.message : String(recipeError));
     } finally {
       setRecipeBusy(false);
     }
-  }, [modelExport, ollama?.selectedModel]);
+  }, [modelExport, ollama?.selectedModel, refreshModelLibrary]);
 
   const handleBuildRecipe = useCallback(() => {
     void buildRecipeForWorkspace("model");
@@ -564,15 +589,21 @@ function App() {
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace("model");
+      await refreshModelLibrary();
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : String(selectError));
     } finally {
       setSelectRecipeBusy(false);
     }
-  }, [forgeRecipe?.recipeId, modelExport]);
+  }, [forgeRecipe?.recipeId, modelExport, refreshModelLibrary]);
 
   const refreshAfterPackRun = useCallback(async (fallbackRun?: RecipePackRun | null) => {
-    const [projectPayload, ollamaPayload, exportPackPayload] = await Promise.all([getProject(), getOllamaStatus(), getLatestExportPack()]);
+    const [projectPayload, ollamaPayload, exportPackPayload, modelLibraryPayload] = await Promise.all([
+      getProject(),
+      getOllamaStatus(),
+      getLatestExportPack(),
+      getModelLibrary()
+    ]);
     setProject(projectPayload);
     setSources(projectPayload.sources);
     setOllama(ollamaPayload);
@@ -588,6 +619,7 @@ function App() {
     setBuilderRun(projectPayload.latestBuilderRun || null);
     setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
+    setModelLibrary(modelLibraryPayload.library);
   }, []);
 
   const monitorRecipePackRun = useCallback(async (runId: string) => {
@@ -653,11 +685,12 @@ function App() {
   }, [monitorRecipePackRun, recipeRun?.runId, recipeRun?.status]);
 
   const refreshAfterBuilderRun = useCallback(async (fallbackRun?: BuilderRun | null) => {
-    const [projectPayload, ollamaPayload, exportPackPayload, hardwarePayload] = await Promise.all([
+    const [projectPayload, ollamaPayload, exportPackPayload, hardwarePayload, modelLibraryPayload] = await Promise.all([
       getProject(),
       getOllamaStatus(),
       getLatestExportPack(),
-      getHardwareProfile()
+      getHardwareProfile(),
+      getModelLibrary()
     ]);
     setProject(projectPayload);
     setSources(projectPayload.sources);
@@ -676,6 +709,7 @@ function App() {
     setBuilderRun(projectPayload.latestBuilderRun || fallbackRun || null);
     setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
+    setModelLibrary(modelLibraryPayload.library);
   }, []);
 
   const monitorBuilderRun = useCallback(async (runId: string) => {
@@ -757,6 +791,20 @@ function App() {
       setChatBusy(false);
     }
   }, [chatMessages]);
+
+  const handleCompareModels = useCallback(async (prompt: string, baseModel?: string, forgedModel?: string) => {
+    setCompareBusy(true);
+    setError("");
+    try {
+      const result = await compareModels(prompt, baseModel, forgedModel);
+      setCompareResult(result);
+      await refreshModelLibrary();
+    } catch (compareError) {
+      setError(compareError instanceof Error ? compareError.message : String(compareError));
+    } finally {
+      setCompareBusy(false);
+    }
+  }, [refreshModelLibrary]);
 
   const pipeline = useMemo(() => project?.pipeline || fallbackPipeline, [project]);
   const sourceRoot = project?.sourceRoot || "";
@@ -1131,12 +1179,15 @@ function App() {
                     recipeRun={recipeRun}
                     recipeRunHistory={recipeRunHistory}
                     recipeHistory={recipeHistory}
+                    modelLibrary={modelLibrary}
+                    compareResult={compareResult}
                     recipeBusy={recipeBusy}
                     datasetBusy={datasetBusy}
                     selectRecipeBusy={selectRecipeBusy}
                     packRunBusy={packRunBusy || recipeRun?.status === "running"}
                     createBusy={createBusy}
                     chatBusy={chatBusy}
+                    compareBusy={compareBusy}
                     chatMessages={chatMessages}
                     onBuildDataset={handleBuildDataset}
                     onBuildRecipe={handleBuildRecipe}
@@ -1145,6 +1196,7 @@ function App() {
                     onCancelPack={handleCancelRecipePack}
                     onCreate={handleCreateModel}
                     onSend={handleSendChat}
+                    onCompare={handleCompareModels}
                   />
                 ) : null}
                 {activeWorkspace === "release" ? (

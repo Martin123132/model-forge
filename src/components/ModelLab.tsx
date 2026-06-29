@@ -1,8 +1,8 @@
-import { Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, Send, XCircle } from "lucide-react";
+import { Bot, Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, Send, ShieldCheck, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { datasetForgeDownloadUrl } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
-import type { ChatMessage, DatasetForge, ForgeRecipe, ModelExport, OllamaStatus, RecipePackRun } from "../lib/types";
+import type { ChatCompareResponse, ChatCompareTurn, ChatMessage, DatasetForge, ForgeRecipe, ModelExport, ModelLibrary, ModelLibraryItem, OllamaStatus, RecipePackRun } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 
 type ModelLabProps = {
@@ -13,12 +13,15 @@ type ModelLabProps = {
   recipeRun?: RecipePackRun | null;
   recipeRunHistory?: RecipePackRun[];
   recipeHistory?: ForgeRecipe[];
+  modelLibrary?: ModelLibrary | null;
+  compareResult?: ChatCompareResponse | null;
   recipeBusy: boolean;
   datasetBusy: boolean;
   selectRecipeBusy: boolean;
   packRunBusy: boolean;
   createBusy: boolean;
   chatBusy: boolean;
+  compareBusy: boolean;
   chatMessages: ChatMessage[];
   onBuildDataset: () => void;
   onBuildRecipe: () => void;
@@ -27,6 +30,7 @@ type ModelLabProps = {
   onCancelPack: (runId: string) => void;
   onCreate: (modelName: string) => void;
   onSend: (prompt: string, modelName: string) => void;
+  onCompare: (prompt: string, baseModel?: string, forgedModel?: string) => void;
 };
 
 function compactPath(path?: string) {
@@ -103,6 +107,34 @@ function datasetStamp(dataset?: DatasetForge | null) {
   return dataset?.createdAt ? new Date(dataset.createdAt).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "Not built";
 }
 
+function libraryTone(item?: ModelLibraryItem | null): "pass" | "warn" | "neutral" {
+  if (!item) return "neutral";
+  const status = String(item.status || "").toLowerCase();
+  if (["created", "runnable", "ready", "pass"].includes(status)) return "pass";
+  if (["missing", "stale", "fail"].includes(status)) return "warn";
+  return "neutral";
+}
+
+function libraryKindLabel(kind?: string) {
+  if (kind === "forged") return "Forged AI";
+  if (kind === "base") return "Base";
+  if (kind === "recipe") return "Recipe";
+  if (kind === "ollama") return "Ollama";
+  return "AI";
+}
+
+function libraryMetric(value: unknown, fallback = "Waiting") {
+  if (typeof value === "number") return value.toLocaleString();
+  if (typeof value === "boolean") return value ? "Yes" : "Review";
+  return value ? String(value) : fallback;
+}
+
+function compareTurnTone(turn?: ChatCompareTurn | null): "pass" | "warn" | "neutral" {
+  if (!turn) return "neutral";
+  if (turn.ok && !turn.fallbackUsed) return "pass";
+  return "warn";
+}
+
 export function ModelLab({
   ollama,
   modelExport,
@@ -111,12 +143,15 @@ export function ModelLab({
   recipeRun,
   recipeRunHistory = [],
   recipeHistory = [],
+  modelLibrary,
+  compareResult,
   recipeBusy,
   datasetBusy,
   selectRecipeBusy,
   packRunBusy,
   createBusy,
   chatBusy,
+  compareBusy,
   chatMessages,
   onBuildDataset,
   onBuildRecipe,
@@ -124,11 +159,13 @@ export function ModelLab({
   onRunPack,
   onCancelPack,
   onCreate,
-  onSend
+  onSend,
+  onCompare
 }: ModelLabProps) {
   const [modelName, setModelName] = useState(modelExport?.modelName || "modelforge-local:latest");
   const [allowCreate, setAllowCreate] = useState(false);
   const [prompt, setPrompt] = useState("List the evidence you have before making claims about this workspace.");
+  const [comparePrompt, setComparePrompt] = useState("");
   const [packNotice, setPackNotice] = useState("");
   const [manualPackText, setManualPackText] = useState("");
   const packNoticeTimerRef = useRef<number | null>(null);
@@ -138,6 +175,12 @@ export function ModelLab({
       setModelName(modelExport.modelName);
     }
   }, [modelExport?.modelName]);
+
+  useEffect(() => {
+    if (!comparePrompt && modelLibrary?.defaultPrompt) {
+      setComparePrompt(modelLibrary.defaultPrompt);
+    }
+  }, [comparePrompt, modelLibrary?.defaultPrompt]);
 
   useEffect(() => {
     return () => {
@@ -151,6 +194,15 @@ export function ModelLab({
     () => (modelExport?.created ? modelExport.modelName : ollama?.selectedModel || modelName),
     [modelExport?.created, modelExport?.modelName, ollama?.selectedModel, modelName]
   );
+  const libraryItems = useMemo(() => modelLibrary?.items.slice(0, 6) || [], [modelLibrary?.items]);
+  const compareConfig = modelLibrary?.compare;
+  const activeComparePrompt = comparePrompt;
+  const compareDisabled =
+    compareBusy ||
+    !activeComparePrompt.trim() ||
+    !compareConfig?.baseModel ||
+    !compareConfig?.forgedModel ||
+    !compareConfig.canCompare;
   const recipeStatus: "pass" | "warn" | "neutral" =
     recipe?.status === "ready" ? "pass" : recipe?.status === "stale" ? "warn" : "neutral";
   const recipeLabel = recipe?.status === "ready" ? "Fresh" : recipe?.status === "stale" ? "Stale" : "Draft";
@@ -193,6 +245,7 @@ export function ModelLab({
   const createStatus: "pass" | "warn" | "neutral" = modelExport?.created ? "pass" : allowCreate ? "warn" : "neutral";
   const createStatusLabel = modelExport?.created ? "Created" : allowCreate ? "Armed" : "Locked";
   const chatCountLabel = chatMessages.length ? `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}` : "No run";
+  const libraryReady = Boolean(modelLibrary?.summary.runnable);
 
   async function copyPackText(value: string, label: string) {
     if (!value) return;
@@ -228,6 +281,158 @@ export function ModelLab({
           <span>{modelExport?.created ? "Created model target" : "Profile target"}</span>
         </div>
         <StatusPill status={modelExport?.created ? "pass" : "neutral"} label={modelExport?.created ? "Created" : "Gated"} />
+      </div>
+
+      <div className="model-library-section" aria-label="Your AIs">
+        <div className="model-library-heading">
+          <div className="model-library-title">
+            <Bot size={17} />
+            <div>
+              <strong>Your AIs</strong>
+              <span>{modelLibrary ? `${modelLibrary.summary.total} saved targets, ${modelLibrary.summary.runnable} chat-ready` : "Restoring local targets"}</span>
+            </div>
+          </div>
+          <StatusPill status={libraryReady ? "pass" : "neutral"} label={libraryReady ? "Ready" : "Build"} />
+        </div>
+
+        <div className="model-library-summary">
+          <div>
+            <span>Runnable</span>
+            <strong>{modelLibrary?.summary.runnable.toLocaleString() || "0"}</strong>
+          </div>
+          <div>
+            <span>Recipes</span>
+            <strong>{modelLibrary?.summary.recipes.toLocaleString() || "0"}</strong>
+          </div>
+          <div>
+            <span>Sources</span>
+            <strong>{modelLibrary?.summary.sourceFiles.toLocaleString() || "0"}</strong>
+          </div>
+          <div>
+            <span>Receipts</span>
+            <strong>{modelLibrary?.receipts.length.toLocaleString() || "0"}</strong>
+          </div>
+        </div>
+
+        <div className="model-library-grid">
+          {libraryItems.length ? (
+            libraryItems.map((item) => (
+              <article className={`model-library-card ${item.kind}`} key={item.id}>
+                <div className="model-library-card-head">
+                  <div>
+                    <span>{libraryKindLabel(item.kind)}</span>
+                    <strong title={item.name}>{item.name}</strong>
+                  </div>
+                  <StatusPill status={libraryTone(item)} label={item.statusLabel} />
+                </div>
+                <p>{item.description}</p>
+                <div className="model-library-card-metrics">
+                  <span>
+                    <em>Chat</em>
+                    <strong>{item.canChat ? "Yes" : "No"}</strong>
+                  </span>
+                  <span>
+                    <em>Rows</em>
+                    <strong>{libraryMetric(item.metrics.examples, "0")}</strong>
+                  </span>
+                  <span>
+                    <em>Tokens</em>
+                    <strong>{libraryMetric(item.metrics.tokens, "0")}</strong>
+                  </span>
+                </div>
+                {item.receipts.length ? (
+                  <div className="model-library-receipts">
+                    {item.receipts.slice(0, 3).map((receipt) => (
+                      <span key={`${item.id}-${receipt.label}-${receipt.path}`} title={receipt.path}>
+                        <ShieldCheck size={12} />
+                        <strong>{receipt.label}</strong>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {item.sources.length ? (
+                  <div className="model-library-sources">
+                    {item.sources.slice(0, 2).map((source) => (
+                      <span key={`${item.id}-${source.path}`} title={`${source.path} / ${source.hashShort}`}>
+                        {source.path}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            ))
+          ) : (
+            <div className="empty-row model-library-empty">
+              <Bot size={16} />
+              <span>Build from plan to create the first local AI target.</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="model-compare-section" aria-label="Test side by side">
+        <div className="model-compare-heading">
+          <div className="model-library-title">
+            <MessageSquare size={17} />
+            <div>
+              <strong>Test side by side</strong>
+              <span>{compareConfig?.detail || "Waiting for local targets"}</span>
+            </div>
+          </div>
+          <StatusPill status={compareConfig?.canCompare ? "pass" : "neutral"} label={compareConfig?.canCompare ? "Ready" : "Needs model"} />
+        </div>
+
+        <div className="compare-target-grid">
+          <div>
+            <span>Base</span>
+            <strong title={compareConfig?.baseModel}>{compareConfig?.baseModel || "No base model"}</strong>
+          </div>
+          <div>
+            <span>Forged</span>
+            <strong title={compareConfig?.forgedModel}>{compareConfig?.forgedModel || "No forged model"}</strong>
+          </div>
+        </div>
+
+        <form
+          className="compare-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!compareDisabled) {
+              onCompare(activeComparePrompt.trim(), compareConfig?.baseModel, compareConfig?.forgedModel);
+            }
+          }}
+        >
+          <textarea
+            value={activeComparePrompt}
+            onChange={(event) => setComparePrompt(event.target.value)}
+            placeholder="Ask both models the same thing..."
+          />
+          <button className="primary-action compact" type="submit" disabled={compareDisabled}>
+            <MessageSquare size={15} />
+            <span>{compareBusy ? "Testing" : "Compare"}</span>
+          </button>
+        </form>
+
+        {compareResult ? (
+          <div className="compare-result-grid" aria-live="polite">
+            <article className={`compare-response-card ${compareTurnTone(compareResult.base)}`}>
+              <div>
+                <span>{compareResult.base.label}</span>
+                <strong title={compareResult.base.requestedModelName}>{compareResult.base.modelName || compareResult.base.requestedModelName}</strong>
+              </div>
+              <StatusPill status={compareTurnTone(compareResult.base)} label={compareResult.base.fallbackUsed ? "Fallback" : compareResult.base.ok ? "Answered" : "Error"} />
+              <p>{compareResult.base.ok ? compareResult.base.message.content : compareResult.base.error}</p>
+            </article>
+            <article className={`compare-response-card ${compareTurnTone(compareResult.forged)}`}>
+              <div>
+                <span>{compareResult.forged.label}</span>
+                <strong title={compareResult.forged.requestedModelName}>{compareResult.forged.modelName || compareResult.forged.requestedModelName}</strong>
+              </div>
+              <StatusPill status={compareTurnTone(compareResult.forged)} label={compareResult.forged.fallbackUsed ? "Fallback" : compareResult.forged.ok ? "Answered" : "Error"} />
+              <p>{compareResult.forged.ok ? compareResult.forged.message.content : compareResult.forged.error}</p>
+            </article>
+          </div>
+        ) : null}
       </div>
 
       <div className="recipe-sheet">

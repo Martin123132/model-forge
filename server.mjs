@@ -3869,6 +3869,221 @@ async function getLatestExportPack() {
   };
 }
 
+function libraryReceipt(label, path, kind = "artifact") {
+  if (!path) return null;
+  return {
+    label,
+    path,
+    kind,
+    exists: existsSync(path)
+  };
+}
+
+function compactSourceEvidence(row) {
+  return {
+    path: row.path,
+    language: row.language,
+    license: row.license,
+    hashShort: row.hashShort
+  };
+}
+
+async function buildModelLibrary() {
+  const createdAt = new Date().toISOString();
+  const [
+    sources,
+    ollama,
+    latestModelExport,
+    latestRecipe,
+    latestDataset,
+    latestProof,
+    latestEval,
+    latestExportPack,
+    latestRecipeRun,
+    recipeRunHistory,
+    recipeHistory
+  ] = await Promise.all([
+    walkSources(sourceRoot),
+    getOllamaStatus(),
+    getLatestModelExport(),
+    getLatestForgeRecipe(),
+    getLatestDatasetForge(),
+    getLatestProofBundle(),
+    getLatestEvalReport(),
+    getLatestExportPack(),
+    getLatestRecipeRun(),
+    getRecipeRunHistory(),
+    getForgeRecipeHistory()
+  ]);
+  const installedNames = new Set((ollama.models || []).map((model) => model.name));
+  const baseModel = latestModelExport?.baseModel || latestRecipe?.baseModel || ollama.selectedModel || "";
+  const forgedModel = latestModelExport?.modelName || latestRecipe?.targetModel || defaultTargetModelName();
+  const forgedInstalled = Boolean(forgedModel && installedNames.has(forgedModel));
+  const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
+  const proofFresh = Boolean(
+    proofSourceSummary &&
+      proofSourceSummary.totalFiles === sources.totalFiles &&
+      proofSourceSummary.sampledFiles === sources.sampledFiles &&
+      proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
+  );
+  const evalFresh = Boolean(latestEval && latestProof?.path && latestEval.proofPath === latestProof.path && proofFresh);
+  const sourceEvidence = (sources.rows || []).slice(0, 6).map(compactSourceEvidence);
+  const globalReceipts = [
+    libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
+    libraryReceipt("Modelfile", latestModelExport?.modelfilePath || latestRecipe?.evidence?.modelfilePath, "model"),
+    libraryReceipt("System prompt", latestModelExport?.promptPath, "model"),
+    libraryReceipt("Ollama create receipt", latestModelExport?.createReceipt?.outputPath || latestRecipeRun?.receiptPath, "receipt"),
+    libraryReceipt("Dataset JSONL", latestDataset?.files?.jsonl, "dataset"),
+    libraryReceipt("Dataset manifest", latestDataset?.files?.manifest, "dataset"),
+    libraryReceipt("Forge recipe", latestRecipe?.files?.json, "recipe"),
+    libraryReceipt("Export manifest", latestExportPack?.manifestPath, "export"),
+    libraryReceipt("Export README", latestExportPack?.readmePath, "export"),
+    libraryReceipt("Proof bundle", latestProof?.path, "proof"),
+    libraryReceipt("Eval report", latestRecipe?.evidence?.evalPath || latestEval?.proofPath, "eval")
+  ].filter(Boolean);
+  const items = [];
+
+  if (forgedModel || latestRecipe || latestModelExport) {
+    const created = Boolean(latestModelExport?.created || forgedInstalled || latestRecipeRun?.status === "pass");
+    items.push({
+      id: "forged-current",
+      name: forgedModel || "modelforge-local:latest",
+      kind: "forged",
+      status: created ? "created" : latestModelExport ? "profile" : latestRecipe ? "recipe" : "missing",
+      statusLabel: created ? "Runnable" : latestModelExport ? "Profile ready" : latestRecipe ? "Recipe ready" : "Needs build",
+      modelName: forgedModel || "",
+      baseModel,
+      description: created
+        ? "Your current local AI target is available for chat tests."
+        : latestModelExport
+          ? "Profile is ready; enable Ollama create when you want the local target built."
+          : "Build from plan to create the local AI target.",
+      canChat: Boolean(ollama.ok && (created || forgedInstalled) && forgedModel),
+      canRunPack: Boolean(latestRecipe?.recipeId),
+      createdAt: latestModelExport?.createReceipt?.endedAt || latestRecipeRun?.endedAt || latestModelExport?.createReceipt?.startedAt || latestRecipe?.createdAt || "",
+      metrics: {
+        examples: latestDataset?.summary?.totalExamples || latestRecipe?.dataset?.rows || 0,
+        tokens: latestDataset?.summary?.estimatedTokens || latestRecipe?.dataset?.tokens || 0,
+        sourceFiles: sources.totalFiles,
+        proofFresh,
+        evalFresh,
+        evalSummary: latestEval?.summary || "No eval report yet."
+      },
+      receipts: globalReceipts,
+      sources: sourceEvidence
+    });
+  }
+
+  if (baseModel) {
+    const baseInfo = (ollama.models || []).find((model) => model.name === baseModel);
+    items.push({
+      id: "base-current",
+      name: baseModel,
+      kind: "base",
+      status: baseInfo ? "runnable" : "missing",
+      statusLabel: baseInfo ? "Installed" : "Not found",
+      modelName: baseModel,
+      baseModel: "",
+      description: baseInfo ? "The base model used for comparison and fallback." : "Configured base model is not installed in Ollama yet.",
+      canChat: Boolean(ollama.ok && baseInfo),
+      canRunPack: false,
+      createdAt: baseInfo?.modified || "",
+      metrics: {
+        size: baseInfo?.size || "",
+        modified: baseInfo?.modified || "",
+        sourceFiles: 0
+      },
+      receipts: [],
+      sources: []
+    });
+  }
+
+  if (latestRecipe) {
+    items.push({
+      id: `recipe-${latestRecipe.recipeId}`,
+      name: `Recipe ${latestRecipe.version?.number || 1}`,
+      kind: "recipe",
+      status: latestRecipe.status || "draft",
+      statusLabel: latestRecipe.status === "ready" ? "Ready" : latestRecipe.status === "stale" ? "Review" : "Draft",
+      modelName: latestRecipe.targetModel || forgedModel,
+      baseModel: latestRecipe.baseModel || baseModel,
+      description: "Reusable export pack with Modelfile, dataset, proof links, and runner commands.",
+      canChat: Boolean(ollama.ok && latestRecipe.targetModel && installedNames.has(latestRecipe.targetModel)),
+      canRunPack: true,
+      createdAt: latestRecipe.createdAt || "",
+      metrics: {
+        examples: latestRecipe.dataset?.rows || 0,
+        tokens: latestRecipe.dataset?.tokens || 0,
+        sourceFiles: latestRecipe.dataset?.sourceFiles || sources.totalFiles,
+        proofFresh: Boolean(latestRecipe.freshness?.sourcesMatchProof),
+        evalFresh: Boolean(latestRecipe.freshness?.evalMatchesProof)
+      },
+      receipts: [
+        libraryReceipt("Recipe JSON", latestRecipe.files?.json, "recipe"),
+        libraryReceipt("Recipe markdown", latestRecipe.files?.markdown, "recipe"),
+        libraryReceipt("Export folder", latestRecipe.files?.exportDir, "export"),
+        libraryReceipt("Export manifest", latestRecipe.files?.exportManifest, "export"),
+        libraryReceipt("Export README", latestRecipe.files?.exportReadme, "export")
+      ].filter(Boolean),
+      sources: sourceEvidence.slice(0, 3)
+    });
+  }
+
+  const knownNames = new Set(items.map((item) => item.modelName).filter(Boolean));
+  for (const model of (ollama.models || []).filter((model) => !knownNames.has(model.name)).slice(0, 6)) {
+    items.push({
+      id: `ollama-${model.name.replace(/[^A-Za-z0-9_-]/g, "-")}`,
+      name: model.name,
+      kind: "ollama",
+      status: "runnable",
+      statusLabel: "Installed",
+      modelName: model.name,
+      baseModel: "",
+      description: "Installed Ollama model available for quick local tests.",
+      canChat: Boolean(ollama.ok),
+      canRunPack: false,
+      createdAt: model.modified || "",
+      metrics: {
+        size: model.size,
+        modified: model.modified,
+        sourceFiles: 0
+      },
+      receipts: [],
+      sources: []
+    });
+  }
+
+  const createdCount = items.filter((item) => ["created", "runnable"].includes(item.status)).length;
+  const runnableCount = items.filter((item) => item.canChat).length;
+  const recipeCount = new Set([latestRecipe?.recipeId, ...(recipeHistory || []).map((recipe) => recipe.recipeId)].filter(Boolean)).size;
+
+  return {
+    schema: "modelforge.model_library.v1",
+    createdAt,
+    summary: {
+      total: items.length,
+      created: createdCount,
+      runnable: runnableCount,
+      recipes: recipeCount,
+      chatsReady: Boolean(ollama.ok && runnableCount),
+      sourceFiles: sources.totalFiles
+    },
+    defaultPrompt: "List the evidence you have before making claims about this workspace.",
+    compare: {
+      baseModel,
+      forgedModel,
+      canCompare: Boolean(ollama.ok && baseModel && forgedModel && baseModel !== forgedModel && (forgedInstalled || latestModelExport?.created || latestRecipeRun?.status === "pass")),
+      detail: baseModel && forgedModel
+        ? `Compare ${baseModel} against ${forgedModel} with the same local prompt.`
+        : "Create or select a base and forged model before comparing."
+    },
+    receipts: globalReceipts,
+    items,
+    latestRun: latestRecipeRun || null,
+    runHistory: recipeRunHistory || []
+  };
+}
+
 async function buildExportDownloadPayload(currentPack) {
   const pack = currentPack || (await getLatestExportPack());
   if (!pack) {
@@ -3914,6 +4129,81 @@ async function buildExportDownloadPayload(currentPack) {
   };
 }
 
+async function compareOllamaModels(body = {}) {
+  const library = await buildModelLibrary();
+  const prompt = String(body.prompt || library.defaultPrompt || "").trim().slice(0, 6000);
+  const baseModel = String(body.baseModel || library.compare.baseModel || "").trim();
+  const forgedModel = String(body.forgedModel || library.compare.forgedModel || "").trim();
+  if (!prompt) {
+    throw new Error("Comparison requires a prompt.");
+  }
+
+  async function safeChat(label, modelName) {
+    const requestedModelName = String(modelName || "").trim();
+    if (!requestedModelName) {
+      return {
+        ok: false,
+        label,
+        modelName: "",
+        requestedModelName,
+        fallbackUsed: false,
+        message: { role: "assistant", content: "", createdAt: new Date().toISOString() },
+        error: "No model is configured for this side."
+      };
+    }
+    try {
+      const result = await chatWithOllama({
+        modelName: requestedModelName,
+        messages: [{ role: "user", content: prompt }],
+        maxTokens: Number(body.maxTokens || 80),
+        timeoutMs: Number(body.timeoutMs || 180000)
+      });
+      return {
+        ok: true,
+        label,
+        modelName: result.modelName,
+        requestedModelName: result.requestedModelName || requestedModelName,
+        fallbackUsed: Boolean(result.fallbackUsed),
+        message: result.message,
+        transcriptPath: result.transcriptPath,
+        error: ""
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        label,
+        modelName: "",
+        requestedModelName,
+        fallbackUsed: false,
+        message: { role: "assistant", content: "", createdAt: new Date().toISOString() },
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  const base = await safeChat("Base model", baseModel);
+  const forged = await safeChat("Forged AI", forgedModel);
+  const transcript = {
+    schema: "modelforge.chat_compare.v1",
+    createdAt: new Date().toISOString(),
+    prompt,
+    base,
+    forged,
+    libraryCreatedAt: library.createdAt
+  };
+  const transcriptPath = join(dataRoot, "chats", "latest-compare.json");
+  await writeJson(transcriptPath, transcript);
+  return {
+    ok: Boolean(base.ok || forged.ok),
+    schema: transcript.schema,
+    createdAt: transcript.createdAt,
+    prompt,
+    base,
+    forged,
+    transcriptPath
+  };
+}
+
 async function chatWithOllama(body = {}) {
   const latestModelExport = await getLatestModelExport();
   const ollama = await getOllamaStatus();
@@ -3941,6 +4231,8 @@ async function chatWithOllama(body = {}) {
   if (!userMessages.length || !userMessages.some((message) => message.role === "user" && message.content.trim())) {
     throw new Error("Chat requires a user message.");
   }
+  const timeoutMs = Math.min(Math.max(Number(body.timeoutMs || 120000), 1000), 300000);
+  const maxTokens = Math.min(Math.max(Number(body.maxTokens || 160), 16), 512);
 
   async function callOllamaChat(targetModel) {
     const response = await fetch("http://127.0.0.1:11434/api/chat", {
@@ -3951,10 +4243,11 @@ async function chatWithOllama(body = {}) {
         messages,
         stream: false,
         options: {
-          temperature: 0.2
+          temperature: 0.2,
+          num_predict: maxTokens
         }
       }),
-      signal: AbortSignal.timeout(120000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const text = await response.text();
     return { ok: response.ok, status: response.status, text };
@@ -4375,6 +4668,11 @@ async function handleApi(request, response, url) {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/models/library") {
+      sendJson(response, 200, { ok: true, library: await buildModelLibrary() });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/builder/plan") {
       sendJson(response, 200, { ok: true, plan: await getLatestBuilderPlan() });
       return;
@@ -4525,6 +4823,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/chat") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await chatWithOllama(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/chat/compare") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await compareOllamaModels(body));
       return;
     }
 

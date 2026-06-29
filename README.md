@@ -15,6 +15,7 @@
   <a href="#why-it-exists">Why</a> |
   <a href="#what-it-does">What it does</a> |
   <a href="#builder-wizard">Builder Wizard</a> |
+  <a href="#model-library">Model Library</a> |
   <a href="#screenshots">Screenshots</a> |
   <a href="#quickstart">Quickstart</a> |
   <a href="#proof-posture">Proof posture</a> |
@@ -67,6 +68,8 @@ artifacts from code and project folders.
   runner adapter plans shaped for the next stage.
 - Runs exported Ollama packs back from the export folder and stores receipts so
   the pack proves it can recreate the local target.
+- Shows a **Your AIs** library with forged targets, base models, recipes,
+  receipts, source evidence, and a side-by-side base-vs-forged test playground.
 
 This alpha is intentionally focused on the forge layer: source boundary,
 training-ready packs, recipes, evidence, local model profiles, and release
@@ -136,6 +139,28 @@ Source Scope v1 makes the scope selection operational:
 Dataset Forge and Build From Plan honor the selected scope. Each scoped build
 writes `source-scope.md` and `source-scope.json` receipts showing included and
 excluded files, and export packs copy those receipts under `training/`.
+
+## Model Library
+
+Model Lab now starts with **Your AIs**. This is the product-grade direction for
+non-developers: created local targets, base models, Ollama models, and export
+recipes are shown as things the user can test and inspect.
+
+The library shows:
+
+- Which models are runnable in Ollama.
+- Which forged target was built from the current recipe/profile.
+- Dataset rows, token estimates, source-file counts, proof freshness, and eval
+  freshness.
+- Receipts behind the build, including Modelfiles, model profiles, Dataset
+  Forge artifacts, export manifests, proof bundles, and Ollama create receipts.
+- Source evidence previews with local paths and hashes.
+
+The same workspace includes a **Test side by side** playground. It sends one
+prompt to the base model and the forged target, then shows both answers plus any
+fallback or missing-model state. The goal is to make the app say, plainly: this
+is the AI I built, this is what it is based on, and this is the evidence behind
+it.
 
 ## Screenshots
 
@@ -214,10 +239,13 @@ build proof, gates, share card, Dataset Forge JSONL, and recipe artifacts.
 After setup, or after a successful **Build From Plan** run:
 
 1. Open **Model Lab**.
-2. Use **Dataset Forge** to rebuild or download `dataset.jsonl`.
-3. Build a **Forge Recipe** to package the dataset, proof, eval report, Ollama
+2. Review **Your AIs** to see created targets, recipes, receipts, and source
+   evidence.
+3. Use **Test side by side** to compare the base model against the forged target.
+4. Use **Dataset Forge** to rebuild or download `dataset.jsonl`.
+5. Build a **Forge Recipe** to package the dataset, proof, eval report, Ollama
    profile, LoRA/QLoRA plan, and runner contract.
-4. Enable **Allow Ollama create**, then run the export pack to produce a receipt
+6. Enable **Allow Ollama create**, then run the export pack to produce a receipt
    proving the exported folder can recreate the local model target.
 
 The dev script defaults the data root to `.modelforge-data` inside the repo and
@@ -260,6 +288,8 @@ Dataset and export checks also verify:
   `training/dataset-manifest.json`.
 - Pack runs write receipts in the export folder and in the local run history.
 - Build From Plan has completed every stage and written a builder receipt.
+- The Model Library API returns saved targets, receipts, and a compare-playground
+  contract.
 
 Run the repeatable smoke check while `npm.cmd run dev` is active:
 

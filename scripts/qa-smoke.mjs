@@ -35,17 +35,19 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, setup, ollama, exportPackResponse, datasetResponse] = await Promise.all([
+  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
     getJson("/api/setup"),
     getJson("/api/ollama/status"),
     getJson("/api/export/latest"),
-    getJson("/api/dataset/latest")
+    getJson("/api/dataset/latest"),
+    getJson("/api/models/library")
   ]);
   const evalReport = project.latestEval || null;
   const dataset = project.latestDataset || datasetResponse.dataset || null;
   const exportPack = exportPackResponse.pack || null;
+  const modelLibrary = modelLibraryResponse.library || null;
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
   const builderStages = latestBuilderRun?.stages || [];
@@ -113,6 +115,28 @@ async function main() {
       project.latestBuildPlan
         ? `${project.latestBuildPlan.request.templateId || "no template"} / ${project.latestBuildPlan.request.sourceScope || "no source scope"} / ${scopePreviewOptions.length} scope previews / ${project.latestBuildPlan.blueprint?.firstRunChecklist?.length || 0} checklist items`
         : "no guided builder plan"
+    ),
+    check(
+      "Model library",
+      Boolean(
+        modelLibrary?.schema === "modelforge.model_library.v1" &&
+          modelLibrary.items?.length &&
+          modelLibrary.summary?.total === modelLibrary.items.length
+      ),
+      modelLibrary ? `${modelLibrary.summary.total} targets, ${modelLibrary.summary.runnable} runnable, ${modelLibrary.summary.recipes} recipes` : "no model library"
+    ),
+    check(
+      "Model receipts",
+      Boolean(modelLibrary?.receipts?.length && modelLibrary.items?.some((item) => item.kind === "forged" && item.receipts?.length)),
+      modelLibrary ? `${modelLibrary.receipts?.length || 0} shared receipts, forged=${modelLibrary.items?.find((item) => item.kind === "forged")?.receipts?.length || 0}` : "no receipts"
+    ),
+    check(
+      "Compare playground contract",
+      Boolean(modelLibrary?.defaultPrompt && modelLibrary.compare?.baseModel && modelLibrary.compare?.forgedModel),
+      modelLibrary?.compare
+        ? `${modelLibrary.compare.baseModel || "no base"} vs ${modelLibrary.compare.forgedModel || "no forged"} / canCompare=${modelLibrary.compare.canCompare}`
+        : "no compare contract",
+      "warn"
     ),
     check("Proof bundle", Boolean(project.latestProof?.path), project.latestProof?.path || "no proof bundle"),
     check(

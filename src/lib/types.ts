@@ -731,6 +731,82 @@ export type ChatResponse = {
   transcriptPath: string;
 };
 
+export type ModelLibraryReceipt = {
+  label: string;
+  path: string;
+  kind: "model" | "receipt" | "dataset" | "recipe" | "export" | "proof" | "eval" | "artifact" | string;
+  exists: boolean;
+};
+
+export type ModelLibrarySource = {
+  path: string;
+  language: string;
+  license: string;
+  hashShort: string;
+};
+
+export type ModelLibraryItem = {
+  id: string;
+  name: string;
+  kind: "forged" | "base" | "recipe" | "ollama" | string;
+  status: "created" | "profile" | "recipe" | "runnable" | "missing" | "ready" | "stale" | "draft" | string;
+  statusLabel: string;
+  modelName: string;
+  baseModel: string;
+  description: string;
+  canChat: boolean;
+  canRunPack: boolean;
+  createdAt: string;
+  metrics: Record<string, string | number | boolean>;
+  receipts: ModelLibraryReceipt[];
+  sources: ModelLibrarySource[];
+};
+
+export type ModelLibrary = {
+  schema: string;
+  createdAt: string;
+  summary: {
+    total: number;
+    created: number;
+    runnable: number;
+    recipes: number;
+    chatsReady: boolean;
+    sourceFiles: number;
+  };
+  defaultPrompt: string;
+  compare: {
+    baseModel: string;
+    forgedModel: string;
+    canCompare: boolean;
+    detail: string;
+  };
+  receipts: ModelLibraryReceipt[];
+  items: ModelLibraryItem[];
+  latestRun?: RecipePackRun | null;
+  runHistory?: RecipePackRun[];
+};
+
+export type ChatCompareTurn = {
+  ok: boolean;
+  label: string;
+  modelName: string;
+  requestedModelName: string;
+  fallbackUsed: boolean;
+  message: ChatMessage;
+  transcriptPath?: string;
+  error: string;
+};
+
+export type ChatCompareResponse = {
+  ok: boolean;
+  schema: string;
+  createdAt: string;
+  prompt: string;
+  base: ChatCompareTurn;
+  forged: ChatCompareTurn;
+  transcriptPath: string;
+};
+
 export type ProjectPayload = {
   name: string;
   status: string;

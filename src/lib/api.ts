@@ -2,6 +2,7 @@ import type {
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
+  ChatCompareResponse,
   ChatMessage,
   ChatResponse,
   DatasetForge,
@@ -10,6 +11,7 @@ import type {
   ForgeRecipe,
   HardwareProfile,
   ModelExport,
+  ModelLibrary,
   OllamaStatus,
   ProjectPayload,
   ProofBundle,
@@ -173,6 +175,17 @@ export function sendChat(messages: ChatMessage[], modelName?: string) {
   return requestJson<ChatResponse>("/api/chat", {
     method: "POST",
     body: JSON.stringify({ messages, modelName })
+  });
+}
+
+export function getModelLibrary() {
+  return requestJson<{ ok: boolean; library: ModelLibrary }>("/api/models/library");
+}
+
+export function compareModels(prompt: string, baseModel?: string, forgedModel?: string) {
+  return requestJson<ChatCompareResponse>("/api/chat/compare", {
+    method: "POST",
+    body: JSON.stringify({ prompt, baseModel, forgedModel })
   });
 }
 
