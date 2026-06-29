@@ -15,6 +15,9 @@ forge cockpit.
 - Added saved hardware fit recipes for model class, quantization, context
   window, GPU layers, CPU threads, runner, storage budget, warnings, and
   reasoning.
+- Added Apply Hardware Recipe so Builder checks or pulls the recommended base
+  model, persists recipe-aware model profile metadata, writes an applied
+  receipt, and unlocks a guided source-backed test prompt.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,

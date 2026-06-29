@@ -52,6 +52,10 @@ artifacts from code and project folders.
 - Saves a **hardware fit recipe** with the recommended model class,
   quantization, context window, GPU layer posture, CPU threads, runner, storage
   budget, warnings, and the plain-English reasons those settings fit.
+- Provides **Apply Hardware Recipe** in Builder: checks whether the recommended
+  base model is installed, pulls it through Ollama when needed, writes the
+  recipe-aware model profile and Modelfile metadata, saves an applied-recipe
+  receipt, and unlocks a guided source-backed test prompt.
 - Shows an **AI build contract** before the user starts: what AI is being made,
   what it is allowed to know, how ModelForge will build it, what artifacts will
   be produced, and what counts as done.
@@ -150,6 +154,9 @@ The plan records:
 - A **hardware fit recipe** with the selected priority, recommended model
   class, base model, quantization, context window, GPU layers, CPU threads,
   batch size, runner, storage budget, reasoning, and warnings.
+- An **Apply Hardware Recipe** receipt that records the base-model install
+  check or pull, persisted model profile, recipe-aware Modelfile, and guided
+  source-backed test prompt for Model Lab.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
   prep when the hardware makes that realistic.
 - Ordered next steps mapped back to the app: Setup, Sources, Dataset Forge,

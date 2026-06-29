@@ -6,6 +6,7 @@ import {
   buildForgeRecipe,
   buildProofBundle,
   buildShareCard,
+  applyBuilderHardwareRecipe,
   archiveProject,
   cancelBuilderRun,
   cancelRecipePackRun,
@@ -37,6 +38,7 @@ import {
   startBuilderRun
 } from "./lib/api";
 import type {
+  BuilderAppliedHardwareRecipe,
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
@@ -182,6 +184,7 @@ function App() {
   const [exportPack, setExportPack] = useState<ExportPackSummary | null>(null);
   const [hardwareProfile, setHardwareProfile] = useState<HardwareProfile | null>(null);
   const [buildPlan, setBuildPlan] = useState<BuilderPlan | null>(null);
+  const [appliedHardwareRecipe, setAppliedHardwareRecipe] = useState<BuilderAppliedHardwareRecipe | null>(null);
   const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
   const [builderRunHistory, setBuilderRunHistory] = useState<BuilderRun[]>([]);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
@@ -219,6 +222,7 @@ function App() {
   const [sourceRulesBusy, setSourceRulesBusy] = useState(false);
   const [builderBusy, setBuilderBusy] = useState(false);
   const [builderRunBusy, setBuilderRunBusy] = useState(false);
+  const [applyRecipeBusy, setApplyRecipeBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -241,6 +245,7 @@ function App() {
       setOllama(ollamaPayload);
       setHardwareProfile(hardwarePayload);
       setBuildPlan(projectPayload.latestBuildPlan || null);
+      setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
       setModelExport(projectPayload.latestModelExport || null);
       setProof(projectPayload.latestProof || null);
       setEvalReport(projectPayload.latestEval || null);
@@ -282,6 +287,7 @@ function App() {
     setOllama(ollamaPayload);
     setHardwareProfile(hardwarePayload);
     setBuildPlan(result.project.latestBuildPlan || null);
+    setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
     setModelExport(result.project.latestModelExport || null);
     setProof(result.project.latestProof || null);
     setEvalReport(result.project.latestEval || null);
@@ -316,6 +322,7 @@ function App() {
     try {
       const result = await buildAiBuildPlan(request);
       setBuildPlan(result.plan);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setHardwareProfile(result.plan.hardware);
       setProject(result.project);
       setSources(result.project.sources);
@@ -329,6 +336,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("builder");
     } catch (planError) {
@@ -360,6 +368,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       await refreshModelLibrary();
     } catch (runError) {
@@ -390,6 +399,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       await refreshModelLibrary();
@@ -508,6 +518,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       setModelLibrary(modelLibraryPayload.library);
@@ -540,6 +551,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       setActiveWorkspace("setup");
@@ -573,6 +585,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       setModelLibrary(modelLibraryPayload.library);
@@ -635,6 +648,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setOllama(await getOllamaStatus());
       setActiveWorkspace("model");
@@ -662,6 +676,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("release");
       await refreshModelLibrary();
@@ -686,6 +701,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace(nextWorkspace);
       await refreshModelLibrary();
@@ -721,6 +737,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("model");
       await refreshModelLibrary();
@@ -749,6 +766,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace(nextWorkspace);
@@ -787,6 +805,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace("model");
@@ -818,6 +837,7 @@ function App() {
     setRecipeRunHistory(projectPayload.recipeRunHistory || []);
     setRecipeHistory(projectPayload.recipeHistory || []);
     setBuilderRun(projectPayload.latestBuilderRun || null);
+    setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
     setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
     setModelLibrary(modelLibraryPayload.library);
@@ -898,6 +918,7 @@ function App() {
     setOllama(ollamaPayload);
     setHardwareProfile(hardwarePayload);
     setBuildPlan(projectPayload.latestBuildPlan || null);
+    setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
     setModelExport(projectPayload.latestModelExport || null);
     setProof(projectPayload.latestProof || null);
     setEvalReport(projectPayload.latestEval || null);
@@ -908,6 +929,7 @@ function App() {
     setRecipeRunHistory(projectPayload.recipeRunHistory || []);
     setRecipeHistory(projectPayload.recipeHistory || []);
     setBuilderRun(projectPayload.latestBuilderRun || fallbackRun || null);
+    setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
     setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
     setModelLibrary(modelLibraryPayload.library);
@@ -956,6 +978,40 @@ function App() {
     }
   }, [buildPlan, monitorBuilderRun]);
 
+  const handleApplyHardwareRecipe = useCallback(async () => {
+    if (!buildPlan) return;
+    setApplyRecipeBusy(true);
+    setError("");
+    try {
+      const result = await applyBuilderHardwareRecipe(buildPlan.planId);
+      setAppliedHardwareRecipe(result.applied);
+      setBuildPlan(result.plan);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setOllama(result.ollama);
+      setModelExport(result.modelExport || result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
+      setActiveWorkspace("builder");
+      await refreshModelLibrary();
+      if (!result.ok) {
+        setError(result.applied.summary || "Hardware recipe apply did not complete.");
+      }
+    } catch (applyError) {
+      setError(applyError instanceof Error ? applyError.message : String(applyError));
+    } finally {
+      setApplyRecipeBusy(false);
+    }
+  }, [buildPlan, refreshModelLibrary]);
+
   const handleCancelBuilderRun = useCallback(async (runId: string) => {
     if (!runId) return;
     try {
@@ -992,6 +1048,12 @@ function App() {
       setChatBusy(false);
     }
   }, [chatMessages]);
+
+  const handleRunGuidedBuilderTest = useCallback(async (prompt: string, modelName: string) => {
+    if (!prompt.trim() || !modelName.trim()) return;
+    setActiveWorkspace("model");
+    await handleSendChat(prompt, modelName);
+  }, [handleSendChat]);
 
   const handleCompareModels = useCallback(async (prompt: string, baseModel?: string, forgedModel?: string) => {
     setCompareBusy(true);
@@ -1325,14 +1387,19 @@ function App() {
                     sources={sources || project?.sources}
                     datasetForge={datasetForge}
                     recipe={forgeRecipe}
+                    appliedHardwareRecipe={appliedHardwareRecipe}
                     builderRun={builderRun}
                     builderRunHistory={builderRunHistory}
                     busy={builderBusy}
                     builderRunBusy={builderRunBusy || builderRun?.status === "running"}
+                    applyRecipeBusy={applyRecipeBusy}
+                    chatBusy={chatBusy}
                     hardwareBusy={hardwareBusy}
                     datasetBusy={datasetBusy}
                     recipeBusy={recipeBusy}
                     onBuildPlan={handleBuildPlan}
+                    onApplyHardwareRecipe={handleApplyHardwareRecipe}
+                    onRunGuidedTest={handleRunGuidedBuilderTest}
                     onStartBuild={handleStartBuilderRun}
                     onCancelBuild={handleCancelBuilderRun}
                     onRefreshHardware={handleRefreshHardware}

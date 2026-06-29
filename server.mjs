@@ -125,18 +125,70 @@ function commandEnv(extra = {}) {
   return env;
 }
 
+function stopCommandProcess(child) {
+  if (!child?.pid) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+    killer.on("error", () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Best-effort cleanup only.
+      }
+    });
+    return;
+  }
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    return;
+  }
+  const forceTimer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }, 2000);
+  forceTimer.unref?.();
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolveCommand) => {
     const env = commandEnv(options.env || {});
-    execFile(command, args, { cwd: options.cwd || projectRoot, env, timeout: options.timeout || 8000, windowsHide: true, maxBuffer: options.maxBuffer || 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const timeout = options.timeout || 8000;
+    let timedOut = false;
+    let resolved = false;
+    const child = execFile(command, args, { cwd: options.cwd || projectRoot, env, windowsHide: true, maxBuffer: options.maxBuffer || 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(fallbackTimer);
       resolveCommand({
-        ok: !error,
-        code: error?.code ?? 0,
+        ok: !error && !timedOut,
+        code: timedOut ? "TIMEOUT" : error?.code ?? 0,
         stdout: String(stdout || ""),
         stderr: String(stderr || ""),
-        error: error ? String(error.message || error) : ""
+        error: timedOut ? `Command timed out after ${timeout}ms.` : error ? String(error.message || error) : ""
       });
     });
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      stopCommandProcess(child);
+    }, timeout);
+    const fallbackTimer = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      resolveCommand({
+        ok: false,
+        code: "TIMEOUT",
+        stdout: "",
+        stderr: "",
+        error: `Command timed out after ${timeout}ms.`
+      });
+    }, timeout + 5000);
+    timeoutTimer.unref?.();
+    fallbackTimer.unref?.();
   });
 }
 
@@ -3113,6 +3165,217 @@ async function getBuilderPlanById(planId = "") {
   return latest?.planId === safePlanId ? latest : null;
 }
 
+async function getLatestAppliedHardwareRecipe() {
+  return readJsonIfExists(join(dataRoot, "builder", "latest", "applied-hardware-recipe.json"));
+}
+
+function appliedHardwareRecipeId() {
+  return `applied-recipe-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function resolveRecommendedBaseModel(value = "", ollama = null) {
+  const raw = cleanSetting(value);
+  if (safeModelName(raw)) return raw;
+  const installed = ollama?.models?.map((model) => model.name).find((name) => raw.toLowerCase().includes(name.toLowerCase()));
+  if (installed && safeModelName(installed)) return installed;
+  const candidates = raw.split(/\s+or\s+|[,;]/i).map((item) => cleanSetting(item));
+  const safeCandidate = candidates.find((item) => safeModelName(item));
+  if (safeCandidate) return safeCandidate;
+  if (/llama3\.2:1b/i.test(raw)) return "llama3.2:1b";
+  if (/tinyllama/i.test(raw)) return "tinyllama";
+  return defaultStarterModelName();
+}
+
+function buildGuidedTestPrompt({ plan, sourceScope }) {
+  const paths = (sourceScope?.includedRows || [])
+    .filter((row) => row.path)
+    .slice(0, 4)
+    .map((row) => row.path);
+  const aiName = plan?.aiProfile?.name || "this AI";
+  const role = plan?.blueprint?.aiType?.label || plan?.aiProfile?.route || "local AI";
+  return {
+    unlocked: true,
+    modelName: defaultTargetModelName(),
+    prompt: [
+      `Smoke test ${aiName} as a ${role}.`,
+      "Using only the selected ModelForge source scope, explain what this AI is meant to do, then cite two source paths or say exactly why the local knowledge pack does not contain enough evidence.",
+      paths.length ? `Preferred source paths to check: ${paths.join(", ")}.` : "Use whatever source-backed evidence is available."
+    ].join(" "),
+    expectedSources: paths,
+    detail: paths.length ? `Built from ${sourceScope.label} with ${paths.length} suggested source paths.` : "Built from the selected source scope."
+  };
+}
+
+function appliedHardwareRecipeMarkdown(applied) {
+  return [
+    `# ${applied.aiName} Applied Hardware Recipe`,
+    "",
+    `Receipt: ${applied.receiptId}`,
+    `Created: ${applied.createdAt}`,
+    `Plan: ${applied.planId}`,
+    `Status: ${applied.status}`,
+    `Route: ${applied.route}`,
+    "",
+    "## Summary",
+    "",
+    applied.summary,
+    "",
+    "## Base Model",
+    "",
+    `Requested: ${applied.baseModel.requested}`,
+    `Resolved: ${applied.baseModel.resolved}`,
+    `Installed before: ${applied.baseModel.installedBefore}`,
+    `Installed after: ${applied.baseModel.installedAfter}`,
+    `Pulled by ModelForge: ${applied.baseModel.pulled}`,
+    `Pull summary: ${applied.baseModel.pullSummary}`,
+    "",
+    "## Applied Settings",
+    "",
+    `Model class: ${applied.hardwareRecipe.recommended.modelClass}`,
+    `Quantization: ${applied.hardwareRecipe.recommended.quantization}`,
+    `Context window: ${applied.hardwareRecipe.recommended.contextWindowTokens.toLocaleString()} tokens`,
+    `GPU layers: ${applied.hardwareRecipe.recommended.gpuLayers}`,
+    `CPU threads: ${applied.hardwareRecipe.recommended.cpuThreads}`,
+    `Batch size: ${applied.hardwareRecipe.recommended.batchSize}`,
+    `Runner: ${applied.hardwareRecipe.recommended.runner}`,
+    "",
+    "## Model Profile",
+    "",
+    `Model name: ${applied.modelProfile.modelName}`,
+    `Base model: ${applied.modelProfile.baseModel}`,
+    `Profile: ${applied.modelProfile.profilePath}`,
+    `Modelfile: ${applied.modelProfile.modelfilePath}`,
+    "",
+    "## Guided Test Prompt",
+    "",
+    applied.testPrompt.prompt,
+    "",
+    ...(applied.testPrompt.expectedSources.length ? ["Expected source paths:", "", ...applied.testPrompt.expectedSources.map((item) => `- ${item}`), ""] : []),
+    ""
+  ].join("\n");
+}
+
+async function applyBuilderHardwareRecipe(body = {}) {
+  await ensureDataRoot();
+  const plan = await getBuilderPlanById(body.planId || "");
+  if (!plan?.hardwareRecipe) {
+    throw new Error("Create a Builder plan with a hardware fit recipe before applying it.");
+  }
+  const createdAt = new Date().toISOString();
+  const receiptId = appliedHardwareRecipeId();
+  const latestDir = join(dataRoot, "builder", "latest");
+  const historyDir = join(dataRoot, "builder", "history", plan.planId || receiptId);
+  const files = {
+    latestJson: join(latestDir, "applied-hardware-recipe.json"),
+    latestMarkdown: join(latestDir, "applied-hardware-recipe.md"),
+    historyJson: join(historyDir, "applied-hardware-recipe.json"),
+    historyMarkdown: join(historyDir, "applied-hardware-recipe.md")
+  };
+  await mkdir(latestDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+
+  const before = await getOllamaStatus({ force: true });
+  const requestedBaseModel = plan.hardwareRecipe.recommended.baseModel || plan.baseModelRecommendation?.model || defaultStarterModelName();
+  const resolvedBaseModel = resolveRecommendedBaseModel(requestedBaseModel, before);
+  const installedBefore = before.models.some((model) => model.name === resolvedBaseModel);
+  let pullReceipt = null;
+  let installedAfter = installedBefore;
+  let pullSummary = installedBefore ? `${resolvedBaseModel} is already installed.` : `${resolvedBaseModel} is not installed.`;
+
+  if (!before.ok) {
+    pullSummary = before.error || "Ollama is not ready, so ModelForge could not check or install the recommended base model.";
+  } else if (!installedBefore) {
+    const startedAt = new Date().toISOString();
+    const command = ["ollama", "pull", resolvedBaseModel];
+    const result = await runCommand(ollamaCommand(), ["pull", resolvedBaseModel], { timeout: 20 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
+    const afterPull = await getOllamaStatus({ force: true });
+    installedAfter = afterPull.models.some((model) => model.name === resolvedBaseModel);
+    pullSummary = installedAfter ? `Installed ${resolvedBaseModel}.` : `Could not verify ${resolvedBaseModel} after Ollama pull.`;
+    pullReceipt = commandReceipt({
+      name: "builder_apply_hardware_recipe_pull",
+      ok: Boolean(result.ok && installedAfter),
+      status: result.ok && installedAfter ? "ok" : "failed",
+      command,
+      outputPath: files.latestJson,
+      summary: pullSummary,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: result.error,
+      startedAt,
+      endedAt: new Date().toISOString()
+    });
+  }
+
+  if (installedAfter) {
+    await saveSetupConfig({ ...currentSetupConfig(), baseModel: resolvedBaseModel });
+  }
+
+  const sourceScope = resolveSourceScope(await walkSources(sourceRoot), plan.request?.sourceScope || "whole-project");
+  const testPrompt = buildGuidedTestPrompt({ plan, sourceScope });
+  let modelExport = null;
+  if (installedAfter) {
+    modelExport = await exportOllamaProfile(join(dataRoot, "models", "latest"), {
+      baseModel: resolvedBaseModel,
+      modelName: testPrompt.modelName,
+      create: false,
+      hardwareRecipe: plan.hardwareRecipe,
+      appliedHardwareRecipePath: files.latestJson
+    });
+  }
+
+  const ok = Boolean(installedAfter && modelExport?.profilePath);
+  const applied = {
+    schema: "modelforge.applied_hardware_recipe.v1",
+    receiptId,
+    createdAt,
+    planId: plan.planId,
+    ok,
+    status: ok ? "applied" : before.ok ? "failed" : "blocked",
+    summary: ok
+      ? `Applied ${plan.hardwareRecipe.recommended.modelClass} recipe to ${modelExport.modelName} using ${resolvedBaseModel}.`
+      : `Could not apply the hardware recipe: ${pullSummary}`,
+    aiName: plan.aiProfile?.name || "Local AI",
+    route: plan.routeLabel || plan.hardwareRecipe.recommended.buildRoute,
+    hardwareRecipe: plan.hardwareRecipe,
+    baseModel: {
+      requested: requestedBaseModel,
+      resolved: resolvedBaseModel,
+      installedBefore,
+      installedAfter,
+      pulled: Boolean(pullReceipt?.ok),
+      pullSummary
+    },
+    pullReceipt,
+    modelProfile: {
+      modelName: modelExport?.modelName || testPrompt.modelName,
+      baseModel: modelExport?.baseModel || resolvedBaseModel,
+      profilePath: modelExport?.profilePath || "",
+      modelfilePath: modelExport?.modelfilePath || "",
+      promptPath: modelExport?.promptPath || ""
+    },
+    testPrompt: {
+      ...testPrompt,
+      unlocked: ok,
+      modelName: modelExport?.modelName || testPrompt.modelName
+    },
+    files
+  };
+
+  await writeJson(files.latestJson, applied);
+  await writeFile(files.latestMarkdown, appliedHardwareRecipeMarkdown(applied), "utf-8");
+  await writeJson(files.historyJson, applied);
+  await writeFile(files.historyMarkdown, appliedHardwareRecipeMarkdown(applied), "utf-8");
+
+  return {
+    ok,
+    applied,
+    plan,
+    modelExport,
+    project: await getProjectPayload(),
+    ollama: await getOllamaStatus({ force: true })
+  };
+}
+
 async function buildAiBuildPlan(body = {}) {
   await ensureDataRoot();
   const createdAt = new Date().toISOString();
@@ -3844,9 +4107,19 @@ async function executeBuilderRun(runId) {
     job.run.outputs.sourceScopeReceiptPath = sourceBoundary.scopeReceipt?.markdown || join(job.run.files.dir, "source-scope.md");
 
     const modelExport = await runBuilderStage(job, "model-profile", async () => {
+      const latestAppliedRecipe = await getLatestAppliedHardwareRecipe();
+      const appliedRecipePath =
+        latestAppliedRecipe?.ok && latestAppliedRecipe.planId === activePlan.planId
+          ? latestAppliedRecipe.files?.latestJson || ""
+          : "";
       const exported = await exportOllamaProfile(join(dataRoot, "models", "latest"), {
-        baseModel: activePlan.baseModelRecommendation?.model || setupConfig.baseModel,
+        baseModel:
+          activePlan.hardwareRecipe?.recommended?.baseModel ||
+          activePlan.baseModelRecommendation?.model ||
+          setupConfig.baseModel,
         modelName: defaultTargetModelName(),
+        hardwareRecipe: activePlan.hardwareRecipe || null,
+        appliedHardwareRecipePath: appliedRecipePath,
         create: false
       });
       return {
@@ -5120,13 +5393,29 @@ async function exportOllamaProfile(targetDir, options = {}) {
   await mkdir(modelDir, { recursive: true });
   const baseModel = options.baseModel || setupConfig.baseModel || ollama.selectedModel || "llama3.2:3b";
   const modelName = options.modelName || defaultTargetModelName();
+  const hardwareRecipe = options.hardwareRecipe || null;
+  const contextWindowTokens = Math.max(512, Math.min(Number(hardwareRecipe?.recommended?.contextWindowTokens || 8192), 32768));
+  const recipeMetadataLines = hardwareRecipe
+    ? [
+        "# ModelForge hardware recipe",
+        `# Preference: ${hardwareRecipe.preference}`,
+        `# Model class: ${hardwareRecipe.recommended.modelClass}`,
+        `# Quantization: ${hardwareRecipe.recommended.quantization}`,
+        `# Context window: ${contextWindowTokens} tokens`,
+        `# GPU layers: ${hardwareRecipe.recommended.gpuLayers}`,
+        `# CPU threads: ${hardwareRecipe.recommended.cpuThreads}`,
+        `# Runner: ${hardwareRecipe.recommended.runner}`,
+        ""
+      ]
+    : [];
   const systemPrompt = buildSystemPrompt(sources);
   const modelfile = [
     `FROM ${baseModel}`,
     "",
+    ...recipeMetadataLines,
     "PARAMETER temperature 0.2",
     "PARAMETER top_p 0.9",
-    "PARAMETER num_ctx 8192",
+    `PARAMETER num_ctx ${contextWindowTokens}`,
     "",
     "SYSTEM \"\"\"",
     systemPrompt,
@@ -5143,6 +5432,8 @@ async function exportOllamaProfile(targetDir, options = {}) {
     createdAt: new Date().toISOString(),
     modelName,
     baseModel,
+    hardwareRecipe,
+    appliedHardwareRecipePath: options.appliedHardwareRecipePath || "",
     modelfilePath,
     promptPath,
     sourceRoot,
@@ -5181,6 +5472,8 @@ async function exportOllamaProfile(targetDir, options = {}) {
     baseModel,
     created: createReceipt?.ok || false,
     createReceipt,
+    hardwareRecipe,
+    appliedHardwareRecipePath: options.appliedHardwareRecipePath || "",
     summary: `Exported Ollama profile for ${modelName} from ${baseModel}.`
   };
 }
@@ -5205,6 +5498,8 @@ async function getLatestModelExport() {
     profilePath,
     modelName,
     baseModel,
+    hardwareRecipe: profile?.hardwareRecipe || null,
+    appliedHardwareRecipePath: profile?.appliedHardwareRecipePath || "",
     created: Boolean(createReceipt?.ok),
     createReceipt,
     summary: `Exported Ollama profile for ${modelName}${baseModel ? ` from ${baseModel}` : ""}.`
@@ -6695,7 +6990,7 @@ async function getOllamaStatus({ force = false } = {}) {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestKnowledgePack, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, builderRunHistory] = await Promise.all([
+  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestKnowledgePack, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, latestAppliedHardwareRecipe, builderRunHistory] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
@@ -6709,6 +7004,7 @@ async function getProjectPayload() {
     getForgeRecipeHistory(),
     getLatestBuilderPlan(),
     getLatestBuilderRun(),
+    getLatestAppliedHardwareRecipe(),
     getBuilderRunHistory()
   ]);
   const dataset = estimateDatasetMetrics(sources);
@@ -6743,6 +7039,7 @@ async function getProjectPayload() {
     recipeHistory,
     latestBuildPlan,
     latestBuilderRun,
+    latestAppliedHardwareRecipe,
     builderRunHistory,
     pipeline: [
       {
@@ -7086,6 +7383,12 @@ async function handleApi(request, response, url) {
       const body = await readJsonBody(request);
       const plan = await buildAiBuildPlan(body);
       sendJson(response, 200, { ok: true, plan, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/hardware-recipe/apply") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await applyBuilderHardwareRecipe(body));
       return;
     }
 

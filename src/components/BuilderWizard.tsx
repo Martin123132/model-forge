@@ -9,8 +9,10 @@ import {
   FileText,
   Gauge,
   HardDrive,
+  Hammer,
   ListChecks,
   LoaderCircle,
+  MessageSquare,
   PackageCheck,
   Play,
   RefreshCw,
@@ -21,6 +23,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
+  BuilderAppliedHardwareRecipe,
   BuilderAiProfile,
   BuilderPlan,
   BuilderPlanRequest,
@@ -44,14 +47,19 @@ type BuilderWizardProps = {
   sources?: SourceSummary | null;
   datasetForge?: DatasetForge | null;
   recipe?: ForgeRecipe | null;
+  appliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
   builderRun?: BuilderRun | null;
   builderRunHistory?: BuilderRun[];
   busy: boolean;
   builderRunBusy: boolean;
+  applyRecipeBusy: boolean;
+  chatBusy: boolean;
   hardwareBusy: boolean;
   datasetBusy: boolean;
   recipeBusy: boolean;
   onBuildPlan: (request: BuilderPlanRequest) => void;
+  onApplyHardwareRecipe: () => void;
+  onRunGuidedTest: (prompt: string, modelName: string) => void;
   onStartBuild: () => void;
   onCancelBuild: (runId: string) => void;
   onRefreshHardware: () => void;
@@ -886,14 +894,19 @@ export function BuilderWizard({
   sources,
   datasetForge,
   recipe,
+  appliedHardwareRecipe,
   builderRun,
   builderRunHistory = [],
   busy,
   builderRunBusy,
+  applyRecipeBusy,
+  chatBusy,
   hardwareBusy,
   datasetBusy,
   recipeBusy,
   onBuildPlan,
+  onApplyHardwareRecipe,
+  onRunGuidedTest,
   onStartBuild,
   onCancelBuild,
   onRefreshHardware,
@@ -1009,6 +1022,9 @@ export function BuilderWizard({
     () => (planMatchesForm && plan?.hardwareRecipe) || createDraftHardwareRecipe({ hardware, request: currentRequest, routeLabel: blueprint.route }),
     [blueprint.route, currentRequest, hardware, plan?.hardwareRecipe, planMatchesForm]
   );
+  const appliedRecipeMatchesPlan = Boolean(planMatchesForm && plan?.planId && appliedHardwareRecipe?.ok && appliedHardwareRecipe.planId === plan.planId);
+  const appliedReceiptPath = appliedRecipeMatchesPlan ? appliedHardwareRecipe?.files.latestJson || appliedHardwareRecipe?.files.historyJson || "" : "";
+  const guidedTest = appliedRecipeMatchesPlan ? appliedHardwareRecipe?.testPrompt : null;
   const aiProfile = useMemo(
     () =>
       (planMatchesForm && plan?.aiProfile) ||
@@ -1588,6 +1604,54 @@ export function BuilderWizard({
                 ))}
               </div>
             ) : null}
+            <div className={`hardware-apply-card ${appliedRecipeMatchesPlan ? "applied" : "pending"}`}>
+              <div>
+                <strong>{appliedRecipeMatchesPlan ? "Recipe applied" : "Apply this recipe"}</strong>
+                <span>
+                  {appliedRecipeMatchesPlan
+                    ? appliedHardwareRecipe?.summary
+                    : planMatchesForm
+                      ? `Check or install ${hardwareRecipe.recommended.baseModel}, then write the model profile with these settings.`
+                      : "Create the build plan before applying hardware settings."}
+                </span>
+              </div>
+              <StatusPill status={appliedRecipeMatchesPlan ? "pass" : planMatchesForm ? "warn" : "neutral"} label={appliedRecipeMatchesPlan ? "Ready" : planMatchesForm ? "Not applied" : "Draft"} />
+              {appliedRecipeMatchesPlan ? (
+                <div className="hardware-apply-facts">
+                  <span>
+                    <strong>Base model</strong>
+                    <em>{appliedHardwareRecipe?.baseModel.resolved}</em>
+                  </span>
+                  <span>
+                    <strong>Profile</strong>
+                    <em title={appliedHardwareRecipe?.modelProfile.profilePath || ""}>{compactPath(appliedHardwareRecipe?.modelProfile.profilePath)}</em>
+                  </span>
+                  <span>
+                    <strong>Receipt</strong>
+                    <em title={appliedReceiptPath}>{compactPath(appliedReceiptPath)}</em>
+                  </span>
+                </div>
+              ) : null}
+              <div className="hardware-apply-actions">
+                <button className="primary-action compact" type="button" onClick={onApplyHardwareRecipe} disabled={!planMatchesForm || !plan || applyRecipeBusy}>
+                  {applyRecipeBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Hammer size={15} />}
+                  <span>{applyRecipeBusy ? "Applying" : appliedRecipeMatchesPlan ? "Reapply Recipe" : "Apply Recipe"}</span>
+                </button>
+                {guidedTest?.unlocked ? (
+                  <button className="plain-button small" type="button" onClick={() => onRunGuidedTest(guidedTest.prompt, guidedTest.modelName)} disabled={chatBusy}>
+                    {chatBusy ? <LoaderCircle className="spin-icon" size={15} /> : <MessageSquare size={15} />}
+                    <span>{chatBusy ? "Testing" : "Run Test Prompt"}</span>
+                  </button>
+                ) : null}
+              </div>
+              {guidedTest?.unlocked ? (
+                <div className="hardware-test-prompt">
+                  <strong>Guided source-backed test</strong>
+                  <p>{guidedTest.prompt}</p>
+                  <em>{guidedTest.detail}</em>
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {fitCandidates.length ? (

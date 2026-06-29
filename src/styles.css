@@ -1965,6 +1965,121 @@ h2 {
   line-height: 1.35;
 }
 
+.hardware-apply-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.hardware-apply-card.applied {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+}
+
+.hardware-apply-card > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.hardware-apply-card > div:first-child strong {
+  color: #172236;
+  font-size: 12px;
+  font-weight: 840;
+}
+
+.hardware-apply-card > div:first-child span {
+  color: #4b5b73;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.hardware-apply-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.hardware-apply-facts span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.hardware-apply-facts strong,
+.hardware-apply-facts em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hardware-apply-facts strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hardware-apply-facts em {
+  color: #172236;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+}
+
+.hardware-apply-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.hardware-apply-actions .primary-action,
+.hardware-apply-actions .plain-button {
+  width: 100%;
+  min-width: 0;
+}
+
+.hardware-test-prompt {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.hardware-test-prompt strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.hardware-test-prompt p {
+  margin: 0;
+  color: #3d4e66;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.hardware-test-prompt em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .fit-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6858,6 +6973,8 @@ h2 {
   .blueprint-capability-grid,
   .builder-identity-card,
   .hardware-recipe-grid,
+  .hardware-apply-facts,
+  .hardware-apply-actions,
   .source-scope-preview-lists,
   .ai-profile-facts,
   .ai-profile-rules > div,
@@ -6914,6 +7031,9 @@ h2 {
   .ai-profile-output em,
   .hardware-recipe-grid span,
   .hardware-recipe-grid strong,
+  .hardware-apply-facts strong,
+  .hardware-apply-facts em,
+  .hardware-test-prompt p,
   .builder-run-stage strong,
   .builder-run-stage em,
   .builder-run-output em,

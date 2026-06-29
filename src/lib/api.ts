@@ -1,4 +1,5 @@
 import type {
+  BuilderAppliedHardwareRecipe,
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
@@ -84,6 +85,20 @@ export function startBuilderRun(planId?: string, request?: BuilderPlanRequest) {
   return requestJson<{ ok: boolean; run: BuilderRun }>("/api/builder/run", {
     method: "POST",
     body: JSON.stringify({ planId, request })
+  });
+}
+
+export function applyBuilderHardwareRecipe(planId?: string) {
+  return requestJson<{
+    ok: boolean;
+    applied: BuilderAppliedHardwareRecipe;
+    plan: BuilderPlan;
+    modelExport: ModelExport | null;
+    project: ProjectPayload;
+    ollama: OllamaStatus;
+  }>("/api/builder/hardware-recipe/apply", {
+    method: "POST",
+    body: JSON.stringify({ planId })
   });
 }
 

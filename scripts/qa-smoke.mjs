@@ -185,6 +185,25 @@ async function main() {
         : "no hardware recipe"
     ),
     check(
+      "Applied hardware recipe",
+      Boolean(
+        project.latestAppliedHardwareRecipe?.schema === "modelforge.applied_hardware_recipe.v1" &&
+          project.latestAppliedHardwareRecipe.ok === true &&
+          project.latestAppliedHardwareRecipe.baseModel?.installedAfter === true &&
+          project.latestAppliedHardwareRecipe.modelProfile?.profilePath &&
+          existsSync(project.latestAppliedHardwareRecipe.modelProfile.profilePath) &&
+          project.latestAppliedHardwareRecipe.modelProfile?.modelfilePath &&
+          existsSync(project.latestAppliedHardwareRecipe.modelProfile.modelfilePath) &&
+          project.latestAppliedHardwareRecipe.testPrompt?.unlocked === true &&
+          project.latestAppliedHardwareRecipe.testPrompt?.prompt &&
+          project.latestAppliedHardwareRecipe.files?.latestJson &&
+          existsSync(project.latestAppliedHardwareRecipe.files.latestJson)
+      ),
+      project.latestAppliedHardwareRecipe
+        ? `${project.latestAppliedHardwareRecipe.baseModel?.resolved || "no base"} -> ${project.latestAppliedHardwareRecipe.modelProfile?.modelName || "no model"}; test=${project.latestAppliedHardwareRecipe.testPrompt?.unlocked ? "unlocked" : "locked"}`
+        : "no applied hardware recipe"
+    ),
+    check(
       "Builder blueprint",
       Boolean(project.latestBuildPlan?.blueprint?.summary && project.latestBuildPlan?.request?.aiType),
       project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"

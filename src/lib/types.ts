@@ -331,6 +331,47 @@ export type BuilderHardwareRecipe = {
   nextSteps: string[];
 };
 
+export type BuilderAppliedHardwareRecipe = {
+  schema: string;
+  receiptId: string;
+  createdAt: string;
+  planId: string;
+  ok: boolean;
+  status: "applied" | "blocked" | "failed" | string;
+  summary: string;
+  aiName: string;
+  route: string;
+  hardwareRecipe: BuilderHardwareRecipe;
+  baseModel: {
+    requested: string;
+    resolved: string;
+    installedBefore: boolean;
+    installedAfter: boolean;
+    pulled: boolean;
+    pullSummary: string;
+  };
+  modelProfile: {
+    modelName: string;
+    baseModel: string;
+    profilePath: string;
+    modelfilePath: string;
+    promptPath: string;
+  };
+  testPrompt: {
+    unlocked: boolean;
+    prompt: string;
+    modelName: string;
+    expectedSources: string[];
+    detail: string;
+  };
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
+};
+
 export type BuilderPlan = {
   schema: string;
   planId: string;
@@ -709,6 +750,8 @@ export type ModelExport = {
   profilePath: string;
   modelName: string;
   baseModel: string;
+  hardwareRecipe?: BuilderHardwareRecipe | null;
+  appliedHardwareRecipePath?: string;
   created: boolean;
   createReceipt?: Receipt | null;
   summary: string;
@@ -1169,6 +1212,7 @@ export type ProjectPayload = {
   recipeHistory?: ForgeRecipe[];
   latestBuildPlan?: BuilderPlan | null;
   latestBuilderRun?: BuilderRun | null;
+  latestAppliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
   builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];
   sources: SourceSummary;
