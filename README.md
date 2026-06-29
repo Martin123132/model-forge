@@ -57,6 +57,8 @@ artifacts from code and project folders.
 - Runs **Build From Plan** as one guided job: source boundary, Ollama profile,
   proof gates, Dataset Forge, local knowledge pack, recipe, export pack,
   receipts, and a refreshed plan at the end.
+- Ends a successful build with a plain-English handoff: what AI was built, why
+  the hardware route fits, what artifacts were created, and where to test next.
 - Builds Dataset Forge JSONL examples from the selected source scope, with source
   paths, hashes, license labels, proof-bundle provenance, and include/exclude
   receipts.
@@ -136,7 +138,10 @@ each stage as it completes. The run writes a receipt under
 what happened and where the artifacts landed.
 
 Build runs also expose stage explanations, repair hints, receipts and outputs,
-and previous run history inside the Builder workspace.
+previous run history, and a **Build handoff** inside the Builder workspace. The
+handoff says, in plain language, that the current hardware supports the chosen
+route, then lists the AI target, local knowledge pack, dataset, proof, and next
+actions for testing or release review.
 
 Source Scope v1 makes the scope selection operational:
 

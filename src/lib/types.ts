@@ -330,6 +330,34 @@ export type BuilderRunStage = {
   error: string;
 };
 
+export type BuilderRunHandoff = {
+  schema: string;
+  createdAt: string;
+  title: string;
+  summary: string;
+  hardwareFit: string;
+  route: {
+    label: string;
+    reason: string;
+    hardwareTier: string;
+    baseModel: string;
+  };
+  builtArtifacts: Array<{
+    label: string;
+    value: string;
+    detail: string;
+    path: string;
+    workspace: string;
+  }>;
+  actions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    workspace: string;
+  }>;
+  receipts: Record<string, string>;
+};
+
 export type BuilderRun = {
   schema: string;
   runId: string;
@@ -344,6 +372,7 @@ export type BuilderRun = {
   sourceRoot: string;
   dataRoot: string;
   plan: BuilderPlan;
+  handoff?: BuilderRunHandoff | null;
   stages: BuilderRunStage[];
   outputs: {
     buildPlanPath: string;

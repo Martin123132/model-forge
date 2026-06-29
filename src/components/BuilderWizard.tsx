@@ -24,6 +24,7 @@ import type {
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
+  BuilderRunHandoff,
   DatasetForge,
   ForgeRecipe,
   HardwareProfile,
@@ -516,6 +517,73 @@ function requestMatchesPlan(saved?: BuilderPlanRequest, current?: BuilderPlanReq
   );
 }
 
+function buildFallbackHandoff({
+  activeRun,
+  plan,
+  datasetForge,
+  recipe
+}: {
+  activeRun?: BuilderRun | null;
+  plan?: BuilderPlan | null;
+  datasetForge?: DatasetForge | null;
+  recipe?: ForgeRecipe | null;
+}): BuilderRunHandoff | null {
+  if (!activeRun || activeRun.status !== "pass") return null;
+  const aiLabel = activeRun.plan?.blueprint?.aiType?.label || plan?.blueprint?.aiType?.label || "local AI";
+  const routeLabel = activeRun.plan?.routeLabel || plan?.routeLabel || "local build route";
+  const targetModel = recipe?.targetModel || "modelforge-local:latest";
+  const snippets = datasetForge?.knowledgePack?.snippets || recipe?.dataset?.knowledgeSnippets || 0;
+  const examples = datasetForge?.summary?.totalExamples || recipe?.dataset?.rows || 0;
+  return {
+    schema: "modelforge.builder_handoff.v1",
+    createdAt: activeRun.endedAt || activeRun.updatedAt,
+    title: `Your ${aiLabel} is built`,
+    summary: `Your hardware supports ${routeLabel}, so ModelForge built ${targetModel} with source-scoped data, a local knowledge pack, proof, and a rebuildable export pack.`,
+    hardwareFit: activeRun.plan?.hardware?.modelFit?.summary || plan?.hardware?.modelFit?.summary || activeRun.plan?.estimates?.hardwareTier || "",
+    route: {
+      label: routeLabel,
+      reason: activeRun.plan?.routeReason || plan?.routeReason || "",
+      hardwareTier: activeRun.plan?.estimates?.hardwareTier || plan?.estimates?.hardwareTier || "",
+      baseModel: activeRun.plan?.baseModelRecommendation?.model || plan?.baseModelRecommendation?.model || ""
+    },
+    builtArtifacts: [
+      {
+        label: "AI target",
+        value: targetModel,
+        detail: "Created from the export pack and ready for Model Lab tests.",
+        path: activeRun.outputs.exportDir,
+        workspace: "model"
+      },
+      {
+        label: "Local knowledge",
+        value: `${snippets.toLocaleString()} snippets`,
+        detail: "Built for source-backed chat from the selected source scope.",
+        path: activeRun.outputs.knowledgePackPath || "",
+        workspace: "model"
+      },
+      {
+        label: "Dataset",
+        value: `${examples.toLocaleString()} examples`,
+        detail: "JSONL examples keep source paths, hashes, license labels, and provenance attached.",
+        path: activeRun.outputs.datasetPath,
+        workspace: "model"
+      },
+      {
+        label: "Proof",
+        value: "Gates refreshed",
+        detail: "Release gates, source hashes, model cards, and receipts were rebuilt for this run.",
+        path: activeRun.outputs.proofPath,
+        workspace: "release"
+      }
+    ],
+    actions: [
+      { id: "test-ai", label: "Test your AI", detail: "Open Model Lab and ask the forged target a source-backed question.", workspace: "model" },
+      { id: "review-proof", label: "Review proof", detail: "Open Release to check gates and evidence before sharing.", workspace: "release" }
+    ],
+    receipts: activeRun.outputs
+  };
+}
+
 export function BuilderWizard({
   hardware,
   plan,
@@ -651,6 +719,7 @@ export function BuilderWizard({
         { label: "Run receipt", path: activeRun.files.receipt }
       ].filter((row) => row.path)
     : [];
+  const handoff = activeRun?.handoff || buildFallbackHandoff({ activeRun, plan, datasetForge, recipe });
   const pastRuns = builderRunHistory.filter((run) => run.runId !== activeRun?.runId).slice(0, 4);
   const checklistItems = blueprint.firstRunChecklist || [];
 
@@ -1146,6 +1215,42 @@ export function BuilderWizard({
               </>
             ) : null}
           </div>
+
+          {handoff ? (
+            <div className="builder-handoff-card" aria-label="Build handoff">
+              <div className="builder-handoff-heading">
+                <div>
+                  <span>Build handoff</span>
+                  <h2>{handoff.title}</h2>
+                </div>
+                <StatusPill status="pass" label="Built" />
+              </div>
+              <p>{handoff.summary}</p>
+              {handoff.hardwareFit ? (
+                <div className="builder-handoff-fit">
+                  <Cpu size={14} />
+                  <span>{handoff.hardwareFit}</span>
+                </div>
+              ) : null}
+              <div className="builder-handoff-artifacts">
+                {handoff.builtArtifacts.map((artifact) => (
+                  <button className="builder-handoff-artifact" key={artifact.label} type="button" onClick={() => goToPlanAction(artifact.workspace)} title={artifact.path || artifact.detail}>
+                    <strong>{artifact.label}</strong>
+                    <span>{artifact.value}</span>
+                    <em>{artifact.detail}</em>
+                  </button>
+                ))}
+              </div>
+              <div className="builder-handoff-actions">
+                {handoff.actions.map((action) => (
+                  <button className={action.id === "test-ai" ? "primary-action compact" : "plain-button small"} key={action.id} type="button" onClick={() => goToPlanAction(action.workspace)} title={action.detail}>
+                    {action.id === "test-ai" ? <Play size={15} /> : <ShieldCheck size={15} />}
+                    <span>{action.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="builder-readiness">
             {readiness.map(({ label, value, tone, Icon }) => (

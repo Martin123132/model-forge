@@ -2050,6 +2050,146 @@ h2 {
   font-weight: 600;
 }
 
+.builder-handoff-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 7px;
+  background: #f7fef9;
+}
+
+.builder-handoff-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.builder-handoff-heading > div {
+  min-width: 0;
+}
+
+.builder-handoff-heading span {
+  display: block;
+  overflow: hidden;
+  color: #166534;
+  font-size: 10px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.builder-handoff-heading h2 {
+  overflow: hidden;
+  margin-top: 3px;
+  color: #172236;
+  font-size: 15px;
+  font-weight: 840;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-handoff-card p {
+  margin: 0;
+  color: #355240;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.builder-handoff-fit {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(22, 101, 52, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #166534;
+  font-size: 11px;
+  font-weight: 740;
+}
+
+.builder-handoff-fit span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-handoff-artifacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.builder-handoff-artifact {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 74px;
+  padding: 8px;
+  border: 1px solid rgba(187, 247, 208, 0.92);
+  border-radius: 7px;
+  background: #fff;
+  color: #172236;
+  text-align: left;
+}
+
+.builder-handoff-artifact:hover,
+.builder-handoff-artifact:focus-visible {
+  border-color: #86efac;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+}
+
+.builder-handoff-artifact strong,
+.builder-handoff-artifact span,
+.builder-handoff-artifact em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-handoff-artifact strong {
+  color: #166534;
+  font-size: 10px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.builder-handoff-artifact span {
+  color: #172236;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.builder-handoff-artifact em {
+  color: #4b5b73;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.builder-handoff-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.builder-handoff-actions .primary-action,
+.builder-handoff-actions .plain-button {
+  width: 100%;
+  min-width: 0;
+}
+
 .builder-steps {
   display: grid;
   gap: 8px;
@@ -6326,6 +6466,11 @@ h2 {
   .builder-checklist-item strong,
   .builder-checklist-item em,
   .builder-run-heading h2,
+  .builder-handoff-heading h2,
+  .builder-handoff-fit span,
+  .builder-handoff-artifact strong,
+  .builder-handoff-artifact span,
+  .builder-handoff-artifact em,
   .builder-run-stage strong,
   .builder-run-stage em,
   .builder-run-output em,
@@ -6336,6 +6481,11 @@ h2 {
   }
 
   .builder-run-history span {
+    grid-template-columns: 1fr;
+  }
+
+  .builder-handoff-artifacts,
+  .builder-handoff-actions {
     grid-template-columns: 1fr;
   }
 

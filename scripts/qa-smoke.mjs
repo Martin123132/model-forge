@@ -246,6 +246,17 @@ async function main() {
         Boolean(latestBuilderRun.outputs?.sourceScopeReceiptPath),
       latestBuilderRun ? `${latestBuilderRun.status}: ${latestBuilderRun.summary}; scope=${latestBuilderRun.outputs?.sourceScopeReceiptPath || "missing"}` : "builder run has not been run yet"
     ),
+    check(
+      "Build handoff",
+      Boolean(
+        latestBuilderRun?.handoff?.schema === "modelforge.builder_handoff.v1" &&
+          latestBuilderRun.handoff.title &&
+          latestBuilderRun.handoff.summary?.includes("Your hardware supports") &&
+          latestBuilderRun.handoff.builtArtifacts?.length >= 4 &&
+          latestBuilderRun.handoff.actions?.some((action) => action.id === "test-ai" && action.workspace === "model")
+      ),
+      latestBuilderRun?.handoff ? `${latestBuilderRun.handoff.title}; ${latestBuilderRun.handoff.builtArtifacts?.length || 0} artifacts` : "no build handoff"
+    ),
     check("Release failures", counts.fail === 0, `${counts.fail} failing gates`),
     check(
       "License review",

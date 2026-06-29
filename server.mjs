@@ -2602,6 +2602,67 @@ function createBuilderRunStages(plan) {
   ];
 }
 
+function handoffArtifact(label, value, detail, path = "", workspace = "model") {
+  return { label, value, detail, path, workspace };
+}
+
+function buildBuilderHandoff({ run, plan, dataset, recipe, modelExport, packRun, sourceScope, proofBundle, evalReport }) {
+  const blueprint = plan?.blueprint || {};
+  const aiLabel = blueprint.aiType?.label || "local AI";
+  const routeLabel = plan?.routeLabel || "local build route";
+  const targetModel = recipe?.targetModel || modelExport?.modelName || defaultTargetModelName();
+  const knowledgeSnippets = dataset?.knowledgePack?.snippets || recipe?.dataset?.knowledgeSnippets || 0;
+  const datasetExamples = dataset?.summary?.totalExamples || recipe?.dataset?.rows || 0;
+  const scopedFiles = sourceScope?.includedFiles || dataset?.sourceScope?.includedFiles || 0;
+  const hardwareFit = plan?.hardware?.modelFit?.summary || blueprint.hardwareFit || plan?.estimates?.hardwareTier || "Hardware route recorded.";
+  const packStatus = packRun?.status === "pass" ? "ready" : "review";
+  return {
+    schema: "modelforge.builder_handoff.v1",
+    createdAt: new Date().toISOString(),
+    title: `Your ${aiLabel} is built`,
+    summary: `Your hardware supports ${routeLabel}, so ModelForge built ${targetModel} with source-scoped data, a local knowledge pack, proof, and a rebuildable export pack.`,
+    hardwareFit,
+    route: {
+      label: routeLabel,
+      reason: plan?.routeReason || "",
+      hardwareTier: plan?.estimates?.hardwareTier || plan?.hardware?.tier?.label || "",
+      baseModel: modelExport?.baseModel || recipe?.baseModel || plan?.baseModelRecommendation?.model || ""
+    },
+    builtArtifacts: [
+      handoffArtifact("AI target", targetModel, packStatus === "ready" ? "Created from the export pack and ready for Model Lab tests." : "Profile and recipe are ready; run the export pack when Ollama is available.", recipe?.files?.exportDir || "", "model"),
+      handoffArtifact("Local knowledge", `${knowledgeSnippets.toLocaleString()} snippets`, `Built from ${scopedFiles.toLocaleString()} scoped files for source-backed chat.`, dataset?.knowledgePack?.jsonl || run.outputs.knowledgePackPath || "", "model"),
+      handoffArtifact("Dataset", `${datasetExamples.toLocaleString()} examples`, "JSONL examples keep source paths, hashes, license labels, and provenance attached.", dataset?.files?.jsonl || run.outputs.datasetPath || "", "model"),
+      handoffArtifact("Proof", evalReport?.summary || "Proof bundle and gates refreshed.", "Release gates, source hashes, model cards, and receipts were rebuilt for this run.", proofBundle?.path || run.outputs.proofPath || "", "release")
+    ],
+    actions: [
+      {
+        id: "test-ai",
+        label: "Test your AI",
+        detail: "Open Model Lab and ask the forged target a source-backed question.",
+        workspace: "model"
+      },
+      {
+        id: "review-proof",
+        label: "Review proof",
+        detail: "Open Release to check gates and evidence before sharing.",
+        workspace: "release"
+      }
+    ],
+    receipts: {
+      builderRun: run.files.receipt,
+      sourceScope: run.outputs.sourceScopeReceiptPath,
+      modelProfile: run.outputs.modelProfilePath,
+      proof: run.outputs.proofPath,
+      eval: run.outputs.evalPath,
+      dataset: run.outputs.datasetPath,
+      knowledgePack: run.outputs.knowledgePackPath,
+      recipe: run.outputs.recipePath,
+      exportPack: run.outputs.exportDir,
+      packRun: run.outputs.packRunReceiptPath
+    }
+  };
+}
+
 async function getLatestBuilderRun() {
   return readJsonIfExists(join(dataRoot, "builder", "latest", "build-run.json"));
 }
@@ -2698,6 +2759,28 @@ async function runBuilderStage(job, stageId, work) {
 }
 
 async function writeBuilderRunReceipt(run) {
+  const handoff = run.handoff || null;
+  const handoffLines = handoff
+    ? [
+        "## Build Handoff",
+        "",
+        handoff.title,
+        "",
+        handoff.summary,
+        "",
+        `Hardware fit: ${handoff.hardwareFit || ""}`,
+        `Route: ${handoff.route?.label || ""}`,
+        "",
+        "### Built",
+        "",
+        ...(handoff.builtArtifacts || []).map((artifact) => `- ${artifact.label}: ${artifact.value}. ${artifact.detail}${artifact.path ? ` Artifact: ${artifact.path}` : ""}`),
+        "",
+        "### Next",
+        "",
+        ...(handoff.actions || []).map((action) => `- ${action.label}: ${action.detail}`),
+        ""
+      ]
+    : [];
   const lines = [
     "# ModelForge Builder Run",
     "",
@@ -2711,6 +2794,7 @@ async function writeBuilderRunReceipt(run) {
     "",
     run.summary,
     "",
+    ...handoffLines,
     "## Stages",
     "",
     ...run.stages.map((stage) => `- ${stage.label}: ${stage.status}. ${stage.summary}${stage.plainLanguage ? ` ${stage.plainLanguage}` : ""}${stage.artifact ? ` Artifact: ${stage.artifact}` : ""}`),
@@ -2774,6 +2858,7 @@ async function startBuilderRun(body = {}) {
     sourceRoot,
     dataRoot,
     plan,
+    handoff: null,
     stages: createBuilderRunStages(plan),
     outputs: {
       buildPlanPath: plan.files?.json || "",
@@ -2938,10 +3023,21 @@ async function executeBuilderRun(runId) {
     });
     job.run.outputs.finalPlanPath = activePlan.files?.json || "";
     job.run.plan = activePlan;
+    job.run.handoff = buildBuilderHandoff({
+      run: job.run,
+      plan: activePlan,
+      dataset,
+      recipe,
+      modelExport,
+      packRun,
+      sourceScope: builderSourceScope,
+      proofBundle: proofGateResult.proofBundle,
+      evalReport: proofGateResult.evalReport
+    });
     await finishBuilderRun(job, {
       ok: true,
       status: "pass",
-      summary: `Build complete: ${activePlan.routeLabel}. Export pack receipt is ready.`
+      summary: job.run.handoff.summary
     });
   } catch (error) {
     const canceled = error?.code === "BUILDER_RUN_CANCELED" || job.cancelRequested;
