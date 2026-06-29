@@ -4010,7 +4010,7 @@ h2 {
 }
 
 .model-library-summary {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .compare-target-grid {
@@ -5136,6 +5136,42 @@ h2 {
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.chat-source-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.chat-source-list span {
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #2563eb;
+  text-transform: none;
+}
+
+.chat-source-list svg {
+  color: currentColor;
+}
+
+.chat-source-list strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-form {

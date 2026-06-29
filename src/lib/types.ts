@@ -250,6 +250,7 @@ export type BuilderPlan = {
     setupConfigured: boolean;
     sourceReady: boolean;
     datasetReady: boolean;
+    knowledgePackReady?: boolean;
     modelProfileReady: boolean;
     recipeReady: boolean;
     proofFresh: boolean;
@@ -353,6 +354,7 @@ export type BuilderRun = {
     evalPath: string;
     sharePath: string;
     datasetPath: string;
+    knowledgePackPath?: string;
     recipePath: string;
     exportDir: string;
     packRunId: string;
@@ -627,6 +629,75 @@ export type DatasetForgePreview = {
   outputPreview: string;
 };
 
+export type KnowledgeSnippetSource = {
+  id: string;
+  sourcePath: string;
+  title: string;
+  language: string;
+  license: string;
+  hashShort: string;
+  chunkIndex: number;
+  keywords: string[];
+  textPreview: string;
+  score?: number;
+};
+
+export type KnowledgePack = {
+  schema: string;
+  packId: string;
+  status: "ready" | "empty" | string;
+  createdAt: string;
+  sourceRoot: string;
+  dataRoot: string;
+  requestedBy: string;
+  sourceScope?: SourceScopeOption;
+  summary: {
+    totalSnippets: number;
+    includedFiles: number;
+    skippedFiles: number;
+    totalTextBytes: number;
+    estimatedTokens: number;
+    estimatedSize: string;
+    retrieval: string;
+  };
+  filters: {
+    maxFiles: number;
+    maxBytesPerFile: number;
+    maxSnippetsPerFile: number;
+    candidateLanguages: string[];
+  };
+  provenance: {
+    proofPath: string;
+    proofBuiltAt: string;
+    evalPath: string;
+    sourceFiles: number;
+    sampledFiles: number;
+    scopedFiles?: number;
+    sourcesMatchProof: boolean;
+    evalMatchesProof: boolean;
+    licenseSignals?: LicenseSignals;
+  };
+  files: {
+    dir: string;
+    manifest: string;
+    json: string;
+    jsonl: string;
+    readme: string;
+    preview: string;
+    sourceScopeReceipt?: string;
+    sourceScopeJson?: string;
+    versionDir?: string;
+    versionManifest?: string;
+    versionJson?: string;
+    versionJsonl?: string;
+    versionReadme?: string;
+    versionPreview?: string;
+    versionSourceScopeReceipt?: string;
+    versionSourceScopeJson?: string;
+  };
+  snippetsPreview: KnowledgeSnippetSource[];
+};
+
 export type DatasetForge = {
   schema: string;
   datasetId: string;
@@ -667,6 +738,14 @@ export type DatasetForge = {
     train: number;
     validation: number;
   };
+  knowledgePack?: {
+    packId: string;
+    status: string;
+    snippets: number;
+    estimatedTokens: number;
+    manifest: string;
+    jsonl: string;
+  } | null;
   files: {
     dir: string;
     manifest: string;
@@ -718,6 +797,12 @@ export type ForgeRecipeModelPlan = {
     forgedExamples?: number;
     forgedTokens?: number;
     forgedPath?: string;
+    knowledgePack?: {
+      packId: string;
+      snippets: number;
+      estimatedTokens: number;
+      jsonl: string;
+    } | null;
   };
   runnerPlans: ForgeRecipeRunnerPlan[];
   gates: Array<{
@@ -747,6 +832,8 @@ export type ForgeRecipe = {
     rows: number;
     tokens: number;
     estimatedSize: string;
+    knowledgeSnippets?: number;
+    knowledgeTokens?: number;
     reviewedFiles: number;
     unreviewedFiles: number;
     licenseReviewedPercent: number;
@@ -770,6 +857,7 @@ export type ForgeRecipe = {
     evalPath: string;
     sharePath: string;
     datasetPath?: string;
+    knowledgePackPath?: string;
     modelProfilePath: string;
     modelfilePath: string;
   };
@@ -807,6 +895,7 @@ export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
   createdAt?: string;
+  sources?: KnowledgeSnippetSource[];
 };
 
 export type ChatResponse = {
@@ -815,6 +904,11 @@ export type ChatResponse = {
   requestedModelName?: string;
   fallbackUsed?: boolean;
   message: ChatMessage;
+  retrieval?: {
+    packId: string;
+    queryKeywords: string[];
+    sources: KnowledgeSnippetSource[];
+  };
   transcriptPath: string;
 };
 
@@ -857,6 +951,7 @@ export type ModelLibrary = {
     created: number;
     runnable: number;
     recipes: number;
+    knowledgeSnippets?: number;
     chatsReady: boolean;
     sourceFiles: number;
   };
@@ -905,6 +1000,7 @@ export type ProjectPayload = {
   latestEval?: EvalReport | null;
   latestShare?: ShareCard | null;
   latestDataset?: DatasetForge | null;
+  latestKnowledgePack?: KnowledgePack | null;
   latestRecipe?: ForgeRecipe | null;
   latestRecipeRun?: RecipePackRun | null;
   recipeRunHistory?: RecipePackRun[];

@@ -83,6 +83,8 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "share"), { recursive: true });
   await mkdir(join(root, "datasets"), { recursive: true });
   await mkdir(join(root, "datasets", "history"), { recursive: true });
+  await mkdir(join(root, "knowledge"), { recursive: true });
+  await mkdir(join(root, "knowledge", "history"), { recursive: true });
   await mkdir(join(root, "recipes"), { recursive: true });
   await mkdir(join(root, "recipes", "history"), { recursive: true });
   await mkdir(join(root, "exports"), { recursive: true });
@@ -2146,7 +2148,7 @@ function firstRunChecklist({ artifacts, hardware, sources, baseModel, sourceScop
     {
       label: "Dataset path",
       status: artifacts.datasetReady ? "pass" : sourceCount ? "ready" : "blocked",
-      detail: artifacts.datasetReady ? "A Dataset Forge pack already exists." : "First build should create source-grounded examples."
+      detail: artifacts.datasetReady ? "Dataset and local knowledge artifacts already exist." : "First build should create source-grounded examples and retrieval snippets."
     },
     {
       label: "Release proof",
@@ -2163,7 +2165,7 @@ function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, so
   const boundary = boundaryLabel(request.boundaryMode);
   const sourceCount = sourceScope?.includedFiles ?? sources?.totalFiles ?? 0;
   const excludedCount = sourceScope?.excludedFiles || 0;
-  const datasetStatus = artifacts.datasetReady ? "Reuse the existing Dataset Forge pack." : "Build a fresh Dataset Forge pack first.";
+  const datasetStatus = artifacts.datasetReady ? "Reuse the existing Dataset Forge and local knowledge packs." : "Build fresh Dataset Forge and local knowledge packs first.";
   const proofStatus = artifacts.proofFresh && artifacts.evalFresh ? "Proof and gates already match the source tree." : "Refresh proof and gates before sharing.";
   const localFit = hardware.modelFit?.summary || hardware.tier.detail;
   const checklist = firstRunChecklist({ artifacts, hardware, sources, baseModel, sourceScope });
@@ -2298,13 +2300,14 @@ async function buildAiBuildPlan(body = {}) {
   const latestDir = join(dataRoot, "builder", "latest");
   const versionDir = join(dataRoot, "builder", "history", planId);
   const request = normalizeBuilderRequest(body);
-  const [hardware, sources, latestModelExport, latestProof, latestEval, latestDataset, latestRecipe, ollama] = await Promise.all([
+  const [hardware, sources, latestModelExport, latestProof, latestEval, latestDataset, latestKnowledgePack, latestRecipe, ollama] = await Promise.all([
     getHardwareProfile(),
     walkSources(sourceRoot),
     getLatestModelExport(),
     getLatestProofBundle(),
     getLatestEvalReport(),
     getLatestDatasetForge(),
+    getLatestKnowledgePack(),
     getLatestForgeRecipe(),
     getOllamaStatus()
   ]);
@@ -2321,6 +2324,7 @@ async function buildAiBuildPlan(body = {}) {
     setupConfigured: existsSync(setupConfigPath),
     sourceReady: sources.totalFiles > 0,
     datasetReady: Boolean(latestDataset?.summary?.totalExamples),
+    knowledgePackReady: Boolean(latestKnowledgePack?.summary?.totalSnippets),
     modelProfileReady: Boolean(latestModelExport?.modelfilePath),
     recipeReady: Boolean(latestRecipe?.recipeId),
     proofFresh,
@@ -2367,8 +2371,10 @@ async function buildAiBuildPlan(body = {}) {
       "dataset-forge",
       "Build Dataset Forge pack",
       artifacts.datasetReady ? "pass" : artifacts.sourceReady ? "ready" : "blocked",
-      "Create JSONL examples from included source-scope files with hashes and provenance.",
-      artifacts.datasetReady ? `${latestDataset.summary.totalExamples.toLocaleString()} examples ready.` : "This is the next practical build step.",
+      "Create JSONL examples and a local knowledge pack from included source-scope files.",
+      artifacts.datasetReady
+        ? `${latestDataset.summary.totalExamples.toLocaleString()} examples and ${(latestKnowledgePack?.summary?.totalSnippets || 0).toLocaleString()} retrieval snippets ready.`
+        : "This is the next practical build step.",
       "model"
     ),
     planStep(
@@ -2718,6 +2724,7 @@ async function writeBuilderRunReceipt(run) {
     `- Proof bundle: ${run.outputs.proofPath || ""}`,
     `- Eval report: ${run.outputs.evalPath || ""}`,
     `- Dataset: ${run.outputs.datasetPath || ""}`,
+    `- Knowledge pack: ${run.outputs.knowledgePackPath || ""}`,
     `- Recipe: ${run.outputs.recipePath || ""}`,
     `- Export pack: ${run.outputs.exportDir || ""}`,
     `- Pack receipt: ${run.outputs.packRunReceiptPath || ""}`,
@@ -2777,6 +2784,7 @@ async function startBuilderRun(body = {}) {
       evalPath: "",
       sharePath: "",
       datasetPath: "",
+      knowledgePackPath: "",
       recipePath: "",
       exportDir: "",
       packRunId: "",
@@ -2881,12 +2889,13 @@ async function executeBuilderRun(runId) {
         request: activePlan.request
       });
       return {
-        summary: `${nextDataset.summary.totalExamples.toLocaleString()} examples from ${nextDataset.sourceScope?.includedFiles?.toLocaleString() || builderSourceScope.includedFiles.toLocaleString()} scoped files.`,
+        summary: `${nextDataset.summary.totalExamples.toLocaleString()} examples and ${nextDataset.knowledgePack?.snippets || 0} retrieval snippets from ${nextDataset.sourceScope?.includedFiles?.toLocaleString() || builderSourceScope.includedFiles.toLocaleString()} scoped files.`,
         artifact: nextDataset.files.jsonl,
         value: nextDataset
       };
     });
     job.run.outputs.datasetPath = dataset.files.jsonl;
+    job.run.outputs.knowledgePackPath = dataset.knowledgePack?.jsonl || "";
 
     const recipe = await runBuilderStage(job, "recipe", async () => {
       const nextRecipe = await buildForgeRecipe({
@@ -2922,7 +2931,7 @@ async function executeBuilderRun(runId) {
     activePlan = await runBuilderStage(job, "finalize", async () => {
       const finalPlan = await buildAiBuildPlan(activePlan.request || {});
       return {
-        summary: `${finalPlan.routeLabel}. ${builderSourceScope.includedFiles.toLocaleString()} scoped files, ${dataset.summary.totalExamples.toLocaleString()} examples, pack receipt ready.`,
+        summary: `${finalPlan.routeLabel}. ${builderSourceScope.includedFiles.toLocaleString()} scoped files, ${dataset.summary.totalExamples.toLocaleString()} examples, ${dataset.knowledgePack?.snippets || 0} retrieval snippets, pack receipt ready.`,
         artifact: finalPlan.files.json,
         value: finalPlan
       };
@@ -3118,6 +3127,15 @@ async function buildDatasetForge(body = {}) {
     inputPreview: example.input.slice(0, 220),
     outputPreview: example.output.slice(0, 260)
   }));
+  const knowledgePack = await buildKnowledgePack(
+    {
+      requestedBy: body.requestedBy || "ModelForge UI",
+      sourceScope: requestedScope,
+      request: body.request,
+      maxFiles
+    },
+    { createdAt, sources, sourceScope, latestProof, latestEval, latestPlan }
+  );
   const manifest = {
     schema: "modelforge.dataset_forge.v1",
     datasetId,
@@ -3158,6 +3176,16 @@ async function buildDatasetForge(body = {}) {
       train: Math.max(0, examples.length - Math.max(1, Math.round(examples.length * 0.1))),
       validation: examples.length ? Math.max(1, Math.round(examples.length * 0.1)) : 0
     },
+    knowledgePack: knowledgePack
+      ? {
+          packId: knowledgePack.packId,
+          status: knowledgePack.status,
+          snippets: knowledgePack.summary.totalSnippets,
+          estimatedTokens: knowledgePack.summary.estimatedTokens,
+          manifest: knowledgePack.files.manifest,
+          jsonl: knowledgePack.files.jsonl
+        }
+      : null,
     files: {
       dir: latestDir,
       manifest: join(latestDir, "dataset-manifest.json"),
@@ -3219,6 +3247,7 @@ async function buildDatasetForge(body = {}) {
     "- `dataset-manifest.json` - counts, source boundary, proof freshness, and file paths.",
     "- `dataset-preview.md` - small human-readable sample.",
     "- `source-scope.md` - included/excluded source files for this dataset build.",
+    "- `../knowledge/latest/knowledge-pack.jsonl` - local retrieval snippets for Model Lab chat.",
     "",
     "## Guardrails",
     "",
@@ -3262,6 +3291,393 @@ async function buildDatasetForge(body = {}) {
 
 async function getLatestDatasetForge() {
   return readJsonIfExists(join(dataRoot, "datasets", "latest", "dataset-manifest.json"));
+}
+
+function knowledgePackId(createdAt = new Date().toISOString()) {
+  return `knowledge-${createdAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function isKnowledgePackCandidate(row) {
+  if (!isDatasetForgeCandidate(row)) {
+    return false;
+  }
+  if (hasSensitiveLookingPath(row)) {
+    return false;
+  }
+  return row.sizeBytes <= 320_000;
+}
+
+const knowledgeStopWords = new Set([
+  "about",
+  "after",
+  "again",
+  "against",
+  "also",
+  "because",
+  "before",
+  "being",
+  "between",
+  "could",
+  "every",
+  "from",
+  "have",
+  "into",
+  "just",
+  "like",
+  "more",
+  "only",
+  "other",
+  "should",
+  "than",
+  "that",
+  "their",
+  "there",
+  "these",
+  "this",
+  "through",
+  "with",
+  "within",
+  "without",
+  "would",
+  "your"
+]);
+
+function extractKnowledgeKeywords(value = "", limit = 18) {
+  const counts = new Map();
+  const words = String(value || "")
+    .toLowerCase()
+    .match(/[a-z0-9][a-z0-9_-]{2,}/g) || [];
+  for (const word of words) {
+    if (knowledgeStopWords.has(word) || /^\d+$/.test(word)) continue;
+    counts.set(word, (counts.get(word) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([word]) => word);
+}
+
+function knowledgeTitleFor(row, text = "") {
+  const heading = String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => /^#{1,3}\s+\S/.test(line));
+  if (heading) {
+    return heading.replace(/^#{1,3}\s+/, "").slice(0, 120);
+  }
+  return String(row.path || "").split("/").pop() || row.path || "Local source";
+}
+
+function splitKnowledgeText(text = "", maxChars = 1400, overlap = 140) {
+  const blocks = String(text || "")
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const chunks = [];
+  let current = "";
+  for (const block of blocks.length ? blocks : [String(text || "").trim()]) {
+    if (block.length > maxChars) {
+      if (current) {
+        chunks.push(current.trim());
+        current = "";
+      }
+      for (let index = 0; index < block.length; index += maxChars - overlap) {
+        chunks.push(block.slice(index, index + maxChars).trim());
+      }
+      continue;
+    }
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length > maxChars && current) {
+      chunks.push(current.trim());
+      current = block;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+  return chunks.filter((chunk) => chunk.length >= 80).slice(0, 6);
+}
+
+function publicKnowledgeSnippet(snippet, score = undefined) {
+  return {
+    id: snippet.id,
+    sourcePath: snippet.sourcePath,
+    title: snippet.title,
+    language: snippet.language,
+    license: snippet.license,
+    hashShort: snippet.hashShort,
+    chunkIndex: snippet.chunkIndex,
+    keywords: snippet.keywords,
+    textPreview: snippet.textPreview || String(snippet.text || "").slice(0, 220),
+    ...(score === undefined ? {} : { score })
+  };
+}
+
+async function buildKnowledgePack(body = {}, context = {}) {
+  await ensureDataRoot();
+  const createdAt = context.createdAt || new Date().toISOString();
+  const packId = knowledgePackId(createdAt);
+  const latestDir = join(dataRoot, "knowledge", "latest");
+  const versionDir = join(dataRoot, "knowledge", "history", packId);
+  const maxFiles = Math.max(1, Math.min(Number(body.maxFiles || 140), 220));
+  const sources = context.sources || (await walkSources(sourceRoot));
+  const [latestProof, latestEval, latestPlan] = await Promise.all([
+    context.latestProof === undefined ? getLatestProofBundle() : context.latestProof,
+    context.latestEval === undefined ? getLatestEvalReport() : context.latestEval,
+    context.latestPlan === undefined ? getLatestBuilderPlan() : context.latestPlan
+  ]);
+  const requestedScope = normalizeSourceScopeId(body.sourceScope || body.request?.sourceScope || latestPlan?.request?.sourceScope || "whole-project");
+  const sourceScope = context.sourceScope || resolveSourceScope(sources, requestedScope);
+  const candidateRows = sourceScope.includedRows.filter(isKnowledgePackCandidate).slice(0, maxFiles);
+  const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
+  const sourcesMatchProof = Boolean(
+    latestProof &&
+      proofSourceSummary &&
+      proofSourceSummary.totalFiles === sources.totalFiles &&
+      proofSourceSummary.sampledFiles === sources.sampledFiles &&
+      proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
+  );
+  const evalMatchesProof = Boolean(latestEval && latestProof && latestEval.proofPath === latestProof.path);
+  const snippets = [];
+  const filesWithSnippets = new Set();
+  let skippedFiles = Math.max(sourceScope.includedRows.length - candidateRows.length, 0);
+
+  for (const row of candidateRows) {
+    const absolutePath = resolve(sourceRoot, row.path);
+    if (!isInsidePath(sourceRoot, absolutePath)) {
+      skippedFiles += 1;
+      continue;
+    }
+    try {
+      const text = normalizeDatasetText(await readFile(absolutePath, "utf-8"), 24_000);
+      const chunks = splitKnowledgeText(text);
+      if (!chunks.length) {
+        skippedFiles += 1;
+        continue;
+      }
+      const title = knowledgeTitleFor(row, text);
+      filesWithSnippets.add(row.path);
+      for (const chunk of chunks) {
+        const snippetId = `snippet-${String(snippets.length + 1).padStart(4, "0")}`;
+        snippets.push({
+          id: snippetId,
+          sourcePath: row.path,
+          title,
+          language: row.language,
+          license: row.license,
+          sha256: row.hash,
+          hashShort: row.hashShort,
+          sizeBytes: row.sizeBytes,
+          chunkIndex: snippets.filter((snippet) => snippet.sourcePath === row.path).length + 1,
+          kind: "source-knowledge-snippet",
+          text: chunk,
+          textPreview: chunk.slice(0, 260),
+          keywords: extractKnowledgeKeywords(`${row.path} ${title} ${chunk}`),
+          provenance: {
+            sourceRoot,
+            sourcePath: row.path,
+            sha256: row.hash,
+            license: row.license,
+            proofPath: latestProof?.path || ""
+          }
+        });
+      }
+    } catch {
+      skippedFiles += 1;
+    }
+  }
+
+  const jsonl = snippets.map((snippet) => JSON.stringify(snippet)).join("\n") + (snippets.length ? "\n" : "");
+  const totalTextBytes = snippets.reduce((total, snippet) => total + Buffer.byteLength(snippet.text, "utf-8"), 0);
+  const estimatedTokens = Math.max(0, Math.round(totalTextBytes / 4));
+  const snippetsPreview = snippets.slice(0, 8).map((snippet) => publicKnowledgeSnippet(snippet));
+  const files = {
+    dir: latestDir,
+    manifest: join(latestDir, "knowledge-manifest.json"),
+    json: join(latestDir, "knowledge-pack.json"),
+    jsonl: join(latestDir, "knowledge-pack.jsonl"),
+    readme: join(latestDir, "README.md"),
+    preview: join(latestDir, "knowledge-preview.md"),
+    sourceScopeReceipt: join(latestDir, "source-scope.md"),
+    sourceScopeJson: join(latestDir, "source-scope.json"),
+    versionDir,
+    versionManifest: join(versionDir, "knowledge-manifest.json"),
+    versionJson: join(versionDir, "knowledge-pack.json"),
+    versionJsonl: join(versionDir, "knowledge-pack.jsonl"),
+    versionReadme: join(versionDir, "README.md"),
+    versionPreview: join(versionDir, "knowledge-preview.md"),
+    versionSourceScopeReceipt: join(versionDir, "source-scope.md"),
+    versionSourceScopeJson: join(versionDir, "source-scope.json")
+  };
+  const manifest = {
+    schema: "modelforge.knowledge_pack.v1",
+    packId,
+    status: snippets.length ? "ready" : "empty",
+    createdAt,
+    sourceRoot,
+    dataRoot,
+    requestedBy: body.requestedBy || "ModelForge UI",
+    sourceScope: publicSourceScopeResolution(sourceScope),
+    summary: {
+      totalSnippets: snippets.length,
+      includedFiles: filesWithSnippets.size,
+      skippedFiles,
+      totalTextBytes,
+      estimatedTokens,
+      estimatedSize: formatBytes(Buffer.byteLength(jsonl, "utf-8")),
+      retrieval: "local keyword overlap"
+    },
+    filters: {
+      maxFiles,
+      maxBytesPerFile: 320_000,
+      maxSnippetsPerFile: 6,
+      candidateLanguages: Array.from(new Set(candidateRows.map((row) => row.language))).sort()
+    },
+    provenance: {
+      proofPath: latestProof?.path || "",
+      proofBuiltAt: latestProof?.builtAt || "",
+      evalPath: latestEval ? join(dataRoot, "evals", "latest", "eval-report.json") : "",
+      sourceFiles: sources.totalFiles,
+      sampledFiles: sources.sampledFiles,
+      scopedFiles: sourceScope.includedFiles,
+      sourcesMatchProof,
+      evalMatchesProof,
+      licenseSignals: sources.licenseSignals
+    },
+    files,
+    snippetsPreview
+  };
+  const previewMarkdown = [
+    "# Local Knowledge Pack Preview",
+    "",
+    `Pack: ${packId}`,
+    `Snippets: ${snippets.length}`,
+    `Source scope: ${sourceScope.label}`,
+    `Estimated tokens: ${estimatedTokens}`,
+    "",
+    ...snippetsPreview.flatMap((snippet) => [
+      `## ${snippet.sourcePath}`,
+      "",
+      `Title: ${snippet.title}`,
+      `Language: ${snippet.language}`,
+      `License: ${snippet.license}`,
+      `Hash: ${snippet.hashShort}`,
+      `Keywords: ${snippet.keywords.join(", ")}`,
+      "",
+      "```text",
+      snippet.textPreview,
+      "```",
+      ""
+    ])
+  ].join("\n");
+  const readme = [
+    "# ModelForge Local Knowledge Pack",
+    "",
+    `Pack: ${packId}`,
+    `Created: ${createdAt}`,
+    `Source root: ${sourceRoot}`,
+    `Source scope: ${sourceScope.label}`,
+    `Snippets: ${snippets.length}`,
+    `Estimated tokens: ${estimatedTokens}`,
+    "",
+    "## Files",
+    "",
+    "- `knowledge-pack.jsonl` - source snippets for local chat retrieval.",
+    "- `knowledge-pack.json` - the full local pack with snippets and provenance.",
+    "- `knowledge-manifest.json` - compact manifest for UI and release receipts.",
+    "- `knowledge-preview.md` - small human-readable preview.",
+    "- `source-scope.md` - included/excluded source files for this pack.",
+    "",
+    "## Guardrails",
+    "",
+    "- Retrieval stays inside the recorded source scope.",
+    "- Chat should say when the local pack does not contain an answer.",
+    "- Rebuild after changing the source tree or source-scope rules.",
+    ""
+  ].join("\n");
+  const pack = { ...manifest, snippets };
+  const versionFiles = {
+    ...files,
+    dir: versionDir,
+    manifest: files.versionManifest,
+    json: files.versionJson,
+    jsonl: files.versionJsonl,
+    readme: files.versionReadme,
+    preview: files.versionPreview,
+    sourceScopeReceipt: files.versionSourceScopeReceipt,
+    sourceScopeJson: files.versionSourceScopeJson
+  };
+  const versionManifest = { ...manifest, files: versionFiles };
+  const versionPack = { ...versionManifest, snippets };
+
+  for (const dir of [latestDir, versionDir]) {
+    await mkdir(dir, { recursive: true });
+  }
+  await writeJson(files.manifest, manifest);
+  await writeJson(files.json, pack);
+  await writeFile(files.jsonl, jsonl, "utf-8");
+  await writeFile(files.readme, readme, "utf-8");
+  await writeFile(files.preview, previewMarkdown, "utf-8");
+  await writeSourceScopeReceipt(latestDir, sourceScope, {
+    title: "Knowledge Pack Source Scope",
+    requestedBy: manifest.requestedBy
+  });
+  await writeJson(files.versionManifest, versionManifest);
+  await writeJson(files.versionJson, versionPack);
+  await writeFile(files.versionJsonl, jsonl, "utf-8");
+  await writeFile(files.versionReadme, readme, "utf-8");
+  await writeFile(files.versionPreview, previewMarkdown, "utf-8");
+  await writeSourceScopeReceipt(versionDir, sourceScope, {
+    title: "Knowledge Pack Source Scope",
+    requestedBy: manifest.requestedBy
+  });
+  return manifest;
+}
+
+async function getLatestKnowledgePack(options = {}) {
+  const manifest = await readJsonIfExists(join(dataRoot, "knowledge", "latest", "knowledge-manifest.json"));
+  if (!manifest || !options.full) {
+    return manifest;
+  }
+  return (await readJsonIfExists(manifest.files?.json || join(dataRoot, "knowledge", "latest", "knowledge-pack.json"))) || manifest;
+}
+
+function scoreKnowledgeSnippet(snippet, queryKeywords = []) {
+  if (!queryKeywords.length) return 0;
+  const keywords = new Set(snippet.keywords || []);
+  const sourcePath = String(snippet.sourcePath || "").toLowerCase();
+  const haystack = `${snippet.title || ""} ${sourcePath} ${snippet.text || ""}`.toLowerCase();
+  return queryKeywords.reduce((score, keyword) => {
+    let nextScore = score;
+    if (keywords.has(keyword)) nextScore += 4;
+    if (sourcePath.includes(keyword)) nextScore += 3;
+    if (haystack.includes(keyword)) nextScore += 1;
+    return nextScore;
+  }, 0);
+}
+
+async function retrieveKnowledgeSnippets(prompt = "", options = {}) {
+  const pack = await getLatestKnowledgePack({ full: true });
+  const snippets = Array.isArray(pack?.snippets) ? pack.snippets : [];
+  const queryKeywords = extractKnowledgeKeywords(prompt, 22);
+  if (!pack || !snippets.length) {
+    return { pack: pack || null, queryKeywords, snippets: [] };
+  }
+  const scored = snippets
+    .map((snippet) => ({ snippet, score: scoreKnowledgeSnippet(snippet, queryKeywords) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.snippet.sourcePath.localeCompare(right.snippet.sourcePath));
+  const selected = scored.slice(0, Math.max(1, Math.min(Number(options.limit || 4), 8)));
+  return {
+    pack,
+    queryKeywords,
+    snippets: selected.map((item) => ({
+      ...publicKnowledgeSnippet(item.snippet, item.score),
+      text: item.snippet.text
+    }))
+  };
 }
 
 function detectLanguage(filePath) {
@@ -4278,13 +4694,14 @@ async function buildForgeRecipe(body = {}) {
   const exportManifestPath = join(exportDir, "model-forge-package.json");
   const exportReadmePath = join(exportDir, "README.md");
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestProof, latestModelExport, latestEval, latestShare, latestDataset, ollama] = await Promise.all([
+  const [toolStatus, latestProof, latestModelExport, latestEval, latestShare, latestDataset, latestKnowledgePack, ollama] = await Promise.all([
     getToolStatus(),
     getLatestProofBundle(),
     getLatestModelExport(),
     getLatestEvalReport(),
     getLatestShareCard(),
     getLatestDatasetForge(),
+    getLatestKnowledgePack(),
     getOllamaStatus()
   ]);
   let existingVersionCount = 0;
@@ -4300,6 +4717,7 @@ async function buildForgeRecipe(body = {}) {
   const evalPath = latestEval ? join(dataRoot, "evals", "latest", "eval-report.json") : "";
   const sharePath = latestShare?.files?.json || "";
   const datasetPath = latestDataset?.files?.jsonl || "";
+  const knowledgePackPath = latestKnowledgePack?.files?.jsonl || "";
   const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
   const sourcesMatchProof = Boolean(
     latestProof &&
@@ -4327,6 +4745,13 @@ async function buildForgeRecipe(body = {}) {
       status: latestDataset ? (sourcesMatchProof ? "ready" : "stale") : sources.sampledFiles ? "pending" : "blocked",
       action: "Build JSONL examples from sampled files, retaining hashes, license labels, and source-boundary provenance.",
       artifact: datasetPath || (proofPath ? join(proofPath, "dataset-card.json") : "")
+    },
+    {
+      id: "knowledge-pack",
+      label: "Knowledge Pack",
+      status: latestKnowledgePack ? (sourcesMatchProof ? "ready" : "stale") : latestDataset ? "pending" : "blocked",
+      action: "Build local retrieval snippets from the same source scope for Model Lab chat.",
+      artifact: knowledgePackPath
     },
     {
       id: "model-profile",
@@ -4397,7 +4822,15 @@ async function buildForgeRecipe(body = {}) {
       sourceScope: latestDataset?.sourceScope || null,
       forgedExamples: latestDataset?.summary?.totalExamples || 0,
       forgedTokens: latestDataset?.summary?.estimatedTokens || 0,
-      forgedPath: datasetPath
+      forgedPath: datasetPath,
+      knowledgePack: latestKnowledgePack
+        ? {
+            packId: latestKnowledgePack.packId,
+            snippets: latestKnowledgePack.summary.totalSnippets,
+            estimatedTokens: latestKnowledgePack.summary.estimatedTokens,
+            jsonl: knowledgePackPath
+          }
+        : null
     },
     runnerPlans,
     gates: latestEval?.gates?.map((gate) => ({ id: gate.id, status: gate.status, value: gate.value })) || []
@@ -4423,6 +4856,8 @@ async function buildForgeRecipe(body = {}) {
       rows: dataset.rows,
       tokens: dataset.tokens,
       estimatedSize: dataset.estimatedSize,
+      knowledgeSnippets: latestKnowledgePack?.summary?.totalSnippets || 0,
+      knowledgeTokens: latestKnowledgePack?.summary?.estimatedTokens || 0,
       reviewedFiles: sources.reviewedFiles,
       unreviewedFiles: sources.unreviewedFiles,
       licenseReviewedPercent: dataset.reviewedPercent
@@ -4446,6 +4881,7 @@ async function buildForgeRecipe(body = {}) {
       evalPath,
       sharePath,
       datasetPath,
+      knowledgePackPath,
       modelProfilePath: latestModelExport?.profilePath || "",
       modelfilePath: latestModelExport?.modelfilePath || ""
     },
@@ -4491,6 +4927,8 @@ async function buildForgeRecipe(body = {}) {
     `- Scoped files: ${latestDataset?.sourceScope?.includedFiles || 0}`,
     `- Excluded files: ${latestDataset?.sourceScope?.excludedFiles || 0}`,
     `- Forged JSONL: ${datasetPath || "not built"}`,
+    `- Knowledge pack: ${knowledgePackPath || "not built"}`,
+    `- Retrieval snippets: ${latestKnowledgePack?.summary?.totalSnippets || 0}`,
     `- Estimated size: ${dataset.estimatedSize}`,
     `- License reviewed: ${dataset.reviewedPercent}%`,
     `- Proof source files: ${proofSourceSummary?.totalFiles || 0}`,
@@ -4525,6 +4963,7 @@ async function buildForgeRecipe(body = {}) {
     `- Proof bundle: ${proofPath || "not built"}`,
     `- Eval report: ${evalPath || "not run"}`,
     `- Dataset pack: ${datasetPath || "not built"}`,
+    `- Knowledge pack: ${knowledgePackPath || "not built"}`,
     `- Eval/proof match: ${evalMatchesProof ? "yes" : "no"}`,
     `- Modelfile: ${latestModelExport?.modelfilePath || "not exported"}`,
     `- Share card: ${sharePath || "not built"}`,
@@ -4563,6 +5002,13 @@ async function buildForgeRecipe(body = {}) {
     [latestDataset?.files?.preview, join(exportDir, "training", "dataset-preview.md"), "training/dataset-preview.md"],
     [latestDataset?.files?.sourceScopeReceipt, join(exportDir, "training", "source-scope.md"), "training/source-scope.md"],
     [latestDataset?.files?.sourceScopeJson, join(exportDir, "training", "source-scope.json"), "training/source-scope.json"],
+    [latestKnowledgePack?.files?.jsonl, join(exportDir, "knowledge", "knowledge-pack.jsonl"), "knowledge/knowledge-pack.jsonl"],
+    [latestKnowledgePack?.files?.json, join(exportDir, "knowledge", "knowledge-pack.json"), "knowledge/knowledge-pack.json"],
+    [latestKnowledgePack?.files?.manifest, join(exportDir, "knowledge", "knowledge-manifest.json"), "knowledge/knowledge-manifest.json"],
+    [latestKnowledgePack?.files?.readme, join(exportDir, "knowledge", "README.md"), "knowledge/README.md"],
+    [latestKnowledgePack?.files?.preview, join(exportDir, "knowledge", "knowledge-preview.md"), "knowledge/knowledge-preview.md"],
+    [latestKnowledgePack?.files?.sourceScopeReceipt, join(exportDir, "knowledge", "source-scope.md"), "knowledge/source-scope.md"],
+    [latestKnowledgePack?.files?.sourceScopeJson, join(exportDir, "knowledge", "source-scope.json"), "knowledge/source-scope.json"],
     ["", join(exportDir, "training", "lora-plan.json"), "training/lora-plan.json"],
     ["", join(exportDir, "runner", "adapter-contract.json"), "runner/adapter-contract.json"]
   ];
@@ -4576,7 +5022,7 @@ async function buildForgeRecipe(body = {}) {
         createdAt,
         recipeId,
         targetModel,
-        requiredInputs: ["forge-recipe.json", "training/dataset.jsonl", "training/lora-plan.json", "proof/evidence-manifest.json", "eval-report.json"],
+        requiredInputs: ["forge-recipe.json", "training/dataset.jsonl", "knowledge/knowledge-pack.jsonl", "training/lora-plan.json", "proof/evidence-manifest.json", "eval-report.json"],
         evidenceBoundary: recipe.evidence,
         freshness: recipe.freshness,
         license: publicPositioning,
@@ -4612,6 +5058,15 @@ async function buildForgeRecipe(body = {}) {
           estimatedTokens: latestDataset.summary.estimatedTokens,
           manifest: "training/dataset-manifest.json",
           jsonl: "training/dataset.jsonl"
+        }
+      : null,
+    knowledgePack: latestKnowledgePack
+      ? {
+          packId: latestKnowledgePack.packId,
+          snippets: latestKnowledgePack.summary.totalSnippets,
+          estimatedTokens: latestKnowledgePack.summary.estimatedTokens,
+          manifest: "knowledge/knowledge-manifest.json",
+          jsonl: "knowledge/knowledge-pack.jsonl"
         }
       : null,
     runner: {
@@ -4654,6 +5109,12 @@ async function buildForgeRecipe(body = {}) {
     latestDataset
       ? `- Examples: ${latestDataset.summary.totalExamples}\n- Estimated tokens: ${latestDataset.summary.estimatedTokens}\n- JSONL: training/dataset.jsonl`
       : "- Dataset pack has not been built yet.",
+    "",
+    "## Local Knowledge Pack",
+    "",
+    latestKnowledgePack
+      ? `- Snippets: ${latestKnowledgePack.summary.totalSnippets}\n- Estimated tokens: ${latestKnowledgePack.summary.estimatedTokens}\n- JSONL: knowledge/knowledge-pack.jsonl`
+      : "- Knowledge pack has not been built yet.",
     "",
     "## Evidence",
     "",
@@ -4728,6 +5189,7 @@ async function buildModelLibrary() {
     latestModelExport,
     latestRecipe,
     latestDataset,
+    latestKnowledgePack,
     latestProof,
     latestEval,
     latestExportPack,
@@ -4740,6 +5202,7 @@ async function buildModelLibrary() {
     getLatestModelExport(),
     getLatestForgeRecipe(),
     getLatestDatasetForge(),
+    getLatestKnowledgePack(),
     getLatestProofBundle(),
     getLatestEvalReport(),
     getLatestExportPack(),
@@ -4767,6 +5230,8 @@ async function buildModelLibrary() {
     libraryReceipt("Ollama create receipt", latestModelExport?.createReceipt?.outputPath || latestRecipeRun?.receiptPath, "receipt"),
     libraryReceipt("Dataset JSONL", latestDataset?.files?.jsonl, "dataset"),
     libraryReceipt("Dataset manifest", latestDataset?.files?.manifest, "dataset"),
+    libraryReceipt("Knowledge pack", latestKnowledgePack?.files?.jsonl, "knowledge"),
+    libraryReceipt("Knowledge manifest", latestKnowledgePack?.files?.manifest, "knowledge"),
     libraryReceipt("Forge recipe", latestRecipe?.files?.json, "recipe"),
     libraryReceipt("Export manifest", latestExportPack?.manifestPath, "export"),
     libraryReceipt("Export README", latestExportPack?.readmePath, "export"),
@@ -4796,6 +5261,7 @@ async function buildModelLibrary() {
       metrics: {
         examples: latestDataset?.summary?.totalExamples || latestRecipe?.dataset?.rows || 0,
         tokens: latestDataset?.summary?.estimatedTokens || latestRecipe?.dataset?.tokens || 0,
+        knowledgeSnippets: latestKnowledgePack?.summary?.totalSnippets || latestRecipe?.dataset?.knowledgeSnippets || 0,
         sourceFiles: sources.totalFiles,
         proofFresh,
         evalFresh,
@@ -4846,6 +5312,7 @@ async function buildModelLibrary() {
       metrics: {
         examples: latestRecipe.dataset?.rows || 0,
         tokens: latestRecipe.dataset?.tokens || 0,
+        knowledgeSnippets: latestRecipe.dataset?.knowledgeSnippets || latestKnowledgePack?.summary?.totalSnippets || 0,
         sourceFiles: latestRecipe.dataset?.sourceFiles || sources.totalFiles,
         proofFresh: Boolean(latestRecipe.freshness?.sourcesMatchProof),
         evalFresh: Boolean(latestRecipe.freshness?.evalMatchesProof)
@@ -4897,6 +5364,7 @@ async function buildModelLibrary() {
       created: createdCount,
       runnable: runnableCount,
       recipes: recipeCount,
+      knowledgeSnippets: latestKnowledgePack?.summary?.totalSnippets || 0,
       chatsReady: Boolean(ollama.ok && runnableCount),
       sourceFiles: sources.totalFiles
     },
@@ -5046,16 +5514,25 @@ async function chatWithOllama(body = {}) {
         .slice(-10)
         .map((message) => ({ role: message.role, content: message.content.slice(0, 6000) }))
     : [{ role: "user", content: String(body.prompt || "").slice(0, 6000) }];
+  const latestUserPrompt = [...userMessages].reverse().find((message) => message.role === "user" && message.content.trim())?.content || "";
+  const retrieval = await retrieveKnowledgeSnippets(latestUserPrompt, { limit: Number(body.retrievalLimit || 4) });
+  const retrievalLines = retrieval.snippets.length
+    ? retrieval.snippets.map((snippet, index) => [`[K${index + 1}] ${snippet.sourcePath} (${snippet.language}, ${snippet.hashShort})`, snippet.text.slice(0, 1200)].join("\n")).join("\n\n")
+    : "";
   const contextMessage = {
     role: "system",
     content: [
       "You are the ModelForge local smoke-test assistant.",
       "Stay inside the evidence recorded by the local proof bundle.",
       "Recognized evidence types include source hashes, source inventory, RepoMori source packs, AgentLedger run receipts, Ollama Modelfiles, model cards, dataset cards, and eval reports.",
-      "If the user asks for evidence, name one of those evidence types. Do not invent unrelated formats or claims."
+      "If the user asks for evidence, name one of those evidence types. Do not invent unrelated formats or claims.",
+      retrieval.pack
+        ? "A local knowledge pack is available. Use the snippets below when they are relevant, cite source paths, and say when the pack does not contain enough evidence."
+        : "No local knowledge pack has been built yet, so keep answers limited to model/profile evidence.",
+      retrievalLines ? `Local knowledge snippets:\n${retrievalLines}` : "No matching local knowledge snippets were found for this prompt."
     ].join(" ")
   };
-  const messages = userMessages[0]?.role === "system" ? userMessages : [contextMessage, ...userMessages];
+  const messages = [contextMessage, ...userMessages];
 
   if (!modelName) {
     throw new Error("No Ollama model is available for chat.");
@@ -5109,7 +5586,12 @@ async function chatWithOllama(body = {}) {
     modelName: activeModel,
     requestedModelName: modelName,
     fallbackUsed,
-    messages: [...userMessages, assistantMessage]
+    retrieval: {
+      packId: retrieval.pack?.packId || "",
+      queryKeywords: retrieval.queryKeywords,
+      sources: retrieval.snippets.map(({ text, ...snippet }) => snippet)
+    },
+    messages: [...userMessages, { ...assistantMessage, sources: retrieval.snippets.map(({ text, ...snippet }) => snippet) }]
   };
   await writeJson(join(dataRoot, "chats", "latest-chat.json"), transcript);
   return {
@@ -5117,7 +5599,8 @@ async function chatWithOllama(body = {}) {
     modelName: activeModel,
     requestedModelName: modelName,
     fallbackUsed,
-    message: assistantMessage,
+    message: { ...assistantMessage, sources: retrieval.snippets.map(({ text, ...snippet }) => snippet) },
+    retrieval: transcript.retrieval,
     transcriptPath: join(dataRoot, "chats", "latest-chat.json")
   };
 }
@@ -5183,13 +5666,14 @@ async function getOllamaStatus() {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, builderRunHistory] = await Promise.all([
+  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestKnowledgePack, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, builderRunHistory] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
     getLatestEvalReport(),
     getLatestShareCard(),
     getLatestDatasetForge(),
+    getLatestKnowledgePack(),
     getLatestForgeRecipe(),
     getLatestRecipeRun(),
     getRecipeRunHistory(),
@@ -5223,6 +5707,7 @@ async function getProjectPayload() {
     latestEval,
     latestShare,
     latestDataset,
+    latestKnowledgePack,
     latestRecipe,
     latestRecipeRun,
     recipeRunHistory,

@@ -48,6 +48,7 @@ async function main() {
   ]);
   const evalReport = project.latestEval || null;
   const dataset = project.latestDataset || datasetResponse.dataset || null;
+  const knowledgePack = project.latestKnowledgePack || null;
   const exportPack = exportPackResponse.pack || null;
   const modelLibrary = modelLibraryResponse.library || null;
   const projectRegistry = projectRegistryResponse.registry || null;
@@ -197,6 +198,22 @@ async function main() {
         : "dataset has no source scope"
     ),
     check(
+      "Local knowledge pack",
+      Boolean(
+        knowledgePack?.schema === "modelforge.knowledge_pack.v1" &&
+          knowledgePack.summary?.totalSnippets > 0 &&
+          dataset?.knowledgePack?.packId === knowledgePack.packId
+      ),
+      knowledgePack ? `${knowledgePack.summary.totalSnippets} snippets, ${knowledgePack.summary.estimatedTokens} tokens` : "no knowledge pack"
+    ),
+    check(
+      "Knowledge source scope",
+      Boolean(knowledgePack?.sourceScope?.id && knowledgePack.sourceScope.id === planScope && knowledgePack.files?.sourceScopeReceipt),
+      knowledgePack?.sourceScope
+        ? `${knowledgePack.sourceScope.label}: ${knowledgePack.sourceScope.includedFiles} included, ${knowledgePack.sourceScope.excludedFiles} excluded, receipt=${knowledgePack.files?.sourceScopeReceipt || "missing"}`
+        : "knowledge pack has no source scope"
+    ),
+    check(
       "Export dataset artifacts",
       Boolean(
         exportPack?.copiedArtifacts?.includes("training/dataset.jsonl") &&
@@ -205,6 +222,15 @@ async function main() {
           exportPack?.copiedArtifacts?.includes("training/source-scope.json")
       ),
       exportPack ? `${exportPack.artifactCount} artifacts in ${exportPack.recipeId}` : "no export pack"
+    ),
+    check(
+      "Export knowledge artifacts",
+      Boolean(
+        exportPack?.copiedArtifacts?.includes("knowledge/knowledge-pack.jsonl") &&
+          exportPack?.copiedArtifacts?.includes("knowledge/knowledge-manifest.json") &&
+          exportPack?.copiedArtifacts?.includes("knowledge/source-scope.md")
+      ),
+      exportPack ? `${exportPack.copiedArtifacts?.filter((artifact) => artifact.startsWith("knowledge/")).length || 0} knowledge artifacts in ${exportPack.recipeId}` : "no export pack"
     ),
     check(
       "Export pack run receipt",

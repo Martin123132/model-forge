@@ -309,6 +309,10 @@ export function ModelLab({
             <strong>{modelLibrary?.summary.sourceFiles.toLocaleString() || "0"}</strong>
           </div>
           <div>
+            <span>Snippets</span>
+            <strong>{modelLibrary?.summary.knowledgeSnippets?.toLocaleString() || "0"}</strong>
+          </div>
+          <div>
             <span>Receipts</span>
             <strong>{modelLibrary?.receipts.length.toLocaleString() || "0"}</strong>
           </div>
@@ -726,6 +730,16 @@ export function ModelLab({
                 <div className={`chat-bubble ${message.role}`} key={`${message.role}-${index}`}>
                   <span>{message.role}</span>
                   <p>{message.content}</p>
+                  {message.sources?.length ? (
+                    <div className="chat-source-list" aria-label="Answer sources">
+                      {message.sources.slice(0, 4).map((source) => (
+                        <span key={`${source.id}-${source.sourcePath}`} title={`${source.title} / ${source.hashShort}`}>
+                          <ShieldCheck size={11} />
+                          <strong>{source.sourcePath}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ))
             ) : (

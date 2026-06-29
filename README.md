@@ -55,11 +55,13 @@ artifacts from code and project folders.
 - Estimates which model sizes are comfortable, possible, tight, or unrealistic
   for the current machine before a user starts building.
 - Runs **Build From Plan** as one guided job: source boundary, Ollama profile,
-  proof gates, Dataset Forge, recipe, export pack, receipts, and a refreshed
-  plan at the end.
+  proof gates, Dataset Forge, local knowledge pack, recipe, export pack,
+  receipts, and a refreshed plan at the end.
 - Builds Dataset Forge JSONL examples from the selected source scope, with source
   paths, hashes, license labels, proof-bundle provenance, and include/exclude
   receipts.
+- Builds a local RAG-style knowledge pack from the same source scope, then uses
+  it in Model Lab chat with source paths shown under answers.
 - Reuses local Ollama models and exports an Ollama `Modelfile`.
 - Runs release gates for source hashes, proof freshness, receipts, license
   review, PII filename sweeps, model profile creation, and tool availability.
@@ -70,7 +72,8 @@ artifacts from code and project folders.
 - Runs exported Ollama packs back from the export folder and stores receipts so
   the pack proves it can recreate the local target.
 - Shows a **Your AIs** library with forged targets, base models, recipes,
-  receipts, source evidence, and a side-by-side base-vs-forged test playground.
+  receipts, source evidence, answer sources, and a side-by-side
+  base-vs-forged test playground.
 - Saves multiple local AI projects in a local registry, with separate source
   folders, data roots, model names, and source include/exclude rules.
 
@@ -266,7 +269,8 @@ and let ModelForge show the route your current machine can support.
 
 Then open Setup. Confirm the source folder, data root, Ollama model path,
 Python command, base model, and target model, then run the first setup pass to
-build proof, gates, share card, Dataset Forge JSONL, and recipe artifacts.
+build proof, gates, share card, Dataset Forge JSONL, local knowledge pack, and
+recipe artifacts.
 
 After setup, or after a successful **Build From Plan** run:
 
@@ -274,9 +278,10 @@ After setup, or after a successful **Build From Plan** run:
 2. Review **Your AIs** to see created targets, recipes, receipts, and source
    evidence.
 3. Use **Test side by side** to compare the base model against the forged target.
-4. Use **Dataset Forge** to rebuild or download `dataset.jsonl`.
-5. Build a **Forge Recipe** to package the dataset, proof, eval report, Ollama
-   profile, LoRA/QLoRA plan, and runner contract.
+4. Use **Dataset Forge** to rebuild or download `dataset.jsonl`; the same build
+   refreshes the local knowledge pack used by chat.
+5. Build a **Forge Recipe** to package the dataset, knowledge pack, proof, eval
+   report, Ollama profile, LoRA/QLoRA plan, and runner contract.
 6. Enable **Allow Ollama create**, then run the export pack to produce a receipt
    proving the exported folder can recreate the local model target.
 
@@ -343,6 +348,8 @@ npm.cmd run qa:readme
   eval, recipe, and export flow
 - `.modelforge-data/builder/` - ignored local build-plan artifacts
 - `.modelforge-data/datasets/` - ignored local Dataset Forge JSONL packs
+- `.modelforge-data/knowledge/` - ignored local retrieval snippets for Model Lab
+  chat
 - `scripts/dev.mjs` - D-drive-friendly local dev runner
 - `scripts/qa-smoke.mjs` - public alpha smoke gate
 - `docs/screenshots/` - README screenshots
@@ -354,7 +361,8 @@ npm.cmd run qa:readme
   folder.
 - LoRA/QLoRA runner execution from the existing recipe export and adapter-pack
   route.
-- Stronger dataset review queues, chunk controls, and license explainability.
+- Stronger dataset and knowledge-pack review queues, chunk controls, and license
+  explainability.
 - Shareable release pages backed by proof-bundle artifacts.
 - CI-friendly proof checks for public repository releases.
 
