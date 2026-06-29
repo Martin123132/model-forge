@@ -369,6 +369,52 @@ export type SetupCheck = {
   fix: string;
 };
 
+export type SetupDoctorCheck = {
+  id: string;
+  label: string;
+  status: SetupCheckStatus;
+  value: string;
+  detail: string;
+  repairActionId?: string;
+};
+
+export type SetupDoctorAction = {
+  id: string;
+  label: string;
+  kind: "apply-config" | "manual" | string;
+  tone: "primary" | "warning" | "secondary" | string;
+  detail: string;
+  configPatch?: Partial<SetupConfig>;
+  command?: string;
+};
+
+export type SetupDoctor = {
+  schema: string;
+  createdAt: string;
+  status: "ready" | "needs-attention" | "blocked" | string;
+  title: string;
+  summary: string;
+  preferredDrive: string;
+  recommended: {
+    dataRoot: string;
+    ollamaModels: string;
+  };
+  launch: {
+    available: boolean;
+    scriptPath: string;
+    command: string;
+  };
+  hardwareSummary: {
+    tier: string;
+    cpu: string;
+    ram: string;
+    gpu: string;
+    diskFree: string;
+  };
+  checks: SetupDoctorCheck[];
+  actions: SetupDoctorAction[];
+};
+
 export type SetupState = {
   schema: string;
   configured: boolean;
@@ -386,6 +432,7 @@ export type SetupState = {
     evalFresh: boolean;
     recipeReady: boolean;
   };
+  doctor?: SetupDoctor;
   checks: SetupCheck[];
 };
 

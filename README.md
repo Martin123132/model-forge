@@ -40,6 +40,9 @@ ModelForge is a source-available, local-first cockpit for building model-ready
 artifacts from code and project folders.
 
 - Scans a local repo or folder into a source inventory with SHA-256 hashes.
+- Provides a First-Run Doctor that checks launch readiness, source folders,
+  Python, Ollama, GPU/RAM, disk space, and D-drive storage preference before a
+  non-developer starts building.
 - Creates hardware-aware build plans from plain-English intent, starter
   templates, AI type, knowledge source, source scope, answer boundaries, CPU,
   RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and
@@ -68,6 +71,22 @@ artifacts from code and project folders.
 This alpha is intentionally focused on the forge layer: source boundary,
 training-ready packs, recipes, evidence, local model profiles, and release
 gates. It is not a full foundation model trainer yet.
+
+## First-Run Doctor
+
+The Setup workspace now includes a First-Run Doctor for the v1 install path. It
+turns raw machine checks into a short readiness verdict:
+
+- Whether `Start-ModelForge.cmd` exists for double-click Windows launch.
+- Whether the source folder is readable.
+- Whether generated data and Ollama model storage should move to `D:\AI`.
+- Whether there is enough free disk space for local model pulls and export packs.
+- Whether Python, Ollama, an installed local model, CPU/RAM, GPU/VRAM, and the
+  current model folder are ready enough for the recommended build route.
+
+When D: is available and ModelForge is still pointed at another drive, Setup
+shows a **Use D-drive storage** repair button. That updates the data root and
+Ollama model path without asking the user to edit environment variables by hand.
 
 ## Builder Wizard
 
@@ -166,6 +185,17 @@ cd model-forge
 npm.cmd install
 npm.cmd run dev
 ```
+
+On Windows, the non-developer path is to double-click:
+
+```text
+Start-ModelForge.cmd
+```
+
+The launcher prefers `D:\AI\ModelForge\.modelforge-data` for ModelForge data and
+`D:\AI\Ollama\models` for Ollama model files when D: exists. It installs local
+Node packages on first run, starts the API and web app, and opens
+`http://127.0.0.1:5178/`.
 
 The dev command starts both services:
 

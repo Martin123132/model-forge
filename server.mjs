@@ -206,6 +206,77 @@ function currentSetupConfig() {
   };
 }
 
+async function getWindowsDriveInfo(letter = "D") {
+  const driveName = String(letter || "D").replace(/[^a-z]/gi, "").slice(0, 1).toUpperCase() || "D";
+  if (process.platform !== "win32") {
+    return {
+      available: false,
+      name: driveName,
+      root: "",
+      freeBytes: 0,
+      free: "Unavailable",
+      usedBytes: 0,
+      used: "Unavailable",
+      detail: "Windows drive checks only run on Windows."
+    };
+  }
+
+  const script = [
+    `$drive = Get-PSDrive -Name '${driveName}' -ErrorAction SilentlyContinue;`,
+    "if ($drive) { [pscustomobject]@{ Name=$drive.Name; Root=$drive.Root; Free=$drive.Free; Used=$drive.Used } | ConvertTo-Json -Compress }"
+  ].join(" ");
+  const result = await runCommand("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { timeout: 6000 });
+  const parsed = result.ok && result.stdout.trim() ? parseJsonLoose(result.stdout) : null;
+  if (!parsed) {
+    return {
+      available: false,
+      name: driveName,
+      root: `${driveName}:\\`,
+      freeBytes: 0,
+      free: "Unavailable",
+      usedBytes: 0,
+      used: "Unavailable",
+      detail: `${driveName}: is not available.`
+    };
+  }
+
+  const freeBytes = Math.max(0, Number(parsed.Free || 0));
+  const usedBytes = Math.max(0, Number(parsed.Used || 0));
+  return {
+    available: true,
+    name: String(parsed.Name || driveName),
+    root: String(parsed.Root || `${driveName}:\\`),
+    freeBytes,
+    free: formatBytes(freeBytes),
+    usedBytes,
+    used: formatBytes(usedBytes),
+    detail: `${driveName}: has ${formatBytes(freeBytes)} free.`
+  };
+}
+
+async function getPreferredStoragePlan() {
+  const dDrive = await getWindowsDriveInfo("D");
+  const useDDrive = process.platform === "win32" && dDrive.available;
+  const baseRoot = useDDrive ? join(dDrive.root, "AI") : projectRoot;
+  return {
+    schema: "modelforge.preferred_storage.v1",
+    preferredDrive: useDDrive ? "D:" : process.platform === "win32" ? "project folder" : "current system",
+    dDrive,
+    canUsePreferred: useDDrive,
+    recommendedDataRoot: useDDrive ? join(baseRoot, "ModelForge", ".modelforge-data") : defaultDataRoot,
+    recommendedOllamaModels: useDDrive ? join(baseRoot, "Ollama", "models") : process.env.OLLAMA_MODELS || setupConfig.ollamaModels || "",
+    detail: useDDrive ? "D: is available, so ModelForge can keep heavy artifacts away from C:." : "D: was not detected, so ModelForge will use the configured project data root."
+  };
+}
+
+function driveLetterOf(pathValue = "") {
+  return String(pathValue || "").match(/^([a-z]):\\/i)?.[1]?.toUpperCase() || "";
+}
+
+function isWindowsPathOnDrive(pathValue = "", driveName = "D") {
+  return driveLetterOf(pathValue) === String(driveName || "").replace(/[^a-z]/gi, "").slice(0, 1).toUpperCase();
+}
+
 async function pathCheck(path, { shouldBeDirectory = true, create = false } = {}) {
   try {
     if (create) {
@@ -236,13 +307,204 @@ function setupCheck(id, label, ok, value, detail, fix = "") {
   };
 }
 
+function setupDoctorCheck(id, label, status, value, detail, repairActionId = "") {
+  return {
+    id,
+    label,
+    status,
+    value,
+    detail,
+    repairActionId
+  };
+}
+
+function setupDoctorStatus(checks = []) {
+  if (checks.some((check) => check.status === "fail")) return "blocked";
+  if (checks.some((check) => check.status === "warn")) return "needs-attention";
+  return "ready";
+}
+
+function setupDoctorTitle(status) {
+  if (status === "ready") return "Ready to build locally";
+  if (status === "blocked") return "Repair before building";
+  return "Almost ready";
+}
+
+async function getPythonStatus() {
+  const result = await runCommand(pythonCommand, ["--version"], { timeout: 5000 });
+  const detail = result.stdout.trim() || result.stderr.trim() || result.error;
+  return {
+    ok: result.ok,
+    label: result.ok ? detail || "Python available" : "Missing",
+    detail: result.ok ? `${pythonCommand} responded.` : detail || `${pythonCommand} did not respond.`
+  };
+}
+
+function buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus, pythonStatus, ollama, hardware, preferredStorage }) {
+  const launcherPath = join(projectRoot, "Start-ModelForge.cmd");
+  const recommended = {
+    dataRoot: preferredStorage.recommendedDataRoot,
+    ollamaModels: preferredStorage.recommendedOllamaModels
+  };
+  const dataOnPreferredDrive = !preferredStorage.canUsePreferred || isWindowsPathOnDrive(config.dataRoot, "D");
+  const configuredModelsRoot = config.ollamaModels || ollama.modelsRoot || "";
+  const modelsOnPreferredDrive = !preferredStorage.canUsePreferred || !configuredModelsRoot || isWindowsPathOnDrive(configuredModelsRoot, "D");
+  const hasEnoughDisk = hardware.disk.freeBytes >= 30 * 1024 * 1024 * 1024;
+  const hasMinimumDisk = hardware.disk.freeBytes >= 10 * 1024 * 1024 * 1024 || hardware.disk.freeBytes === 0;
+  const memoryGb = hardware.memory.totalBytes / 1024 / 1024 / 1024;
+  const hardwareOk = hardware.tier.canRunQuantized || memoryGb >= 16 || hardware.gpu.detected;
+  const ollamaReady = toolStatus.ollama.ok && ollama.ok;
+  const ollamaHasModels = ollama.models.length > 0;
+
+  const actions = [];
+  if (preferredStorage.canUsePreferred && (!dataOnPreferredDrive || !modelsOnPreferredDrive)) {
+    actions.push({
+      id: "use-d-drive-storage",
+      label: "Use D-drive storage",
+      kind: "apply-config",
+      tone: "primary",
+      detail: "Move future ModelForge data and Ollama model storage to D:\\AI.",
+      configPatch: {
+        dataRoot: recommended.dataRoot,
+        ollamaModels: recommended.ollamaModels
+      }
+    });
+  }
+  if (!ollamaReady) {
+    actions.push({
+      id: "start-ollama",
+      label: "Start Ollama",
+      kind: "manual",
+      tone: "warning",
+      detail: "Open Ollama, then press Recheck. ModelForge will detect it automatically."
+    });
+  } else if (!ollamaHasModels) {
+    actions.push({
+      id: "pull-small-model",
+      label: "Pull a small model",
+      kind: "manual",
+      tone: "warning",
+      detail: "Install a compact base such as llama3.2:3b, then press Recheck.",
+      command: "ollama pull llama3.2:3b"
+    });
+  }
+  if (!pythonStatus.ok) {
+    actions.push({
+      id: "set-python",
+      label: "Set Python",
+      kind: "manual",
+      tone: "warning",
+      detail: "Install Python or point ModelForge at the bundled .venv Python path."
+    });
+  }
+
+  const checks = [
+    setupDoctorCheck(
+      "launcher",
+      "One-click launcher",
+      existsSync(launcherPath) ? "pass" : "warn",
+      existsSync(launcherPath) ? "Available" : "Missing",
+      existsSync(launcherPath) ? "Start-ModelForge.cmd can launch the local API, web app, and browser." : "Add the Windows launcher before calling this non-dev ready."
+    ),
+    setupDoctorCheck(
+      "source-folder",
+      "Source folder",
+      sourceCheck.ok && Boolean(sources?.totalFiles) ? "pass" : "fail",
+      `${sources?.totalFiles || 0} files`,
+      sourceCheck.ok ? "ModelForge can read the selected source folder." : sourceCheck.detail
+    ),
+    setupDoctorCheck(
+      "data-drive",
+      "Storage location",
+      dataCheck.ok && dataOnPreferredDrive ? "pass" : dataCheck.ok ? "warn" : "fail",
+      config.dataRoot,
+      dataOnPreferredDrive ? preferredStorage.detail : "D: is available; use it for generated datasets, proofs, exports, and run logs.",
+      preferredStorage.canUsePreferred ? "use-d-drive-storage" : ""
+    ),
+    setupDoctorCheck(
+      "disk-space",
+      "Disk space",
+      hasEnoughDisk ? "pass" : hasMinimumDisk ? "warn" : "fail",
+      hardware.disk.free,
+      hasEnoughDisk ? "Enough free space for v1 local builds." : "Keep at least 30 GB free for model pulls, datasets, proof bundles, and exports."
+    ),
+    setupDoctorCheck(
+      "python",
+      "Python",
+      pythonStatus.ok ? "pass" : "warn",
+      pythonStatus.label,
+      pythonStatus.detail,
+      pythonStatus.ok ? "" : "set-python"
+    ),
+    setupDoctorCheck(
+      "ollama",
+      "Ollama",
+      ollamaReady && ollamaHasModels ? "pass" : ollamaReady ? "warn" : "fail",
+      ollamaReady ? `${ollama.models.length} model${ollama.models.length === 1 ? "" : "s"}` : "Not running",
+      ollamaReady ? (ollamaHasModels ? `${ollama.selectedModel || "A local model"} is available.` : "Ollama is running, but no local model is installed.") : ollama.error || toolStatus.ollama.detail,
+      ollamaReady ? (ollamaHasModels ? "" : "pull-small-model") : "start-ollama"
+    ),
+    setupDoctorCheck(
+      "ollama-models",
+      "Model folder",
+      modelsOnPreferredDrive ? "pass" : "warn",
+      configuredModelsRoot || "Default",
+      modelsOnPreferredDrive ? "Model storage is aligned with the current storage plan." : "D: is available; model pulls should avoid C: when possible.",
+      preferredStorage.canUsePreferred ? "use-d-drive-storage" : ""
+    ),
+    setupDoctorCheck(
+      "hardware-fit",
+      "Hardware fit",
+      hardwareOk ? "pass" : "warn",
+      hardware.tier.label,
+      hardware.modelFit?.summary || hardware.tier.detail
+    )
+  ];
+
+  const status = setupDoctorStatus(checks);
+  const blocking = checks.filter((check) => check.status === "fail").length;
+  const warnings = checks.filter((check) => check.status === "warn").length;
+
+  return {
+    schema: "modelforge.first_run_doctor.v1",
+    createdAt: new Date().toISOString(),
+    status,
+    title: setupDoctorTitle(status),
+    summary:
+      status === "ready"
+        ? "This machine is ready for the guided local build path."
+        : status === "blocked"
+          ? `${blocking} blocker${blocking === 1 ? "" : "s"} must be repaired before a non-dev first run.`
+          : `${warnings} item${warnings === 1 ? "" : "s"} should be reviewed before calling this v1-ready.`,
+    preferredDrive: preferredStorage.preferredDrive,
+    recommended,
+    launch: {
+      available: existsSync(launcherPath),
+      scriptPath: launcherPath,
+      command: "Start-ModelForge.cmd"
+    },
+    hardwareSummary: {
+      tier: hardware.tier.label,
+      cpu: `${hardware.cpu.threads} threads`,
+      ram: hardware.memory.total,
+      gpu: hardware.gpu.detected ? hardware.gpu.totalVram : "No GPU detected",
+      diskFree: hardware.disk.free
+    },
+    checks,
+    actions
+  };
+}
+
 async function getSetupState() {
   const config = currentSetupConfig();
-  const [sourceCheck, dataCheck, toolStatus, ollama, latestProof, latestEval, latestRecipe] = await Promise.all([
+  const preferredStorage = await getPreferredStoragePlan();
+  const [sourceCheck, dataCheck, toolStatus, pythonStatus, ollama, hardware, latestProof, latestEval, latestRecipe] = await Promise.all([
     pathCheck(sourceRoot),
     pathCheck(dataRoot, { create: true }),
     getToolStatus(),
+    getPythonStatus(),
     getOllamaStatus(),
+    getHardwareProfile(),
     getLatestProofBundle(),
     getLatestEvalReport(),
     getLatestForgeRecipe()
@@ -280,6 +542,7 @@ async function getSetupState() {
       evalFresh,
       recipeReady
     },
+    doctor: buildSetupDoctor({ config, sourceCheck, dataCheck, sources, toolStatus, pythonStatus, ollama, hardware, preferredStorage }),
     checks: [
       setupCheck("source-root", "Source folder", sourceCheck.ok && Boolean(sources?.totalFiles), `${sources?.totalFiles || 0} files`, sourceCheck.ok ? "Folder is readable." : sourceCheck.detail, "Choose a folder that exists on this machine."),
       setupCheck("data-root", "Data root", dataCheck.ok, dataRoot, dataCheck.detail, "Use a writable folder, ideally on D:."),
@@ -307,6 +570,9 @@ async function saveSetupConfig(body = {}) {
   }
   applySetupConfig(nextConfig);
   await ensureDataRoot();
+  if (nextConfig.ollamaModels) {
+    await mkdir(nextConfig.ollamaModels, { recursive: true });
+  }
   await mkdir(setupConfigDir, { recursive: true });
   await writeJson(setupConfigPath, nextConfig);
   return getSetupState();

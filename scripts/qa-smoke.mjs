@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import process from "node:process";
 
 const apiRoot = (process.env.MODEL_FORGE_API_URL || "http://127.0.0.1:4188").replace(/\/$/, "");
@@ -34,9 +35,10 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, ollama, exportPackResponse, datasetResponse] = await Promise.all([
+  const [project, sources, setup, ollama, exportPackResponse, datasetResponse] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
+    getJson("/api/setup"),
     getJson("/api/ollama/status"),
     getJson("/api/export/latest"),
     getJson("/api/dataset/latest")
@@ -68,6 +70,21 @@ async function main() {
   const checks = [
     check("Project API", project.name && project.status, `${project.name || "unknown"} / ${project.status || "unknown"}`),
     check("Source inventory", sources.totalFiles > 0 && sources.rows?.length > 0, `${sources.totalFiles || 0} files, ${sources.rows?.length || 0} rows`),
+    check(
+      "First-run doctor",
+      Boolean(setup.doctor?.schema === "modelforge.first_run_doctor.v1" && setup.doctor?.checks?.length >= 6),
+      setup.doctor ? `${setup.doctor.status}: ${setup.doctor.title}; ${setup.doctor.checks?.length || 0} checks` : "missing doctor"
+    ),
+    check(
+      "Windows launcher",
+      existsSync("Start-ModelForge.cmd") && Boolean(setup.doctor?.launch?.available),
+      setup.doctor?.launch?.scriptPath || "Start-ModelForge.cmd missing"
+    ),
+    check(
+      "Storage preference",
+      Boolean(setup.doctor?.recommended?.dataRoot),
+      setup.doctor ? `${setup.doctor.preferredDrive}: ${setup.doctor.recommended.dataRoot}` : "no storage recommendation"
+    ),
     check("Tool availability", allToolsAvailable, Object.entries(tools).map(([key, value]) => `${key}=${value.label}`).join(", ")),
     check("Ollama status", ollama.ok, ollama.ok ? `${ollama.selectedModel} running` : ollama.error || "not available", "warn"),
     check(

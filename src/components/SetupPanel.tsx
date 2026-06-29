@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Database, FolderCog, HardDrive, LoaderCircle, Play, RefreshCw, Save, TerminalSquare } from "lucide-react";
-import type { OllamaStatus, ProjectPayload, SetupCheck, SetupConfig, SetupState } from "../lib/types";
+import { AlertTriangle, CheckCircle2, Database, FolderCog, HardDrive, LoaderCircle, Play, RefreshCw, Save, TerminalSquare, Wrench } from "lucide-react";
+import type { OllamaStatus, ProjectPayload, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 
 type SetupPanelProps = {
@@ -25,12 +25,30 @@ function emptyConfig(): SetupConfig {
   };
 }
 
-function checkStatus(check?: SetupCheck) {
+function checkStatus(check?: { status?: string }) {
   const status = check?.status || "ready";
   if (status === "pass") return "pass";
   if (status === "fail" || status === "failed") return "fail";
   if (status === "warn" || status === "warning") return "warn";
   return "ready";
+}
+
+function doctorStatusTone(status = "") {
+  if (status === "ready") return "pass";
+  if (status === "blocked") return "fail";
+  return "warn";
+}
+
+function DoctorCheckRow({ check }: { check: SetupDoctorCheck }) {
+  const status = checkStatus(check);
+  return (
+    <div className={`setup-doctor-check ${status}`}>
+      <CheckCircle2 size={15} />
+      <span>{check.label}</span>
+      <strong title={check.value}>{check.value}</strong>
+      <p>{check.detail}</p>
+    </div>
+  );
 }
 
 function CheckCard({ check }: { check: SetupCheck }) {
@@ -42,6 +60,7 @@ function CheckCard({ check }: { check: SetupCheck }) {
         <span>{check.label}</span>
         <strong>{check.value}</strong>
         <p>{check.detail}</p>
+        {status !== "pass" && check.fix ? <em>{check.fix}</em> : null}
       </div>
     </article>
   );
@@ -63,9 +82,20 @@ export function SetupPanel({ setup, project, ollama, saving, running, onRefresh,
   const proofFresh = setup?.summary.proofFresh;
   const evalFresh = setup?.summary.evalFresh;
   const recipeReady = setup?.summary.recipeReady;
+  const doctor = setup?.doctor;
 
   function updateConfig(key: keyof SetupConfig, value: string) {
     setConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyDoctorAction(action: SetupDoctorAction) {
+    if (action.kind !== "apply-config" || !action.configPatch) return;
+    const repairedConfig = {
+      ...config,
+      ...action.configPatch
+    };
+    setConfig(repairedConfig);
+    onSave(repairedConfig);
   }
 
   return (
@@ -86,6 +116,72 @@ export function SetupPanel({ setup, project, ollama, saving, running, onRefresh,
           </button>
         </div>
       </div>
+
+      {doctor ? (
+        <section className={`setup-doctor setup-doctor-${doctor.status}`} aria-labelledby="first-run-doctor-title">
+          <div className="setup-doctor-heading">
+            <div>
+              <span>First-run Doctor</span>
+              <h3 id="first-run-doctor-title">{doctor.title}</h3>
+              <p>{doctor.summary}</p>
+            </div>
+            <StatusPill status={doctorStatusTone(doctor.status)} label={doctor.status === "ready" ? "Ready" : doctor.status === "blocked" ? "Repair" : "Review"} />
+          </div>
+
+          <div className="setup-doctor-facts" aria-label="Machine summary">
+            <div>
+              <span>Preferred storage</span>
+              <strong>{doctor.preferredDrive}</strong>
+            </div>
+            <div>
+              <span>Disk free</span>
+              <strong>{doctor.hardwareSummary.diskFree}</strong>
+            </div>
+            <div>
+              <span>Hardware</span>
+              <strong>{doctor.hardwareSummary.tier}</strong>
+            </div>
+            <div>
+              <span>Launcher</span>
+              <strong>{doctor.launch.available ? doctor.launch.command : "Missing"}</strong>
+            </div>
+          </div>
+
+          {doctor.actions.length ? (
+            <div className="setup-doctor-actions" aria-label="Repair actions">
+              {doctor.actions.map((action) =>
+                action.kind === "apply-config" ? (
+                  <button
+                    className={`setup-repair-button ${action.tone === "primary" ? "primary" : ""}`}
+                    disabled={saving || running}
+                    key={action.id}
+                    type="button"
+                    onClick={() => applyDoctorAction(action)}
+                  >
+                    <Wrench size={14} />
+                    <span>{action.label}</span>
+                  </button>
+                ) : (
+                  <div className="setup-repair-note" key={action.id}>
+                    <AlertTriangle size={14} />
+                    <div>
+                      <strong>{action.label}</strong>
+                      <span>{action.detail}</span>
+                      {action.command ? <code>{action.command}</code> : null}
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+          ) : null}
+
+          <div className="setup-doctor-checks">
+            {doctor.checks.map((check) => (
+              <DoctorCheckRow check={check} key={check.id} />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="setup-summary-strip">
         <div>
