@@ -7,10 +7,15 @@ import { fileURLToPath } from "node:url";
 import { execFile, spawn } from "node:child_process";
 
 const projectRoot = resolve(fileURLToPath(new URL(".", import.meta.url)));
-const dataRoot = resolve(process.env.MODEL_FORGE_DATA_ROOT || join(projectRoot, ".modelforge-data"));
-const sourceRoot = resolve(process.env.MODEL_FORGE_SOURCE_ROOT || projectRoot);
+const setupConfigDir = join(projectRoot, ".modelforge-local");
+const setupConfigPath = join(setupConfigDir, "setup.json");
+const defaultDataRoot = resolve(process.env.MODEL_FORGE_DATA_ROOT || join(projectRoot, ".modelforge-data"));
+const defaultSourceRoot = resolve(process.env.MODEL_FORGE_SOURCE_ROOT || projectRoot);
 const bundledPython = join(projectRoot, ".venv", "Scripts", "python.exe");
-const pythonCommand = process.env.MODEL_FORGE_PYTHON || (existsSync(bundledPython) ? bundledPython : "python");
+let dataRoot = defaultDataRoot;
+let sourceRoot = defaultSourceRoot;
+let pythonCommand = process.env.MODEL_FORGE_PYTHON || (existsSync(bundledPython) ? bundledPython : "python");
+let setupConfig = {};
 const apiOnly = process.argv.includes("--api-only");
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || process.env.MODEL_FORGE_PORT || (apiOnly ? 4188 : 4178));
@@ -24,6 +29,7 @@ const skippedDirs = new Set([
   "dist",
   "build",
   ".modelforge-data",
+  ".modelforge-local",
   ".cache",
   ".pytest_cache",
   "__pycache__",
@@ -123,6 +129,203 @@ async function readJsonIfExists(path) {
   } catch {
     return null;
   }
+}
+
+function cleanSetting(value) {
+  return String(value || "").trim();
+}
+
+function resolvePathSetting(value, fallback) {
+  const raw = cleanSetting(value);
+  return resolve(raw || fallback);
+}
+
+function defaultTargetModelName() {
+  return cleanSetting(setupConfig.targetModel) || "modelforge-local:latest";
+}
+
+function applySetupConfig(config = {}, { persistEnv = true } = {}) {
+  const nextDataRoot = resolvePathSetting(config.dataRoot, defaultDataRoot);
+  const nextSourceRoot = resolvePathSetting(config.sourceRoot, defaultSourceRoot);
+  const nextPython = cleanSetting(config.pythonCommand) || process.env.MODEL_FORGE_PYTHON || (existsSync(bundledPython) ? bundledPython : "python");
+  const nextOllamaModels = cleanSetting(config.ollamaModels || process.env.OLLAMA_MODELS);
+
+  dataRoot = nextDataRoot;
+  sourceRoot = nextSourceRoot;
+  pythonCommand = nextPython;
+  setupConfig = {
+    sourceRoot,
+    dataRoot,
+    ollamaModels: nextOllamaModels,
+    pythonCommand,
+    baseModel: cleanSetting(config.baseModel),
+    targetModel: cleanSetting(config.targetModel) || "modelforge-local:latest",
+    updatedAt: config.updatedAt || ""
+  };
+
+  if (persistEnv && nextOllamaModels) {
+    process.env.OLLAMA_MODELS = nextOllamaModels;
+  }
+}
+
+async function loadSetupConfig() {
+  const savedConfig = await readJsonIfExists(setupConfigPath);
+  applySetupConfig({
+    ...(savedConfig || {}),
+    sourceRoot: process.env.MODEL_FORGE_SOURCE_ROOT || savedConfig?.sourceRoot || defaultSourceRoot,
+    dataRoot: process.env.MODEL_FORGE_DATA_ROOT || savedConfig?.dataRoot || defaultDataRoot,
+    pythonCommand: process.env.MODEL_FORGE_PYTHON || savedConfig?.pythonCommand,
+    ollamaModels: process.env.OLLAMA_MODELS || savedConfig?.ollamaModels
+  });
+  return savedConfig;
+}
+
+function currentSetupConfig() {
+  return {
+    sourceRoot,
+    dataRoot,
+    ollamaModels: process.env.OLLAMA_MODELS || setupConfig.ollamaModels || "",
+    pythonCommand,
+    baseModel: setupConfig.baseModel || "",
+    targetModel: setupConfig.targetModel || "modelforge-local:latest"
+  };
+}
+
+async function pathCheck(path, { shouldBeDirectory = true, create = false } = {}) {
+  try {
+    if (create) {
+      await mkdir(path, { recursive: true });
+    }
+    const pathStat = await stat(path);
+    const typeOk = shouldBeDirectory ? pathStat.isDirectory() : pathStat.isFile();
+    return {
+      ok: typeOk,
+      detail: typeOk ? "Ready" : shouldBeDirectory ? "Path exists but is not a folder." : "Path exists but is not a file."
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error?.code === "ENOENT" ? "Path does not exist." : String(error?.message || error)
+    };
+  }
+}
+
+function setupCheck(id, label, ok, value, detail, fix = "") {
+  return {
+    id,
+    label,
+    status: ok ? "pass" : "warn",
+    value,
+    detail,
+    fix
+  };
+}
+
+async function getSetupState() {
+  const config = currentSetupConfig();
+  const [sourceCheck, dataCheck, toolStatus, ollama, latestProof, latestEval, latestRecipe] = await Promise.all([
+    pathCheck(sourceRoot),
+    pathCheck(dataRoot, { create: true }),
+    getToolStatus(),
+    getOllamaStatus(),
+    getLatestProofBundle(),
+    getLatestEvalReport(),
+    getLatestForgeRecipe()
+  ]);
+  const sources = sourceCheck.ok ? await walkSources(sourceRoot) : null;
+  const configured = existsSync(setupConfigPath);
+  const selectedBaseModel = setupConfig.baseModel || ollama.selectedModel || "";
+  const modelAvailable = Boolean(!selectedBaseModel || ollama.models.some((model) => model.name === selectedBaseModel));
+  const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
+  const proofFresh = Boolean(
+    latestProof &&
+      sources &&
+      proofSourceSummary &&
+      proofSourceSummary.totalFiles === sources.totalFiles &&
+      proofSourceSummary.sampledFiles === sources.sampledFiles &&
+      proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
+  );
+  const evalFresh = Boolean(proofFresh && latestEval && latestProof && latestEval.proofPath === latestProof.path);
+  const recipeReady = Boolean(latestRecipe && latestRecipe.status === "ready");
+
+  return {
+    schema: "modelforge.setup_state.v1",
+    configured,
+    config,
+    defaults: {
+      projectRoot,
+      sourceRoot: defaultSourceRoot,
+      dataRoot: defaultDataRoot,
+      pythonCommand: existsSync(bundledPython) ? bundledPython : "python"
+    },
+    summary: {
+      sources: sources?.totalFiles || 0,
+      sampled: sources?.sampledFiles || 0,
+      proofFresh,
+      evalFresh,
+      recipeReady
+    },
+    checks: [
+      setupCheck("source-root", "Source folder", sourceCheck.ok && Boolean(sources?.totalFiles), `${sources?.totalFiles || 0} files`, sourceCheck.ok ? "Folder is readable." : sourceCheck.detail, "Choose a folder that exists on this machine."),
+      setupCheck("data-root", "Data root", dataCheck.ok, dataRoot, dataCheck.detail, "Use a writable folder, ideally on D:."),
+      setupCheck("repomori", "RepoMori", toolStatus.repomori.ok, toolStatus.repomori.label, toolStatus.repomori.detail, "Install RepoMori in the configured Python environment."),
+      setupCheck("agentledger", "AgentLedger", toolStatus.agentledger.ok, toolStatus.agentledger.label, toolStatus.agentledger.detail, "Install AgentLedger in the configured Python environment."),
+      setupCheck("ollama", "Ollama", toolStatus.ollama.ok && ollama.ok, ollama.selectedModel || "No model", ollama.ok ? ollama.version : ollama.error || toolStatus.ollama.detail, "Start Ollama and pull a local base model."),
+      setupCheck("base-model", "Base model", modelAvailable, selectedBaseModel || "Auto", modelAvailable ? "Base model can be selected for exports." : "Saved base model was not found in Ollama.", "Pick an installed Ollama model.")
+    ]
+  };
+}
+
+async function saveSetupConfig(body = {}) {
+  const nextConfig = {
+    sourceRoot: resolvePathSetting(body.sourceRoot, sourceRoot),
+    dataRoot: resolvePathSetting(body.dataRoot, dataRoot),
+    ollamaModels: cleanSetting(body.ollamaModels),
+    pythonCommand: cleanSetting(body.pythonCommand) || pythonCommand,
+    baseModel: cleanSetting(body.baseModel),
+    targetModel: cleanSetting(body.targetModel) || defaultTargetModelName(),
+    updatedAt: new Date().toISOString()
+  };
+  const sourceCheck = await pathCheck(nextConfig.sourceRoot);
+  if (!sourceCheck.ok) {
+    throw new Error(`Source folder is not readable: ${nextConfig.sourceRoot}`);
+  }
+  applySetupConfig(nextConfig);
+  await ensureDataRoot();
+  await mkdir(setupConfigDir, { recursive: true });
+  await writeJson(setupConfigPath, nextConfig);
+  return getSetupState();
+}
+
+async function runFirstSetup(body = {}) {
+  if (body.config) {
+    await saveSetupConfig(body.config);
+  }
+  await ensureDataRoot();
+  const modelName = cleanSetting(body.modelName) || defaultTargetModelName();
+  const baseModel = cleanSetting(body.baseModel) || setupConfig.baseModel || undefined;
+  const create = body.createModel === true;
+  const modelExport = await exportOllamaProfile(join(dataRoot, "models", "latest"), {
+    baseModel,
+    modelName,
+    create
+  });
+  const proofBundle = await buildProofBundle({ requestedBy: "ModelForge setup" });
+  const evalReport = await runEvalGates();
+  const shareCard = await buildShareCard({ tone: "public" });
+  const recipe = await buildForgeRecipe({ modelName, baseModel: modelExport.baseModel });
+  return {
+    ok: true,
+    setup: await getSetupState(),
+    results: {
+      modelExport,
+      proofBundle,
+      evalReport,
+      shareCard,
+      recipe
+    },
+    project: await getProjectPayload()
+  };
 }
 
 function commandReceipt({ name, ok, status, command, outputPath, summary, stdout, stderr, error, startedAt, endedAt }) {
@@ -571,8 +774,8 @@ async function exportOllamaProfile(targetDir, options = {}) {
   const sources = await walkSources(sourceRoot);
   const modelDir = join(targetDir, "ollama-profile");
   await mkdir(modelDir, { recursive: true });
-  const baseModel = options.baseModel || ollama.selectedModel || "llama3.2:3b";
-  const modelName = options.modelName || "modelforge-local:latest";
+  const baseModel = options.baseModel || setupConfig.baseModel || ollama.selectedModel || "llama3.2:3b";
+  const modelName = options.modelName || defaultTargetModelName();
   const systemPrompt = buildSystemPrompt(sources);
   const modelfile = [
     `FROM ${baseModel}`,
@@ -1635,12 +1838,14 @@ async function getOllamaStatus() {
   const list = await runCommand("ollama", ["list"], { timeout: 8000 });
   const models = list.ok ? parseOllamaList(list.stdout) : [];
   const modelsRoot = process.env.OLLAMA_MODELS || "";
+  const configuredBaseModel = setupConfig.baseModel || "";
+  const configuredModel = models.find((model) => model.name === configuredBaseModel)?.name || "";
   return {
     ok: version.ok,
     version: version.stdout.trim() || version.stderr.trim() || "Unavailable",
     modelsRoot,
     models,
-    selectedModel: models.find((model) => model.name.includes("llama3.2"))?.name || models[0]?.name || "",
+    selectedModel: configuredModel || models.find((model) => model.name.includes("llama3.2"))?.name || models[0]?.name || "",
     error: version.ok ? "" : version.error || version.stderr
   };
 }
@@ -1901,6 +2106,23 @@ async function handleApi(request, response, url) {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/setup") {
+      sendJson(response, 200, await getSetupState());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/setup/config") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { ok: true, setup: await saveSetupConfig(body), project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/setup/run") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await runFirstSetup(body));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/ollama/status") {
       sendJson(response, 200, await getOllamaStatus());
       return;
@@ -2035,6 +2257,7 @@ async function handleApi(request, response, url) {
   }
 }
 
+await loadSetupConfig();
 await ensureDataRoot();
 
 const server = createServer(async (request, response) => {
@@ -2055,4 +2278,5 @@ server.listen(port, host, () => {
   console.log(`ModelForge ${mode} server listening on http://${host}:${port}`);
   console.log(`Data root: ${dataRoot}`);
   console.log(`Source root: ${sourceRoot}`);
+  console.log(`Setup config: ${setupConfigPath}`);
 });

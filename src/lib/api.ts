@@ -9,6 +9,8 @@ import type {
   ProofBundle,
   RecipePackRun,
   ShareCard,
+  SetupConfig,
+  SetupState,
   SourceSummary,
   ToolStatus
 } from "./types";
@@ -41,6 +43,40 @@ export function getOllamaStatus() {
 
 export function getToolStatus() {
   return requestJson<ToolStatus>("/api/tools/status");
+}
+
+export function getSetupState() {
+  return requestJson<SetupState>("/api/setup");
+}
+
+export function saveSetupConfig(config: SetupConfig) {
+  return requestJson<{ ok: boolean; setup: SetupState; project: ProjectPayload }>("/api/setup/config", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
+export function runFirstSetup(config: SetupConfig, createModel: boolean) {
+  return requestJson<{
+    ok: boolean;
+    setup: SetupState;
+    project: ProjectPayload;
+    results: {
+      modelExport: ModelExport;
+      proofBundle: ProofBundle;
+      evalReport: EvalReport;
+      shareCard: ShareCard;
+      recipe: ForgeRecipe;
+    };
+  }>("/api/setup/run", {
+    method: "POST",
+    body: JSON.stringify({
+      config,
+      baseModel: config.baseModel,
+      modelName: config.targetModel,
+      createModel
+    })
+  });
 }
 
 export function runPipeline() {

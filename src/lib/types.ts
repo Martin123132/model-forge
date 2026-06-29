@@ -90,6 +90,46 @@ export type ToolStatus = {
   ollama: ToolAvailability;
 };
 
+export type SetupCheckStatus = "pass" | "warn" | "fail" | "ready" | string;
+
+export type SetupConfig = {
+  sourceRoot: string;
+  dataRoot: string;
+  ollamaModels: string;
+  pythonCommand: string;
+  baseModel: string;
+  targetModel: string;
+};
+
+export type SetupCheck = {
+  id: string;
+  label: string;
+  status: SetupCheckStatus;
+  value: string;
+  detail: string;
+  fix: string;
+};
+
+export type SetupState = {
+  schema: string;
+  configured: boolean;
+  config: SetupConfig;
+  defaults: {
+    projectRoot: string;
+    sourceRoot: string;
+    dataRoot: string;
+    pythonCommand: string;
+  };
+  summary: {
+    sources: number;
+    sampled: number;
+    proofFresh: boolean;
+    evalFresh: boolean;
+    recipeReady: boolean;
+  };
+  checks: SetupCheck[];
+};
+
 export type Receipt = {
   name: string;
   ok: boolean;

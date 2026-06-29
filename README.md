@@ -90,6 +90,10 @@ API: http://127.0.0.1:4188
 Web: http://127.0.0.1:5178
 ```
 
+Open the Setup workspace first. Confirm the source folder, data root, Ollama
+model path, Python command, base model, and target model, then run the first
+setup pass to build proof, gates, share card, and recipe artifacts.
+
 The dev script defaults the data root to `.modelforge-data` inside the repo and
 keeps npm/temp/browser caches beside the workspace instead of leaning on a small
 system drive. If you want explicit D-drive paths, set them before running:

@@ -2,6 +2,7 @@ import { Boxes, FileCheck2, Gauge, GitBranch, ShieldCheck, SlidersHorizontal } f
 import type { WorkspaceView } from "./WorkspaceTabs";
 
 const navItems = [
+  { label: "Setup", icon: SlidersHorizontal, view: "setup" },
   { label: "Sources", icon: FileCheck2, view: "sources" },
   { label: "Proof", icon: Gauge, view: "proof" },
   { label: "Model", icon: Boxes, view: "model" },

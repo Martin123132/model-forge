@@ -1,10 +1,11 @@
-import { Bot, FileSearch, PackageCheck, ShieldCheck } from "lucide-react";
-import type { EvalReport, ModelExport, ProofBundle, SourceSummary } from "../lib/types";
+import { Bot, FileSearch, PackageCheck, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import type { EvalReport, ModelExport, ProofBundle, SetupState, SourceSummary } from "../lib/types";
 
-export type WorkspaceView = "sources" | "proof" | "model" | "release";
+export type WorkspaceView = "setup" | "sources" | "proof" | "model" | "release";
 
 type WorkspaceTabsProps = {
   active: WorkspaceView;
+  setup?: SetupState | null;
   sources?: SourceSummary | null;
   proof?: ProofBundle | null;
   modelExport?: ModelExport | null;
@@ -13,14 +14,16 @@ type WorkspaceTabsProps = {
 };
 
 const tabs = [
+  { id: "setup", label: "Setup", Icon: SlidersHorizontal },
   { id: "sources", label: "Sources", Icon: FileSearch },
   { id: "proof", label: "Proof", Icon: PackageCheck },
   { id: "model", label: "Model Lab", Icon: Bot },
   { id: "release", label: "Release", Icon: ShieldCheck }
 ] as const;
 
-export function WorkspaceTabs({ active, sources, proof, modelExport, evalReport, onNavigate }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ active, setup, sources, proof, modelExport, evalReport, onNavigate }: WorkspaceTabsProps) {
   function metaFor(id: WorkspaceView) {
+    if (id === "setup") return setup?.configured ? "Saved" : "Confirm";
     if (id === "sources") return `${sources?.totalFiles.toLocaleString() || "0"} files`;
     if (id === "proof") return proof ? "Bundle ready" : "Not built";
     if (id === "model") return modelExport?.created ? "Created" : modelExport ? "Profile" : "Waiting";

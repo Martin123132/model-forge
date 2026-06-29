@@ -10,10 +10,13 @@ import {
   getRecipePackRun,
   getOllamaStatus,
   getProject,
+  getSetupState,
   getSources,
+  runFirstSetup,
   runEvalGates,
   runRecipePack,
   runPipeline,
+  saveSetupConfig,
   selectForgeRecipe,
   sendChat
 } from "./lib/api";
@@ -28,6 +31,8 @@ import type {
   ProofBundle,
   RecipePackRun,
   ShareCard,
+  SetupConfig,
+  SetupState,
   SourceSummary
 } from "./lib/types";
 import { Sidebar } from "./components/Sidebar";
@@ -38,6 +43,7 @@ import { Inspector } from "./components/Inspector";
 import { ProofViewer } from "./components/ProofViewer";
 import { ModelLab } from "./components/ModelLab";
 import { ReleasePanel } from "./components/ReleasePanel";
+import { SetupPanel } from "./components/SetupPanel";
 import { WorkspaceTabs, type WorkspaceView } from "./components/WorkspaceTabs";
 import { NextActionPanel, type NextAction } from "./components/NextActionPanel";
 
@@ -131,7 +137,7 @@ function StartupPanel({ error, refreshing, onRetry }: StartupPanelProps) {
   );
 }
 
-type GuidedActionKind = "run-pipeline" | "export-profile" | "run-eval" | "build-proof" | "open-sources" | "open-model" | "open-release" | "view-proof";
+type GuidedActionKind = "run-pipeline" | "export-profile" | "run-eval" | "build-proof" | "open-setup" | "open-sources" | "open-model" | "open-release" | "view-proof";
 type GuidedAction = NextAction & {
   kind: GuidedActionKind;
 };
@@ -145,6 +151,7 @@ function App() {
   const [evalReport, setEvalReport] = useState<EvalReport | null>(null);
   const [shareCard, setShareCard] = useState<ShareCard | null>(null);
   const [forgeRecipe, setForgeRecipe] = useState<ForgeRecipe | null>(null);
+  const [setupState, setSetupState] = useState<SetupState | null>(null);
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
   const [recipeRunHistory, setRecipeRunHistory] = useState<RecipePackRun[]>([]);
   const [recipeHistory, setRecipeHistory] = useState<ForgeRecipe[]>([]);
@@ -152,7 +159,7 @@ function App() {
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const previousWorkspaceRef = useRef<WorkspaceView | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceView>("sources");
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceView>("setup");
   const [error, setError] = useState<string>("");
   const [booting, setBooting] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -163,6 +170,8 @@ function App() {
   const [evalBusy, setEvalBusy] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [recipeBusy, setRecipeBusy] = useState(false);
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupRunning, setSetupRunning] = useState(false);
   const [selectRecipeBusy, setSelectRecipeBusy] = useState(false);
   const [packRunBusy, setPackRunBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
@@ -171,11 +180,13 @@ function App() {
     setError("");
     setRefreshing(true);
     try {
-      const [projectPayload, sourcePayload, ollamaPayload] = await Promise.all([
+      const [setupPayload, projectPayload, sourcePayload, ollamaPayload] = await Promise.all([
+        getSetupState(),
         getProject(),
         getSources(),
         getOllamaStatus()
       ]);
+      setSetupState(setupPayload);
       setProject(projectPayload);
       setSources(sourcePayload);
       setOllama(ollamaPayload);
@@ -218,6 +229,57 @@ function App() {
       setError(runError instanceof Error ? runError.message : String(runError));
     } finally {
       setRunning(false);
+    }
+  }, []);
+
+  const handleSaveSetup = useCallback(async (config: SetupConfig) => {
+    setSetupSaving(true);
+    setError("");
+    try {
+      const result = await saveSetupConfig(config);
+      const [sourcePayload, ollamaPayload] = await Promise.all([getSources(), getOllamaStatus()]);
+      setSetupState(result.setup);
+      setProject(result.project);
+      setSources(sourcePayload);
+      setOllama(ollamaPayload);
+      setModelExport(result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+    } catch (setupError) {
+      setError(setupError instanceof Error ? setupError.message : String(setupError));
+    } finally {
+      setSetupSaving(false);
+    }
+  }, []);
+
+  const handleRunFirstSetup = useCallback(async (config: SetupConfig, createModel: boolean) => {
+    setSetupRunning(true);
+    setError("");
+    try {
+      const result = await runFirstSetup(config, createModel);
+      const [sourcePayload, ollamaPayload] = await Promise.all([getSources(), getOllamaStatus()]);
+      setSetupState(result.setup);
+      setProject(result.project);
+      setSources(sourcePayload);
+      setOllama(ollamaPayload);
+      setModelExport(result.project.latestModelExport || result.results.modelExport || null);
+      setProof(result.results.proofBundle || result.project.latestProof || null);
+      setEvalReport(result.results.evalReport || result.project.latestEval || null);
+      setShareCard(result.results.shareCard || result.project.latestShare || null);
+      setForgeRecipe(result.results.recipe || result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setActiveWorkspace("setup");
+    } catch (setupError) {
+      setError(setupError instanceof Error ? setupError.message : String(setupError));
+    } finally {
+      setSetupRunning(false);
     }
   }, []);
 
@@ -468,7 +530,7 @@ function App() {
     previousWorkspaceRef.current = activeWorkspace;
 
     if (previousWorkspace === activeWorkspace) return;
-    if (previousWorkspace === null && activeWorkspace === "sources") {
+    if (previousWorkspace === null && (activeWorkspace === "sources" || activeWorkspace === "setup")) {
       return;
     }
 
@@ -486,6 +548,17 @@ function App() {
     const sourceCount = sources?.totalFiles || project?.sources.totalFiles || 0;
     const failedGate = evalReport?.gates.find((gate) => gate.status === "fail" || gate.status === "failed");
     const warningGate = evalReport?.gates.find((gate) => gate.status === "warn" || gate.status === "warning");
+
+    if (setupState && !setupState.configured) {
+      return {
+        kind: "open-setup",
+        label: "Start here",
+        title: "Confirm local setup",
+        detail: "Save the source folder, data root, Ollama model path, and first-run target before building evidence.",
+        actionLabel: "Open Setup",
+        tone: "ready"
+      };
+    }
 
     if (running) {
       return {
@@ -625,7 +698,7 @@ function App() {
       meta: proof.size,
       tone: "success"
     };
-  }, [evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, shareCard, sources?.totalFiles]);
+  }, [evalBusy, evalReport, forgeRecipe, modelBusy, modelExport, proof, proofBusy, project?.sources.totalFiles, recipeRun, running, setupState, shareCard, sources?.totalFiles]);
 
   const handleGuidedAction = useCallback(() => {
     if (guidedAction.kind === "run-pipeline") {
@@ -642,6 +715,10 @@ function App() {
     }
     if (guidedAction.kind === "build-proof") {
       void handleBuildProof();
+      return;
+    }
+    if (guidedAction.kind === "open-setup") {
+      setActiveWorkspace("setup");
       return;
     }
     if (guidedAction.kind === "open-sources") {
@@ -693,6 +770,7 @@ function App() {
               <NextActionPanel action={guidedAction} onAction={handleGuidedAction} />
               <WorkspaceTabs
                 active={activeWorkspace}
+                setup={setupState}
                 sources={sources || project?.sources}
                 proof={proof}
                 modelExport={modelExport}
@@ -700,6 +778,18 @@ function App() {
                 onNavigate={setActiveWorkspace}
               />
               <div className="focused-workspace" ref={focusedWorkspaceRef}>
+                {activeWorkspace === "setup" ? (
+                  <SetupPanel
+                    setup={setupState}
+                    project={project}
+                    ollama={ollama}
+                    saving={setupSaving}
+                    running={setupRunning}
+                    onRefresh={refresh}
+                    onSave={handleSaveSetup}
+                    onRun={handleRunFirstSetup}
+                  />
+                ) : null}
                 {activeWorkspace === "sources" ? <SourceTable sources={sources || project?.sources} onRefresh={refresh} /> : null}
                 {activeWorkspace === "proof" ? <ProofViewer proof={proof} busy={proofBusy} onBuild={handleBuildProof} /> : null}
                 {activeWorkspace === "model" ? (
