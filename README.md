@@ -52,6 +52,8 @@ artifacts from code and project folders.
 - Shows an **AI build contract** before the user starts: what AI is being made,
   what it is allowed to know, how ModelForge will build it, what artifacts will
   be produced, and what counts as done.
+- Lets the user name the AI and choose a response voice, then saves a starter
+  model card in JSON and Markdown before the build run starts.
 - Previews source scopes before building: Whole project, Docs first, Code
   hotspots, and Small safe sample each show included/excluded counts and sample
   paths.
@@ -133,7 +135,11 @@ The plan records:
 - A plain-English blueprint with capabilities, watchouts, hardware fit, first
   build action, and release posture.
 - An **AI build contract** with the audience, personality, privacy posture,
-  base model, route, answer rules, expected outputs, and done definition.
+  AI name, response voice, privacy posture, base model, route, answer rules,
+  expected outputs, and done definition.
+- A starter model card saved beside the build plan, so the AI has an inspectable
+  identity, intended-use boundary, answer rules, release checklist, and
+  limitations before any one-click build run starts.
 - A first-run checklist that explains whether setup, source boundary, hardware
   route, base model, dataset path, and release proof are ready.
 - Local hardware facts: CPU threads, RAM, GPU/VRAM, D-drive space, and Ollama

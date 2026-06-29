@@ -179,13 +179,30 @@ async function main() {
       "Builder AI profile",
       Boolean(
         project.latestBuildPlan?.aiProfile?.schema === "modelforge.builder_ai_profile.v1" &&
+          project.latestBuildPlan.aiProfile.name &&
+          project.latestBuildPlan.aiProfile.voice &&
           project.latestBuildPlan.aiProfile.answerRules?.length >= 3 &&
           project.latestBuildPlan.aiProfile.outputs?.length >= 5 &&
           project.latestBuildPlan.aiProfile.doneWhen?.length >= 3
       ),
       project.latestBuildPlan?.aiProfile
-        ? `${project.latestBuildPlan.aiProfile.title}: ${project.latestBuildPlan.aiProfile.outputs?.length || 0} outputs, ${project.latestBuildPlan.aiProfile.answerRules?.length || 0} rules`
+        ? `${project.latestBuildPlan.aiProfile.name} / ${project.latestBuildPlan.aiProfile.voice}: ${project.latestBuildPlan.aiProfile.outputs?.length || 0} outputs, ${project.latestBuildPlan.aiProfile.answerRules?.length || 0} rules`
         : "no AI build contract"
+    ),
+    check(
+      "Starter model card",
+      Boolean(
+        project.latestBuildPlan?.starterModelCard?.schema === "modelforge.starter_model_card.v1" &&
+          project.latestBuildPlan.starterModelCard.aiName &&
+          project.latestBuildPlan.starterModelCard.voice &&
+          project.latestBuildPlan.starterModelCard.files?.markdown &&
+          project.latestBuildPlan.starterModelCard.files?.json &&
+          existsSync(project.latestBuildPlan.starterModelCard.files.markdown) &&
+          existsSync(project.latestBuildPlan.starterModelCard.files.json)
+      ),
+      project.latestBuildPlan?.starterModelCard
+        ? `${project.latestBuildPlan.starterModelCard.aiName}: ${project.latestBuildPlan.starterModelCard.files?.markdown || "missing path"}`
+        : "no starter model card"
     ),
     check(
       "Builder guided setup",

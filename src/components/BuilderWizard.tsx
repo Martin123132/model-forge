@@ -77,6 +77,8 @@ const templateOptions = [
     label: "Repo copilot",
     detail: "Explain, fix, and navigate a codebase",
     Icon: BrainCircuit,
+    aiName: "Forge Copilot",
+    voice: "direct-operator",
     intent: "Build a local coding helper that can explain this repo, answer implementation questions, point to source files, and suggest safe next changes with evidence.",
     aiType: "coding-helper",
     audience: "personal",
@@ -95,6 +97,8 @@ const templateOptions = [
     label: "Docs tutor",
     detail: "Teach from local notes and project docs",
     Icon: Sparkles,
+    aiName: "Forge Tutor",
+    voice: "patient-teacher",
     intent: "Build a patient tutor that turns the project docs and notes into clear lessons, practice prompts, and source-backed explanations for non-developers.",
     aiType: "learning-tutor",
     audience: "team",
@@ -113,6 +117,8 @@ const templateOptions = [
     label: "Support agent",
     detail: "Approved answers from known sources",
     Icon: ShieldCheck,
+    aiName: "Evidence Support",
+    voice: "concise-support",
     intent: "Build a support assistant that answers common questions from approved local knowledge, refuses unsupported claims, and keeps answers concise enough for public use.",
     aiType: "support-bot",
     audience: "public",
@@ -131,6 +137,8 @@ const templateOptions = [
     label: "Research brief",
     detail: "Compare evidence and keep citations tight",
     Icon: FileText,
+    aiName: "Research Forge",
+    voice: "evidence-analyst",
     intent: "Build a research bot that gathers evidence from local research material, compares competing claims, and clearly separates sourced facts from open questions.",
     aiType: "research-bot",
     audience: "team",
@@ -149,6 +157,8 @@ const templateOptions = [
     label: "Game lore NPC",
     detail: "In-character replies from lore and rules",
     Icon: Bot,
+    aiName: "Lorekeeper",
+    voice: "in-character",
     intent: "Build a game NPC assistant that uses local lore, rules, and character notes to answer in character while keeping world facts consistent.",
     aiType: "game-npc",
     audience: "personal",
@@ -188,6 +198,15 @@ const qualityOptions = [
   { id: "fast", label: "Fast" },
   { id: "balanced", label: "Balanced" },
   { id: "quality", label: "Quality" }
+];
+
+const voiceOptions = [
+  { id: "calm-practical", label: "Calm practical", detail: "Plain, steady, useful" },
+  { id: "direct-operator", label: "Direct operator", detail: "Short action-first replies" },
+  { id: "patient-teacher", label: "Patient teacher", detail: "Explains steps gently" },
+  { id: "evidence-analyst", label: "Evidence analyst", detail: "Careful with claims" },
+  { id: "concise-support", label: "Concise support", detail: "Brief public-safe answers" },
+  { id: "in-character", label: "In character", detail: "Creative but bounded" }
 ];
 
 const knowledgeSourceOptions = [
@@ -527,6 +546,8 @@ function draftBuildMethod(buildMode: string, sourceCount: number) {
 }
 
 function createDraftAiProfile({
+  aiName,
+  voice,
   aiType,
   audience,
   personality,
@@ -540,6 +561,8 @@ function createDraftAiProfile({
   sourceScopeOption,
   planReady
 }: {
+  aiName: string;
+  voice: string;
   aiType: string;
   audience: string;
   personality: string;
@@ -554,6 +577,8 @@ function createDraftAiProfile({
   planReady: boolean;
 }): BuilderAiProfile {
   const aiLabel = optionLabel(aiTypeOptions, aiType);
+  const activeAiName = aiName.trim() || `${aiLabel} Forge`;
+  const voiceLabel = optionLabel(voiceOptions, voice);
   const sourceLabel = optionLabel(knowledgeSourceOptions, knowledgeSource).toLowerCase();
   const boundaryLabel = optionLabel(boundaryOptions, boundaryMode).toLowerCase();
   const sourceCount = sourceScopeOption.includedFiles || 0;
@@ -561,10 +586,12 @@ function createDraftAiProfile({
   const dataTypeLabel = dataTypes.length ? dataTypes.join(", ") : "selected local files";
   return {
     schema: "modelforge.builder_ai_profile.draft.v1",
-    title: `${aiLabel} for ${audienceDisplay(audience).toLowerCase()}`,
-    summary: `A ${aiLabel.toLowerCase()} using ${sourceLabel} from ${sourceCount.toLocaleString()} scoped files.`,
+    name: activeAiName,
+    title: `${activeAiName} - ${aiLabel}`,
+    summary: `${activeAiName} is a ${aiLabel.toLowerCase()} using ${sourceLabel} from ${sourceCount.toLocaleString()} scoped files.`,
     audience: audienceDisplay(audience),
     personality: personalityDisplay(personality),
+    voice: voiceLabel,
     privacy: privacyDisplay(privacy),
     targetDevice: targetDevice || "this machine",
     baseModel,
@@ -635,6 +662,8 @@ function sameStringList(left: string[] = [], right: string[] = []) {
 function requestMatchesPlan(saved?: BuilderPlanRequest, current?: BuilderPlanRequest) {
   if (!saved || !current) return false;
   return (
+    (saved.aiName || "") === current.aiName &&
+    (saved.voice || "") === current.voice &&
     saved.intent === current.intent &&
     saved.templateId === current.templateId &&
     saved.aiType === current.aiType &&
@@ -663,7 +692,7 @@ function buildFallbackHandoff({
   recipe?: ForgeRecipe | null;
 }): BuilderRunHandoff | null {
   if (!activeRun || activeRun.status !== "pass") return null;
-  const aiLabel = activeRun.plan?.blueprint?.aiType?.label || plan?.blueprint?.aiType?.label || "local AI";
+  const aiLabel = activeRun.plan?.aiProfile?.name || activeRun.plan?.blueprint?.aiType?.label || plan?.aiProfile?.name || plan?.blueprint?.aiType?.label || "local AI";
   const routeLabel = activeRun.plan?.routeLabel || plan?.routeLabel || "local build route";
   const targetModel = recipe?.targetModel || "modelforge-local:latest";
   const snippets = datasetForge?.knowledgePack?.snippets || recipe?.dataset?.knowledgeSnippets || 0;
@@ -740,6 +769,8 @@ export function BuilderWizard({
   onBuildDataset,
   onBuildRecipe
 }: BuilderWizardProps) {
+  const [aiName, setAiName] = useState(plan?.request.aiName || plan?.aiProfile?.name || "Forge Copilot");
+  const [voice, setVoice] = useState(plan?.request.voice || "direct-operator");
   const [intent, setIntent] = useState(
     plan?.request.intent || "Build a practical local AI assistant that understands this project and can answer with source-backed evidence."
   );
@@ -792,6 +823,8 @@ export function BuilderWizard({
   const runIsActive = activeRun?.status === "running";
   const currentRequest = useMemo<BuilderPlanRequest>(
     () => ({
+      aiName,
+      voice,
       intent,
       templateId,
       aiType,
@@ -806,7 +839,7 @@ export function BuilderWizard({
       boundaryMode,
       dataTypes
     }),
-    [aiType, audience, boundaryMode, buildMode, dataTypes, intent, knowledgeSource, personality, privacy, qualitySpeed, sourceScope, targetDevice, templateId]
+    [aiName, aiType, audience, boundaryMode, buildMode, dataTypes, intent, knowledgeSource, personality, privacy, qualitySpeed, sourceScope, targetDevice, templateId, voice]
   );
   const planMatchesForm = requestMatchesPlan(plan?.request, currentRequest);
   const sourceScopePreview = useMemo(
@@ -841,6 +874,8 @@ export function BuilderWizard({
     () =>
       (planMatchesForm && plan?.aiProfile) ||
       createDraftAiProfile({
+        aiName,
+        voice,
         aiType,
         audience,
         personality,
@@ -854,7 +889,7 @@ export function BuilderWizard({
         sourceScopeOption: selectedSourceScope,
         planReady: Boolean(plan && planMatchesForm)
       }),
-    [aiType, audience, boundaryMode, buildMode, dataTypes, hardware, knowledgeSource, personality, plan, planMatchesForm, privacy, selectedSourceScope, targetDevice]
+    [aiName, aiType, audience, boundaryMode, buildMode, dataTypes, hardware, knowledgeSource, personality, plan, planMatchesForm, privacy, selectedSourceScope, targetDevice, voice]
   );
   const activeStage =
     activeRun?.stages.find((stage) => stage.status === "running") ||
@@ -877,6 +912,8 @@ export function BuilderWizard({
   const checklistItems = blueprint.firstRunChecklist || [];
 
   function applyTemplate(template: (typeof templateOptions)[number]) {
+    setAiName(template.aiName);
+    setVoice(template.voice);
     setTemplateId(template.id);
     setIntent(template.intent);
     setAiType(template.aiType);
@@ -918,7 +955,7 @@ export function BuilderWizard({
             <RefreshCw className={hardwareBusy ? "spin-icon" : ""} size={15} />
             <span>{hardwareBusy ? "Checking" : "Check Hardware"}</span>
           </button>
-          <button className="primary-action compact" type="button" onClick={submitPlan} disabled={busy || !intent.trim()}>
+          <button className="primary-action compact" type="button" onClick={submitPlan} disabled={busy || !intent.trim() || !aiName.trim()}>
             {busy ? <LoaderCircle className="spin-icon" size={15} /> : <Wand2 size={15} />}
             <span>{busy ? "Creating" : "Create Build Plan"}</span>
           </button>
@@ -949,9 +986,9 @@ export function BuilderWizard({
         <div className="ai-profile-facts">
           <div>
             <Bot size={15} />
-            <span>Style</span>
-            <strong>{aiProfile.personality}</strong>
-            <em>{aiProfile.audience}</em>
+            <span>Identity</span>
+            <strong>{aiProfile.name}</strong>
+            <em>{aiProfile.voice}</em>
           </div>
           <div>
             <ShieldCheck size={15} />
@@ -976,6 +1013,17 @@ export function BuilderWizard({
         <div className="ai-profile-method">
           <strong>How ModelForge will make it</strong>
           <p>{aiProfile.buildMethod}</p>
+        </div>
+
+        <div className="ai-profile-model-card">
+          <FileText size={15} />
+          <span>
+            <strong>Starter model card</strong>
+            <em title={plan?.starterModelCard?.files.markdown || ""}>
+              {planMatchesForm && plan?.starterModelCard?.files.markdown ? compactPath(plan.starterModelCard.files.markdown) : "Create the build plan to save the starter model card."}
+            </em>
+          </span>
+          <StatusPill status={planMatchesForm && plan?.starterModelCard ? "pass" : "neutral"} label={planMatchesForm && plan?.starterModelCard ? "Saved" : "Draft"} />
         </div>
 
         <div className="ai-profile-rules">
@@ -1039,6 +1087,30 @@ export function BuilderWizard({
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          <div className="builder-identity-card builder-field-wide">
+            <label className="builder-field">
+              <span>Name this AI</span>
+              <input value={aiName} onChange={(event) => setAiName(event.target.value)} placeholder="Forge Copilot" />
+            </label>
+            <div className="builder-field">
+              <span>Voice</span>
+              <div className="voice-grid">
+                {voiceOptions.map((option) => (
+                  <button
+                    aria-pressed={voice === option.id}
+                    className={voice === option.id ? "is-selected" : ""}
+                    key={option.id}
+                    type="button"
+                    onClick={() => setVoice(option.id)}
+                  >
+                    <strong>{option.label}</strong>
+                    <small>{option.detail}</small>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 

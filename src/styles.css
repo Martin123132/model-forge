@@ -1109,6 +1109,7 @@ h2 {
 
 .segmented-grid,
 .segmented-row,
+.voice-grid,
 .ai-type-grid,
 .builder-template-grid,
 .source-scope-grid,
@@ -1137,7 +1138,12 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.voice-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .segmented-grid button,
+.voice-grid button,
 .ai-type-grid button,
 .builder-template-grid button,
 .source-scope-grid button,
@@ -1199,6 +1205,11 @@ h2 {
   text-align: center;
 }
 
+.voice-grid button {
+  gap: 3px;
+  min-height: 52px;
+}
+
 .segmented-grid button strong {
   overflow: hidden;
   max-width: 100%;
@@ -1224,6 +1235,16 @@ h2 {
   color: #172236;
   font-size: 12px;
   font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-grid button strong {
+  overflow: hidden;
+  max-width: 100%;
+  color: #172236;
+  font-size: 11px;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1271,6 +1292,17 @@ h2 {
   white-space: nowrap;
 }
 
+.voice-grid button small {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 620;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .segmented-row button {
   color: #26364d;
   font-size: 12px;
@@ -1278,6 +1310,7 @@ h2 {
 }
 
 .segmented-grid button.is-selected,
+.voice-grid button.is-selected,
 .ai-type-grid button.is-selected,
 .builder-template-grid button.is-selected,
 .source-scope-grid button.is-selected,
@@ -1295,8 +1328,20 @@ h2 {
 .ai-type-grid button.is-selected svg,
 .source-scope-grid button.is-selected strong,
 .source-scope-grid button.is-selected em,
+.voice-grid button.is-selected strong,
 .segmented-row button.is-selected {
   color: var(--blue);
+}
+
+.builder-identity-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.72fr) minmax(0, 1.28fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #f8fbff;
 }
 
 .checkbox-grid {
@@ -1639,6 +1684,49 @@ h2 {
   color: #172236;
   font-size: 11px;
   font-weight: 820;
+}
+
+.ai-profile-model-card {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.ai-profile-model-card > svg {
+  color: var(--blue);
+}
+
+.ai-profile-model-card > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.ai-profile-model-card strong,
+.ai-profile-model-card em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-profile-model-card strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.ai-profile-model-card em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 620;
 }
 
 .ai-profile-rules > div,
@@ -6648,7 +6736,8 @@ h2 {
   }
 
   .builder-template-grid,
-  .ai-type-grid {
+  .ai-type-grid,
+  .voice-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -6673,6 +6762,7 @@ h2 {
 
   .blueprint-metrics,
   .blueprint-capability-grid,
+  .builder-identity-card,
   .source-scope-preview-lists,
   .ai-profile-facts,
   .ai-profile-rules > div,
@@ -6682,6 +6772,15 @@ h2 {
 
   .ai-profile-output-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-profile-model-card {
+    grid-template-columns: 16px minmax(0, 1fr);
+  }
+
+  .ai-profile-model-card .status-pill {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .builder-step {
@@ -6714,6 +6813,8 @@ h2 {
   .builder-ai-profile-heading h2,
   .ai-profile-facts strong,
   .ai-profile-facts em,
+  .ai-profile-model-card strong,
+  .ai-profile-model-card em,
   .ai-profile-output strong,
   .ai-profile-output em,
   .builder-run-stage strong,

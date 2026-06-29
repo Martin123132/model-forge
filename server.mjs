@@ -2197,10 +2197,14 @@ async function getHardwareProfile() {
 function normalizeBuilderRequest(body = {}) {
   const rawDataTypes = Array.isArray(body.dataTypes) ? body.dataTypes : [];
   const dataTypes = rawDataTypes.map((item) => cleanSetting(item).toLowerCase()).filter(Boolean).slice(0, 8);
+  const templateId = cleanSetting(body.templateId || "custom").slice(0, 80);
+  const aiType = cleanSetting(body.aiType || "coding-helper").slice(0, 80);
   return {
+    aiName: cleanSetting(body.aiName || defaultAiName({ templateId, aiType })).slice(0, 120),
+    voice: cleanSetting(body.voice || defaultVoiceFor({ templateId, aiType })).slice(0, 80),
     intent: cleanSetting(body.intent).slice(0, 1200),
-    templateId: cleanSetting(body.templateId || "custom").slice(0, 80),
-    aiType: cleanSetting(body.aiType || "coding-helper").slice(0, 80),
+    templateId,
+    aiType,
     audience: cleanSetting(body.audience || "personal").slice(0, 80),
     personality: cleanSetting(body.personality || "practical").slice(0, 80),
     privacy: cleanSetting(body.privacy || "local-only").slice(0, 80),
@@ -2264,6 +2268,33 @@ function templateLabel(value = "") {
   if (value === "research-brief") return "Research brief bot";
   if (value === "game-lore") return "Game lore NPC";
   return "Custom build";
+}
+
+function defaultAiName({ templateId = "", aiType = "" } = {}) {
+  if (templateId === "repo-copilot") return "Forge Copilot";
+  if (templateId === "docs-tutor") return "Forge Tutor";
+  if (templateId === "support-agent") return "Evidence Support";
+  if (templateId === "research-brief") return "Research Forge";
+  if (templateId === "game-lore") return "Lorekeeper";
+  const type = aiTypeSpec(aiType);
+  return `${type.label} Forge`;
+}
+
+function defaultVoiceFor({ templateId = "", aiType = "" } = {}) {
+  if (templateId === "docs-tutor" || aiType === "learning-tutor") return "patient-teacher";
+  if (templateId === "research-brief" || aiType === "research-bot") return "evidence-analyst";
+  if (templateId === "game-lore" || aiType === "game-npc") return "in-character";
+  if (aiType === "coding-helper") return "direct-operator";
+  return "calm-practical";
+}
+
+function voiceLabel(value = "") {
+  if (value === "direct-operator") return "Direct operator";
+  if (value === "patient-teacher") return "Patient teacher";
+  if (value === "evidence-analyst") return "Evidence analyst";
+  if (value === "concise-support") return "Concise support";
+  if (value === "in-character") return "In character";
+  return "Calm practical";
 }
 
 function sourceScopeLabel(value = "") {
@@ -2679,12 +2710,16 @@ function buildAiProfileContract({ request, route, baseModel, artifacts, sources,
   const scopedFiles = sourceScope?.includedFiles ?? sources?.totalFiles ?? 0;
   const dataTypes = request.dataTypes?.length ? request.dataTypes.join(", ") : "selected local files";
   const localOnly = request.privacy !== "shareable";
+  const aiName = request.aiName || defaultAiName(request);
+  const voice = voiceLabel(request.voice);
   return {
     schema: "modelforge.builder_ai_profile.v1",
-    title: `${type.label} for ${audienceLabel(request.audience).toLowerCase()}`,
-    summary: `A ${type.label.toLowerCase()} that ${type.promise}, using ${sourceLabel} from ${scopedFiles.toLocaleString()} scoped files.`,
+    name: aiName,
+    title: `${aiName} - ${type.label}`,
+    summary: `${aiName} is a ${type.label.toLowerCase()} that ${type.promise}, using ${sourceLabel} from ${scopedFiles.toLocaleString()} scoped files.`,
     audience: audienceLabel(request.audience),
     personality: personalityLabel(request.personality),
+    voice,
     privacy: privacyLabel(request.privacy),
     targetDevice: request.targetDevice || "this machine",
     baseModel: baseModel.model,
@@ -2737,6 +2772,98 @@ function buildAiProfileContract({ request, route, baseModel, artifacts, sources,
       "Proof and release gates are fresh before the project is shared."
     ]
   };
+}
+
+function buildStarterModelCard({ planId, createdAt, request, aiProfile, route, baseModel, hardware, sourceScope, limitations, files }) {
+  const type = aiTypeSpec(request.aiType);
+  const sourceLabel = knowledgeSourceLabel(request.knowledgeSource);
+  const scopedFiles = sourceScope?.includedFiles || 0;
+  return {
+    schema: "modelforge.starter_model_card.v1",
+    cardId: `${planId}-starter-card`,
+    createdAt,
+    planId,
+    aiName: aiProfile.name,
+    role: type.label,
+    voice: aiProfile.voice,
+    audience: aiProfile.audience,
+    summary: aiProfile.summary,
+    intendedUse: [
+      `Answer as a ${type.label.toLowerCase()} for ${aiProfile.audience.toLowerCase()}.`,
+      `Use ${sourceLabel} from ${scopedFiles.toLocaleString()} scoped files.`,
+      `Follow the ${route.label.toLowerCase()} build route on ${aiProfile.targetDevice}.`
+    ],
+    notFor: [
+      "Making claims from files outside the selected source scope.",
+      "Pretending this is a new foundation model trained from scratch.",
+      request.privacy === "shareable" ? "Public sharing before proof and license gates are reviewed." : "Sending local source, prompts, datasets, or receipts outside this machine without review."
+    ],
+    sourceBoundary: aiProfile.sourceScope,
+    buildRoute: `${route.label}: ${route.reason}`,
+    baseModel: baseModel.model,
+    hardwareFit: hardware.modelFit?.summary || hardware.tier.detail,
+    answerRules: aiProfile.answerRules,
+    releaseChecklist: [
+      "Build From Plan receipt exists.",
+      "Dataset and knowledge pack are scoped to the selected source boundary.",
+      "Export pack can recreate the local target or has a clear runner plan.",
+      "Proof bundle and release gates are fresh.",
+      "License review has no blockers."
+    ],
+    limitations,
+    files
+  };
+}
+
+function starterModelCardMarkdown(card) {
+  return [
+    `# ${card.aiName} Starter Model Card`,
+    "",
+    `Card: ${card.cardId}`,
+    `Created: ${card.createdAt}`,
+    `Plan: ${card.planId}`,
+    `Role: ${card.role}`,
+    `Voice: ${card.voice}`,
+    `Audience: ${card.audience}`,
+    `Base model: ${card.baseModel}`,
+    "",
+    "## Summary",
+    "",
+    card.summary,
+    "",
+    "## Intended Use",
+    "",
+    ...card.intendedUse.map((item) => `- ${item}`),
+    "",
+    "## Not For",
+    "",
+    ...card.notFor.map((item) => `- ${item}`),
+    "",
+    "## Source Boundary",
+    "",
+    card.sourceBoundary,
+    "",
+    "## Build Route",
+    "",
+    card.buildRoute,
+    "",
+    "## Hardware Fit",
+    "",
+    card.hardwareFit,
+    "",
+    "## Answer Rules",
+    "",
+    ...card.answerRules.map((item) => `- ${item}`),
+    "",
+    "## Release Checklist",
+    "",
+    ...card.releaseChecklist.map((item) => `- ${item}`),
+    "",
+    "## Limitations",
+    "",
+    ...card.limitations.map((item) => `- ${item}`),
+    ""
+  ].join("\n");
 }
 
 function chooseBaseModelRecommendation(request, hardware, ollama) {
@@ -2965,6 +3092,35 @@ async function buildAiBuildPlan(body = {}) {
     artifacts.recipeReady ? { id: "open-model", label: "Open Model Lab", workspace: "model" } : null,
     !artifacts.proofFresh || !artifacts.evalFresh ? { id: "open-release", label: "Review Gates", workspace: "release" } : null
   ].filter(Boolean);
+  const planFiles = {
+    dir: latestDir,
+    json: join(latestDir, "build-plan.json"),
+    markdown: join(latestDir, "build-plan.md"),
+    starterModelCardJson: join(latestDir, "starter-model-card.json"),
+    starterModelCardMarkdown: join(latestDir, "starter-model-card.md"),
+    versionDir,
+    versionJson: join(versionDir, "build-plan.json"),
+    versionMarkdown: join(versionDir, "build-plan.md"),
+    versionStarterModelCardJson: join(versionDir, "starter-model-card.json"),
+    versionStarterModelCardMarkdown: join(versionDir, "starter-model-card.md")
+  };
+  const starterModelCard = buildStarterModelCard({
+    planId,
+    createdAt,
+    request,
+    aiProfile,
+    route,
+    baseModel,
+    hardware,
+    sourceScope: selectedSourceScope,
+    limitations,
+    files: {
+      json: planFiles.starterModelCardJson,
+      markdown: planFiles.starterModelCardMarkdown,
+      versionJson: planFiles.versionStarterModelCardJson,
+      versionMarkdown: planFiles.versionStarterModelCardMarkdown
+    }
+  });
   const plan = {
     schema: "modelforge.builder_plan.v1",
     planId,
@@ -2980,6 +3136,7 @@ async function buildAiBuildPlan(body = {}) {
     routeReason: route.reason,
     sourceScopePreview,
     aiProfile,
+    starterModelCard,
     blueprint,
     baseModelRecommendation: baseModel,
     estimates: {
@@ -2990,14 +3147,7 @@ async function buildAiBuildPlan(body = {}) {
     steps,
     limitations,
     nextActions,
-    files: {
-      dir: latestDir,
-      json: join(latestDir, "build-plan.json"),
-      markdown: join(latestDir, "build-plan.md"),
-      versionDir,
-      versionJson: join(versionDir, "build-plan.json"),
-      versionMarkdown: join(versionDir, "build-plan.md")
-    }
+    files: planFiles
   };
   const markdown = [
     "# ModelForge Build Plan",
@@ -3008,6 +3158,8 @@ async function buildAiBuildPlan(body = {}) {
     `Reason: ${route.reason}`,
     `Hardware tier: ${hardware.tier.label}`,
     `Base model: ${baseModel.model}`,
+    `AI name: ${aiProfile.name}`,
+    `Voice: ${aiProfile.voice}`,
     `Blueprint: ${blueprint.summary}`,
     `AI profile: ${aiProfile.summary}`,
     "",
@@ -3029,8 +3181,10 @@ async function buildAiBuildPlan(body = {}) {
     "",
     "## AI Build Contract",
     "",
+    `Name: ${aiProfile.name}`,
     `Audience: ${aiProfile.audience}`,
     `Personality: ${aiProfile.personality}`,
+    `Voice: ${aiProfile.voice}`,
     `Privacy: ${aiProfile.privacy}`,
     `Target device: ${aiProfile.targetDevice}`,
     `Base model: ${aiProfile.baseModel}`,
@@ -3038,6 +3192,7 @@ async function buildAiBuildPlan(body = {}) {
     `Build method: ${aiProfile.buildMethod}`,
     `Knowledge boundary: ${aiProfile.knowledgeBoundary}`,
     `Source scope: ${aiProfile.sourceScope}`,
+    `Starter model card: ${starterModelCard.files.markdown}`,
     "",
     "### Answer Rules",
     "",
@@ -3074,8 +3229,12 @@ async function buildAiBuildPlan(body = {}) {
   }
   await writeJson(plan.files.json, plan);
   await writeFile(plan.files.markdown, markdown, "utf-8");
+  await writeJson(plan.files.starterModelCardJson, starterModelCard);
+  await writeFile(plan.files.starterModelCardMarkdown, starterModelCardMarkdown(starterModelCard), "utf-8");
   await writeJson(plan.files.versionJson, plan);
   await writeFile(plan.files.versionMarkdown, markdown, "utf-8");
+  await writeJson(plan.files.versionStarterModelCardJson, starterModelCard);
+  await writeFile(plan.files.versionStarterModelCardMarkdown, starterModelCardMarkdown(starterModelCard), "utf-8");
   return plan;
 }
 
@@ -3171,7 +3330,7 @@ function handoffArtifact(label, value, detail, path = "", workspace = "model") {
 
 function buildBuilderHandoff({ run, plan, dataset, recipe, modelExport, packRun, sourceScope, proofBundle, evalReport }) {
   const blueprint = plan?.blueprint || {};
-  const aiLabel = blueprint.aiType?.label || "local AI";
+  const aiLabel = plan?.aiProfile?.name || blueprint.aiType?.label || "local AI";
   const routeLabel = plan?.routeLabel || "local build route";
   const targetModel = recipe?.targetModel || modelExport?.modelName || defaultTargetModelName();
   const knowledgeSnippets = dataset?.knowledgePack?.snippets || recipe?.dataset?.knowledgeSnippets || 0;

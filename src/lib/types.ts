@@ -213,6 +213,8 @@ export type HardwareProfile = {
 };
 
 export type BuilderPlanRequest = {
+  aiName: string;
+  voice: string;
   intent: string;
   templateId: string;
   aiType: string;
@@ -239,10 +241,12 @@ export type BuilderPlanStep = {
 
 export type BuilderAiProfile = {
   schema: string;
+  name: string;
   title: string;
   summary: string;
   audience: string;
   personality: string;
+  voice: string;
   privacy: string;
   targetDevice: string;
   baseModel: string;
@@ -258,6 +262,33 @@ export type BuilderAiProfile = {
     workspace: string;
   }>;
   doneWhen: string[];
+};
+
+export type BuilderStarterModelCard = {
+  schema: string;
+  cardId: string;
+  createdAt: string;
+  planId: string;
+  aiName: string;
+  role: string;
+  voice: string;
+  audience: string;
+  summary: string;
+  intendedUse: string[];
+  notFor: string[];
+  sourceBoundary: string;
+  buildRoute: string;
+  baseModel: string;
+  hardwareFit: string;
+  answerRules: string[];
+  releaseChecklist: string[];
+  limitations: string[];
+  files: {
+    json: string;
+    markdown: string;
+    versionJson: string;
+    versionMarkdown: string;
+  };
 };
 
 export type BuilderPlan = {
@@ -284,6 +315,7 @@ export type BuilderPlan = {
   routeReason: string;
   sourceScopePreview?: SourceScopePreview;
   aiProfile?: BuilderAiProfile;
+  starterModelCard?: BuilderStarterModelCard;
   blueprint?: {
     schema: string;
     title: string;
@@ -334,9 +366,13 @@ export type BuilderPlan = {
     dir: string;
     json: string;
     markdown: string;
+    starterModelCardJson?: string;
+    starterModelCardMarkdown?: string;
     versionDir: string;
     versionJson: string;
     versionMarkdown: string;
+    versionStarterModelCardJson?: string;
+    versionStarterModelCardMarkdown?: string;
   };
 };
 

@@ -10,6 +10,8 @@ forge cockpit.
 - Added a saved AI build contract to Builder plans so non-developers can see
   what AI is being made, what it may know, how it will be built, and when it is
   ready.
+- Added AI naming, response voice selection, and starter model-card artifacts
+  for every Builder plan before the one-click build run starts.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,
