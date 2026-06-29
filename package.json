@@ -11,6 +11,7 @@
     "dev:web": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "qa:smoke": "node scripts/qa-smoke.mjs",
+    "qa:readme": "node scripts/qa-readme.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server.mjs",
     "serve": "npm run build && node server.mjs"

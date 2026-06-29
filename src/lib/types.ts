@@ -161,12 +161,15 @@ export type HardwareProfile = {
 
 export type BuilderPlanRequest = {
   intent: string;
+  aiType: string;
   audience: string;
   personality: string;
   privacy: string;
   qualitySpeed: string;
   buildMode: string;
   targetDevice: string;
+  knowledgeSource: string;
+  boundaryMode: string;
   dataTypes: string[];
 };
 
@@ -200,6 +203,28 @@ export type BuilderPlan = {
   recommendedRoute: string;
   routeLabel: string;
   routeReason: string;
+  blueprint?: {
+    schema: string;
+    title: string;
+    summary: string;
+    aiType: {
+      id: string;
+      label: string;
+      capability: string;
+    };
+    userPromise: string;
+    knowledge: string;
+    boundaries: string;
+    route: string;
+    hardwareFit: string;
+    firstBuild: string;
+    releasePosture: string;
+    capabilities: Array<{
+      label: string;
+      detail: string;
+    }>;
+    watchouts: string[];
+  };
   baseModelRecommendation: {
     label: string;
     model: string;
@@ -231,6 +256,8 @@ export type BuilderRunStage = {
   id: string;
   label: string;
   action: string;
+  plainLanguage: string;
+  repairHint: string;
   status: "ready" | "running" | "pass" | "fail" | "canceled" | string;
   summary: string;
   artifact: string;

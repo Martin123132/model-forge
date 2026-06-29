@@ -736,19 +736,109 @@ function normalizeBuilderRequest(body = {}) {
   const dataTypes = rawDataTypes.map((item) => cleanSetting(item).toLowerCase()).filter(Boolean).slice(0, 8);
   return {
     intent: cleanSetting(body.intent).slice(0, 1200),
+    aiType: cleanSetting(body.aiType || "coding-helper").slice(0, 80),
     audience: cleanSetting(body.audience || "personal").slice(0, 80),
     personality: cleanSetting(body.personality || "practical").slice(0, 80),
     privacy: cleanSetting(body.privacy || "local-only").slice(0, 80),
     qualitySpeed: cleanSetting(body.qualitySpeed || "balanced").slice(0, 80),
     buildMode: cleanSetting(body.buildMode || "auto").slice(0, 80),
     targetDevice: cleanSetting(body.targetDevice || "this machine").slice(0, 120),
+    knowledgeSource: cleanSetting(body.knowledgeSource || "project-source").slice(0, 80),
+    boundaryMode: cleanSetting(body.boundaryMode || "source-backed").slice(0, 80),
     dataTypes: dataTypes.length ? dataTypes : ["code", "documents"]
+  };
+}
+
+function aiTypeSpec(aiType = "") {
+  const specs = {
+    "coding-helper": {
+      label: "Coding helper",
+      promise: "answers implementation questions with file-backed evidence",
+      capability: "Source-grounded code explanations and build/run guidance."
+    },
+    "learning-tutor": {
+      label: "Learning tutor",
+      promise: "turns local material into patient explanations and practice prompts",
+      capability: "Step-by-step tutoring from the selected source boundary."
+    },
+    "business-assistant": {
+      label: "Business assistant",
+      promise: "summarizes operational knowledge and drafts reusable team answers",
+      capability: "Team-ready briefs, decisions, and repeatable operating notes."
+    },
+    "research-bot": {
+      label: "Research bot",
+      promise: "organizes evidence and keeps claims tied to sources",
+      capability: "Evidence summaries, comparison notes, and citation-ready answers."
+    },
+    "support-bot": {
+      label: "Support bot",
+      promise: "answers support-style questions from approved local knowledge",
+      capability: "Customer-safe responses with clear unknown/unsupported handling."
+    },
+    "game-npc": {
+      label: "Game NPC",
+      promise: "uses local lore and rules to respond in character",
+      capability: "Character behavior drafts, dialogue, and scenario knowledge packs."
+    }
+  };
+  return specs[aiType] || specs["coding-helper"];
+}
+
+function knowledgeSourceLabel(value = "") {
+  if (value === "docs-only") return "documentation only";
+  if (value === "selected-files") return "selected files first";
+  if (value === "mixed-local") return "mixed local source and notes";
+  return "the configured project source";
+}
+
+function boundaryLabel(value = "") {
+  if (value === "strict-citations") return "strict source citations";
+  if (value === "creative-safe") return "creative but source-aware";
+  if (value === "operator") return "direct operator mode";
+  return "source-backed answers";
+}
+
+function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources }) {
+  const type = aiTypeSpec(request.aiType);
+  const sourceLabel = knowledgeSourceLabel(request.knowledgeSource);
+  const boundary = boundaryLabel(request.boundaryMode);
+  const sourceCount = sources?.totalFiles || 0;
+  const datasetStatus = artifacts.datasetReady ? "Reuse the existing Dataset Forge pack." : "Build a fresh Dataset Forge pack first.";
+  const proofStatus = artifacts.proofFresh && artifacts.evalFresh ? "Proof and gates already match the source tree." : "Refresh proof and gates before sharing.";
+  const localFit = hardware.modelFit?.summary || hardware.tier.detail;
+  return {
+    schema: "modelforge.builder_blueprint.v1",
+    title: `${type.label} for ${request.audience || "personal"} use`,
+    summary: `Build a ${type.label.toLowerCase()} that ${type.promise}.`,
+    aiType: {
+      id: request.aiType,
+      label: type.label,
+      capability: type.capability
+    },
+    userPromise: `${type.label}: ${type.capability}`,
+    knowledge: `Use ${sourceLabel}${sourceCount ? ` across ${sourceCount.toLocaleString()} files` : ""}.`,
+    boundaries: `${boundary}; ${request.privacy === "local-only" ? "keep artifacts local" : "prepare shareable proof before release"}.`,
+    route: `${route.label}: ${route.reason}`,
+    hardwareFit: localFit,
+    firstBuild: datasetStatus,
+    releasePosture: proofStatus,
+    capabilities: [
+      { label: "Answer style", detail: `${request.personality || "practical"} responses for ${request.audience || "personal"} users.` },
+      { label: "Knowledge boundary", detail: `Ground answers in ${sourceLabel} with ${boundary}.` },
+      { label: "Build route", detail: route.label },
+      { label: "Base model", detail: `${baseModel.model}: ${baseModel.reason}` }
+    ],
+    watchouts: [
+      hardware.tier.canTrainAdapter ? "Adapter training is plausible but still depends on exact model settings." : "This machine should prepare or run compact models rather than train heavy adapters.",
+      request.privacy === "local-only" ? "Keep source, datasets, and receipts inside the configured local data root." : "Review license and proof before any external runner or public share."
+    ]
   };
 }
 
 function chooseBaseModelRecommendation(request, hardware, ollama) {
   const intent = request.intent.toLowerCase();
-  const codeHeavy = request.dataTypes.includes("code") || /\b(code|repo|developer|programming|typescript|python)\b/.test(intent);
+  const codeHeavy = request.aiType === "coding-helper" || request.dataTypes.includes("code") || /\b(code|repo|developer|programming|typescript|python)\b/.test(intent);
   const selected = ollama.selectedModel || hardware.ollama.selectedModel || "";
   if (hardware.gpu.totalVramMb >= 12000) {
     return {
@@ -873,6 +963,7 @@ async function buildAiBuildPlan(body = {}) {
   };
   const route = chooseBuilderRoute(request, hardware, artifacts);
   const baseModel = chooseBaseModelRecommendation(request, hardware, ollama);
+  const blueprint = buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources });
   const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
   const estimatedTime = routeNeedsAdapter
     ? hardware.tier.id === "starter-lora"
@@ -975,6 +1066,7 @@ async function buildAiBuildPlan(body = {}) {
     recommendedRoute: route.id,
     routeLabel: route.label,
     routeReason: route.reason,
+    blueprint,
     baseModelRecommendation: baseModel,
     estimates: {
       time: estimatedTime,
@@ -1002,10 +1094,19 @@ async function buildAiBuildPlan(body = {}) {
     `Reason: ${route.reason}`,
     `Hardware tier: ${hardware.tier.label}`,
     `Base model: ${baseModel.model}`,
+    `Blueprint: ${blueprint.summary}`,
     "",
     "## Intent",
     "",
     plan.intent,
+    "",
+    "## Blueprint",
+    "",
+    `AI type: ${blueprint.aiType.label}`,
+    `Knowledge: ${blueprint.knowledge}`,
+    `Boundaries: ${blueprint.boundaries}`,
+    `First build: ${blueprint.firstBuild}`,
+    `Release posture: ${blueprint.releasePosture}`,
     "",
     "## Steps",
     "",
@@ -1035,11 +1136,13 @@ function builderRunTerminalStatus(status) {
   return ["pass", "fail", "canceled"].includes(String(status || ""));
 }
 
-function builderStage(id, label, action) {
+function builderStage(id, label, action, plainLanguage = "", repairHint = "") {
   return {
     id,
     label,
     action,
+    plainLanguage,
+    repairHint,
     status: "ready",
     summary: "Waiting",
     artifact: "",
@@ -1052,14 +1155,62 @@ function builderStage(id, label, action) {
 function createBuilderRunStages(plan) {
   const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(plan?.recommendedRoute);
   return [
-    builderStage("preflight", "Preflight", "Confirm the saved setup, plan, and local build roots."),
-    builderStage("source-boundary", "Source Boundary", "Record the current source inventory for this build run."),
-    builderStage("model-profile", "Model Profile", "Export the local Ollama profile and system prompt."),
-    builderStage("proof-gates", "Proof And Gates", "Build proof, run eval gates, and prepare share evidence."),
-    builderStage("dataset-forge", "Dataset Forge", "Create source-grounded JSONL examples with provenance."),
-    builderStage("recipe", "Forge Recipe", "Package dataset, proof, eval, profile, and runner contracts."),
-    builderStage(routeNeedsAdapter ? "adapter-pack" : "export-pack", routeNeedsAdapter ? "Adapter Pack" : "Export Pack", routeNeedsAdapter ? "Export the adapter-ready package and runner contract." : "Run the exported Ollama pack and store the receipt."),
-    builderStage("finalize", "Ready Pack", "Refresh the build plan and write the final run receipt.")
+    builderStage(
+      "preflight",
+      "Preflight",
+      "Confirm the saved setup, plan, and local build roots.",
+      "ModelForge checks the saved paths, local data root, and build plan before touching artifacts.",
+      "Open Setup and save the source folder, data root, Ollama model path, base model, and target model."
+    ),
+    builderStage(
+      "source-boundary",
+      "Source Boundary",
+      "Record the current source inventory for this build run.",
+      "The build records exactly which files are inside the source boundary so later claims can be checked.",
+      "Check that the configured source folder exists and is not empty."
+    ),
+    builderStage(
+      "model-profile",
+      "Model Profile",
+      "Export the local Ollama profile and system prompt.",
+      "ModelForge writes the Modelfile, system prompt, and local model profile used by the recipe.",
+      "Start Ollama or choose an installed base model in Setup."
+    ),
+    builderStage(
+      "proof-gates",
+      "Proof And Gates",
+      "Build proof, run eval gates, and prepare share evidence.",
+      "The run refreshes model cards, receipts, source hashes, license checks, and release gates.",
+      "Open Release, review the failing gate, then rebuild proof."
+    ),
+    builderStage(
+      "dataset-forge",
+      "Dataset Forge",
+      "Create source-grounded JSONL examples with provenance.",
+      "The source inventory becomes training-style examples with file paths, hashes, and license labels.",
+      "Open Model Lab, review Dataset Forge inputs, and exclude files that should not become examples."
+    ),
+    builderStage(
+      "recipe",
+      "Forge Recipe",
+      "Package dataset, proof, eval, profile, and runner contracts.",
+      "The recipe packages the dataset, proof, eval report, Ollama profile, and runner instructions together.",
+      "Rebuild Dataset Forge and the model profile before creating the recipe again."
+    ),
+    builderStage(
+      routeNeedsAdapter ? "adapter-pack" : "export-pack",
+      routeNeedsAdapter ? "Adapter Pack" : "Export Pack",
+      routeNeedsAdapter ? "Export the adapter-ready package and runner contract." : "Run the exported Ollama pack and store the receipt.",
+      routeNeedsAdapter ? "ModelForge prepares the adapter-ready pack and runner contract for later LoRA/QLoRA execution." : "ModelForge runs the exported pack to prove it can recreate the local Ollama target.",
+      routeNeedsAdapter ? "Review the adapter plan and choose a smaller base model if the hardware estimate is tight." : "Check Ollama is running and that the target model name is writable."
+    ),
+    builderStage(
+      "finalize",
+      "Ready Pack",
+      "Refresh the build plan and write the final run receipt.",
+      "The final step refreshes the build plan with the new artifacts and writes a readable receipt.",
+      "Rerun Build From Plan after fixing the earlier failed stage."
+    )
   ];
 }
 
@@ -1174,7 +1325,7 @@ async function writeBuilderRunReceipt(run) {
     "",
     "## Stages",
     "",
-    ...run.stages.map((stage) => `- ${stage.label}: ${stage.status}. ${stage.summary}${stage.artifact ? ` Artifact: ${stage.artifact}` : ""}`),
+    ...run.stages.map((stage) => `- ${stage.label}: ${stage.status}. ${stage.summary}${stage.plainLanguage ? ` ${stage.plainLanguage}` : ""}${stage.artifact ? ` Artifact: ${stage.artifact}` : ""}`),
     "",
     "## Outputs",
     "",

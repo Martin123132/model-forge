@@ -78,6 +78,11 @@ async function main() {
       Boolean(project.latestBuildPlan?.hardware?.modelFit?.candidates?.length),
       project.latestBuildPlan?.hardware?.modelFit?.summary || "no hardware fit estimate"
     ),
+    check(
+      "Builder blueprint",
+      Boolean(project.latestBuildPlan?.blueprint?.summary && project.latestBuildPlan?.request?.aiType),
+      project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"
+    ),
     check("Proof bundle", Boolean(project.latestProof?.path), project.latestProof?.path || "no proof bundle"),
     check(
       "Proof freshness",

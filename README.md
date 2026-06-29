@@ -40,9 +40,9 @@ ModelForge is a source-available, local-first cockpit for building model-ready
 artifacts from code and project folders.
 
 - Scans a local repo or folder into a source inventory with SHA-256 hashes.
-- Creates hardware-aware build plans from plain-English intent, including CPU,
-  RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and next
-  actions.
+- Creates hardware-aware build plans from plain-English intent, AI type,
+  knowledge source, answer boundaries, CPU, RAM, GPU, disk, Ollama status,
+  recommended route, expected time/disk, and next actions.
 - Estimates which model sizes are comfortable, possible, tight, or unrealistic
   for the current machine before a user starts building.
 - Runs **Build From Plan** as one guided job: source boundary, Ollama profile,
@@ -72,7 +72,12 @@ asks what the AI should do and then produces a saved build plan.
 
 The plan records:
 
+- The kind of AI being built, such as coding helper, tutor, support bot,
+  research bot, business assistant, or game NPC.
 - What the user wants the AI to do.
+- The knowledge source and answer boundary the AI should respect.
+- A plain-English blueprint with capabilities, watchouts, hardware fit, first
+  build action, and release posture.
 - Local hardware facts: CPU threads, RAM, GPU/VRAM, D-drive space, and Ollama
   availability.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
@@ -86,6 +91,9 @@ Once a plan exists, **Start Build** runs the complete local forge route and show
 each stage as it completes. The run writes a receipt under
 `.modelforge-data/builder/runs/`, so someone who is not a developer can still see
 what happened and where the artifacts landed.
+
+Build runs also expose stage explanations, repair hints, receipts and outputs,
+and previous run history inside the Builder workspace.
 
 ## Screenshots
 
@@ -204,6 +212,12 @@ Run the repeatable smoke check while `npm.cmd run dev` is active:
 
 ```powershell
 npm.cmd run qa:smoke
+```
+
+Check README image references before publishing:
+
+```powershell
+npm.cmd run qa:readme
 ```
 
 ## Project Map
