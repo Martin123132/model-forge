@@ -171,6 +171,20 @@ async function main() {
       project.latestBuildPlan?.hardware?.modelFit?.summary || "no hardware fit estimate"
     ),
     check(
+      "Hardware fit recipe",
+      Boolean(
+        project.latestBuildPlan?.hardwareRecipe?.schema === "modelforge.hardware_recipe.v1" &&
+          project.latestBuildPlan.hardwareRecipe.recommended?.modelClass &&
+          project.latestBuildPlan.hardwareRecipe.recommended?.quantization &&
+          project.latestBuildPlan.hardwareRecipe.recommended?.contextWindowTokens &&
+          project.latestBuildPlan.hardwareRecipe.recommended?.runner &&
+          project.latestBuildPlan.hardwareRecipe.reasoning?.length >= 3
+      ),
+      project.latestBuildPlan?.hardwareRecipe
+        ? `${project.latestBuildPlan.hardwareRecipe.recommended.modelClass} / ${project.latestBuildPlan.hardwareRecipe.recommended.quantization} / ${project.latestBuildPlan.hardwareRecipe.recommended.contextWindowTokens} context`
+        : "no hardware recipe"
+    ),
+    check(
       "Builder blueprint",
       Boolean(project.latestBuildPlan?.blueprint?.summary && project.latestBuildPlan?.request?.aiType),
       project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"

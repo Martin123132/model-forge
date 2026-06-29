@@ -49,6 +49,9 @@ artifacts from code and project folders.
   templates, AI type, knowledge source, source scope, answer boundaries, CPU,
   RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and
   next actions.
+- Saves a **hardware fit recipe** with the recommended model class,
+  quantization, context window, GPU layer posture, CPU threads, runner, storage
+  budget, warnings, and the plain-English reasons those settings fit.
 - Shows an **AI build contract** before the user starts: what AI is being made,
   what it is allowed to know, how ModelForge will build it, what artifacts will
   be produced, and what counts as done.
@@ -144,6 +147,9 @@ The plan records:
   route, base model, dataset path, and release proof are ready.
 - Local hardware facts: CPU threads, RAM, GPU/VRAM, D-drive space, and Ollama
   availability.
+- A **hardware fit recipe** with the selected priority, recommended model
+  class, base model, quantization, context window, GPU layers, CPU threads,
+  batch size, runner, storage budget, reasoning, and warnings.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
   prep when the hardware makes that realistic.
 - Ordered next steps mapped back to the app: Setup, Sources, Dataset Forge,

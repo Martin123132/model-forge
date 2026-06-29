@@ -2210,6 +2210,7 @@ function normalizeBuilderRequest(body = {}) {
     privacy: cleanSetting(body.privacy || "local-only").slice(0, 80),
     qualitySpeed: cleanSetting(body.qualitySpeed || "balanced").slice(0, 80),
     buildMode: cleanSetting(body.buildMode || "auto").slice(0, 80),
+    hardwarePreference: cleanSetting(body.hardwarePreference || "auto-fit").slice(0, 80),
     targetDevice: cleanSetting(body.targetDevice || "this machine").slice(0, 120),
     knowledgeSource: cleanSetting(body.knowledgeSource || "project-source").slice(0, 80),
     sourceScope: cleanSetting(body.sourceScope || "whole-project").slice(0, 80),
@@ -2295,6 +2296,13 @@ function voiceLabel(value = "") {
   if (value === "concise-support") return "Concise support";
   if (value === "in-character") return "In character";
   return "Calm practical";
+}
+
+function hardwarePreferenceLabel(value = "") {
+  if (value === "low-memory") return "Low-memory safe";
+  if (value === "max-quality") return "Maximum local quality";
+  if (value === "portable") return "Portable runner";
+  return "Auto fit";
 }
 
 function sourceScopeLabel(value = "") {
@@ -2774,7 +2782,7 @@ function buildAiProfileContract({ request, route, baseModel, artifacts, sources,
   };
 }
 
-function buildStarterModelCard({ planId, createdAt, request, aiProfile, route, baseModel, hardware, sourceScope, limitations, files }) {
+function buildStarterModelCard({ planId, createdAt, request, aiProfile, route, baseModel, hardware, hardwareRecipe, sourceScope, limitations, files }) {
   const type = aiTypeSpec(request.aiType);
   const sourceLabel = knowledgeSourceLabel(request.knowledgeSource);
   const scopedFiles = sourceScope?.includedFiles || 0;
@@ -2802,6 +2810,16 @@ function buildStarterModelCard({ planId, createdAt, request, aiProfile, route, b
     buildRoute: `${route.label}: ${route.reason}`,
     baseModel: baseModel.model,
     hardwareFit: hardware.modelFit?.summary || hardware.tier.detail,
+    localBuildSettings: hardwareRecipe
+      ? {
+          preference: hardwareRecipe.preference,
+          modelClass: hardwareRecipe.recommended.modelClass,
+          quantization: hardwareRecipe.recommended.quantization,
+          contextWindowTokens: hardwareRecipe.recommended.contextWindowTokens,
+          gpuLayers: hardwareRecipe.recommended.gpuLayers,
+          runner: hardwareRecipe.recommended.runner
+        }
+      : null,
     answerRules: aiProfile.answerRules,
     releaseChecklist: [
       "Build From Plan receipt exists.",
@@ -2851,6 +2869,19 @@ function starterModelCardMarkdown(card) {
     "",
     card.hardwareFit,
     "",
+    ...(card.localBuildSettings
+      ? [
+          "## Local Build Settings",
+          "",
+          `Preference: ${card.localBuildSettings.preference}`,
+          `Model class: ${card.localBuildSettings.modelClass}`,
+          `Quantization: ${card.localBuildSettings.quantization}`,
+          `Context window: ${card.localBuildSettings.contextWindowTokens.toLocaleString()} tokens`,
+          `GPU layers: ${card.localBuildSettings.gpuLayers}`,
+          `Runner: ${card.localBuildSettings.runner}`,
+          ""
+        ]
+      : []),
     "## Answer Rules",
     "",
     ...card.answerRules.map((item) => `- ${item}`),
@@ -2888,6 +2919,132 @@ function chooseBaseModelRecommendation(request, hardware, ollama) {
     label: "Small local or external runner base",
     model: selected || "tinyllama or llama3.2:1b",
     reason: "The plan should stay light until more RAM or GPU memory is available."
+  };
+}
+
+function modelFitCandidate(hardware, id) {
+  return hardware.modelFit?.candidates?.find((candidate) => candidate.id === id) || null;
+}
+
+function chooseHardwareModelClass(request, hardware) {
+  const memoryGb = hardware.memory.totalBytes / 1024 / 1024 / 1024;
+  const vramGb = hardware.gpu.totalVramMb / 1024;
+  const preference = request.hardwarePreference || "auto-fit";
+  const codeHeavy = request.aiType === "coding-helper" || request.dataTypes.includes("code");
+
+  if (preference === "low-memory") return modelFitCandidate(hardware, "small-instruct") || { id: "small-instruct", label: "1B-3B instruct" };
+  if (preference === "max-quality" && (vramGb >= 16 || memoryGb >= 48)) {
+    return modelFitCandidate(hardware, "fourteen-b-quantized") || { id: "fourteen-b-quantized", label: "13B/14B quantized" };
+  }
+  if (vramGb >= 8 || memoryGb >= 24 || (preference === "max-quality" && (vramGb >= 6 || memoryGb >= 16))) {
+    return modelFitCandidate(hardware, "seven-b-quantized") || { id: "seven-b-quantized", label: codeHeavy ? "7B/8B code-capable quantized" : "7B/8B quantized" };
+  }
+  return modelFitCandidate(hardware, "small-instruct") || { id: "small-instruct", label: "1B-3B instruct" };
+}
+
+function quantizationForRecipe({ request, hardware, modelClass }) {
+  const preference = request.hardwarePreference || "auto-fit";
+  const vramGb = hardware.gpu.totalVramMb / 1024;
+  const memoryGb = hardware.memory.totalBytes / 1024 / 1024 / 1024;
+  if (preference === "low-memory" || memoryGb < 12) return "Q4_K_S or Q3_K_M";
+  if (modelClass.id === "fourteen-b-quantized" && preference === "max-quality" && vramGb >= 16) return "Q5_K_M";
+  if (modelClass.id === "seven-b-quantized" && (vramGb >= 8 || memoryGb >= 24)) return "Q4_K_M";
+  if (preference === "portable") return "Q4_K_M";
+  return "Q4_K_M";
+}
+
+function contextWindowForRecipe({ request, hardware, modelClass }) {
+  const preference = request.hardwarePreference || "auto-fit";
+  const memoryGb = hardware.memory.totalBytes / 1024 / 1024 / 1024;
+  const vramGb = hardware.gpu.totalVramMb / 1024;
+  if (preference === "low-memory" || memoryGb < 12) return 2048;
+  if (modelClass.id === "fourteen-b-quantized" && (vramGb >= 16 || memoryGb >= 48)) return 8192;
+  if (vramGb >= 12 || memoryGb >= 32) return 8192;
+  if (vramGb >= 8 || memoryGb >= 24) return 6144;
+  return 4096;
+}
+
+function gpuLayerSettingForRecipe(hardware) {
+  const vramGb = hardware.gpu.totalVramMb / 1024;
+  if (!hardware.gpu.detected || !hardware.gpu.totalVramMb) return "CPU only";
+  if (vramGb >= 16) return "All practical layers";
+  if (vramGb >= 8) return "Most layers";
+  if (vramGb >= 6) return "Partial layers";
+  return "Minimal offload";
+}
+
+function batchSizeForRecipe({ request, hardware }) {
+  const preference = request.hardwarePreference || "auto-fit";
+  const memoryGb = hardware.memory.totalBytes / 1024 / 1024 / 1024;
+  const vramGb = hardware.gpu.totalVramMb / 1024;
+  if (preference === "low-memory" || memoryGb < 12) return 128;
+  if (vramGb >= 12 || memoryGb >= 32) return 512;
+  return 256;
+}
+
+function runnerForRecipe({ hardware, route }) {
+  const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
+  if (routeNeedsAdapter) return hardware.ollama.ok ? "Ollama export now; adapter runner later" : "External adapter runner later; install Ollama for local profile tests";
+  if (hardware.ollama.ok) return "Ollama local runner";
+  return "Install or start Ollama before local chat tests";
+}
+
+function buildHardwareRecipe({ request, hardware, route, baseModel, estimatedDisk }) {
+  const modelClass = chooseHardwareModelClass(request, hardware);
+  const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
+  const fitStatus = routeNeedsAdapter ? modelFitCandidate(hardware, "lora-adapter")?.buildUse || "tight" : modelClass.localUse || modelClass.buildUse || "possible";
+  const cpuThreads = Math.max(1, Math.min(hardware.cpu.threads || 1, Math.max(1, (hardware.cpu.threads || 1) - 2)));
+  const quantization = quantizationForRecipe({ request, hardware, modelClass });
+  const contextWindowTokens = contextWindowForRecipe({ request, hardware, modelClass });
+  const gpuLayers = gpuLayerSettingForRecipe(hardware);
+  const batchSize = batchSizeForRecipe({ request, hardware });
+  const runner = runnerForRecipe({ hardware, route });
+  const warnings = [];
+  if (!hardware.ollama.ok) warnings.push("Ollama is not ready, so local chat tests need setup before the generated target can run.");
+  if (!hardware.gpu.detected) warnings.push("No GPU was detected; the first build should favor compact quantized models and proof/export artifacts.");
+  if (hardware.disk.freeBytes && hardware.disk.freeBytes < 10 * 1024 * 1024 * 1024) warnings.push("Free disk space is tight for model pulls and export packs.");
+  if (routeNeedsAdapter && !hardware.tier.canTrainAdapter) warnings.push("Adapter training is listed as a plan, not a guaranteed local execution path on this machine.");
+
+  const reasoning = [
+    `${hardwarePreferenceLabel(request.hardwarePreference)} selected from ${hardware.memory.total} RAM and ${hardware.gpu.detected ? hardware.gpu.totalVram : "no detected GPU VRAM"}.`,
+    `${modelClass.label} is the safest first model class for this hardware profile.`,
+    `${quantization} keeps memory pressure aligned with the selected route.`,
+    `${contextWindowTokens.toLocaleString()} tokens keeps the first local tests useful without hiding hardware limits.`
+  ];
+
+  return {
+    schema: "modelforge.hardware_recipe.v1",
+    createdAt: new Date().toISOString(),
+    preference: hardwarePreferenceLabel(request.hardwarePreference),
+    fitStatus,
+    summary: `${modelClass.label} with ${quantization}, ${contextWindowTokens.toLocaleString()} context tokens, ${gpuLayers.toLowerCase()}, and ${runner.toLowerCase()}.`,
+    resources: {
+      cpuThreads: `${hardware.cpu.threads || 1} threads`,
+      ram: hardware.memory.total,
+      gpu: hardware.gpu.detected ? `${hardware.gpu.devices.length} detected` : "No GPU detected",
+      vram: hardware.gpu.detected ? hardware.gpu.totalVram : "No GPU VRAM",
+      diskFree: hardware.disk.free,
+      ollama: hardware.ollama.ok ? `Ready${hardware.ollama.selectedModel ? `, ${hardware.ollama.selectedModel}` : ""}` : "Not ready"
+    },
+    recommended: {
+      modelClass: modelClass.label,
+      baseModel: baseModel.model,
+      quantization,
+      contextWindowTokens,
+      gpuLayers,
+      cpuThreads,
+      batchSize,
+      runner,
+      storageBudget: estimatedDisk,
+      buildRoute: route.label
+    },
+    reasoning,
+    warnings,
+    nextSteps: [
+      `Use ${baseModel.model} or the closest installed model in the ${modelClass.label} class.`,
+      `Keep the first context window at ${contextWindowTokens.toLocaleString()} tokens before tuning upward.`,
+      routeNeedsAdapter ? "Build the dataset and recipe before attempting adapter execution." : "Run Build From Plan to create the dataset, proof, recipe, and export receipts."
+    ]
   };
 }
 
@@ -3012,6 +3169,7 @@ async function buildAiBuildPlan(body = {}) {
       ? "8-30 GB depending on base and adapter settings"
       : "4-12 GB for compact experiments"
     : "500 MB-3 GB for source, proof, dataset, and export packs";
+  const hardwareRecipe = buildHardwareRecipe({ request, hardware, route, baseModel, estimatedDisk });
   const steps = [
     planStep(
       "setup",
@@ -3109,6 +3267,7 @@ async function buildAiBuildPlan(body = {}) {
     createdAt,
     request,
     aiProfile,
+    hardwareRecipe,
     route,
     baseModel,
     hardware,
@@ -3137,6 +3296,7 @@ async function buildAiBuildPlan(body = {}) {
     sourceScopePreview,
     aiProfile,
     starterModelCard,
+    hardwareRecipe,
     blueprint,
     baseModelRecommendation: baseModel,
     estimates: {
@@ -3158,6 +3318,8 @@ async function buildAiBuildPlan(body = {}) {
     `Reason: ${route.reason}`,
     `Hardware tier: ${hardware.tier.label}`,
     `Base model: ${baseModel.model}`,
+    `Hardware preference: ${hardwareRecipe.preference}`,
+    `Local fit recipe: ${hardwareRecipe.summary}`,
     `AI name: ${aiProfile.name}`,
     `Voice: ${aiProfile.voice}`,
     `Blueprint: ${blueprint.summary}`,
@@ -3194,6 +3356,26 @@ async function buildAiBuildPlan(body = {}) {
     `Source scope: ${aiProfile.sourceScope}`,
     `Starter model card: ${starterModelCard.files.markdown}`,
     "",
+    "## Hardware Fit Recipe",
+    "",
+    `Fit status: ${hardwareRecipe.fitStatus}`,
+    `Model class: ${hardwareRecipe.recommended.modelClass}`,
+    `Base model: ${hardwareRecipe.recommended.baseModel}`,
+    `Quantization: ${hardwareRecipe.recommended.quantization}`,
+    `Context window: ${hardwareRecipe.recommended.contextWindowTokens.toLocaleString()} tokens`,
+    `GPU layers: ${hardwareRecipe.recommended.gpuLayers}`,
+    `CPU threads: ${hardwareRecipe.recommended.cpuThreads}`,
+    `Batch size: ${hardwareRecipe.recommended.batchSize}`,
+    `Runner: ${hardwareRecipe.recommended.runner}`,
+    `Storage budget: ${hardwareRecipe.recommended.storageBudget}`,
+    "",
+    "### Hardware Reasoning",
+    "",
+    ...hardwareRecipe.reasoning.map((item) => `- ${item}`),
+    "",
+    ...(hardwareRecipe.warnings.length
+      ? ["### Hardware Warnings", "", ...hardwareRecipe.warnings.map((item) => `- ${item}`), ""]
+      : []),
     "### Answer Rules",
     "",
     ...aiProfile.answerRules.map((item) => `- ${item}`),

@@ -61,6 +61,7 @@ type BuilderWizardProps = {
 };
 
 type BuilderBlueprint = NonNullable<BuilderPlan["blueprint"]>;
+type BuilderHardwareRecipe = NonNullable<BuilderPlan["hardwareRecipe"]>;
 
 const aiTypeOptions = [
   { id: "coding-helper", label: "Coding helper", detail: "Repo answers, fixes, and explanations", Icon: BrainCircuit },
@@ -86,6 +87,7 @@ const templateOptions = [
     privacy: "local-only",
     qualitySpeed: "balanced",
     buildMode: "auto",
+    hardwarePreference: "auto-fit",
     targetDevice: "this machine",
     knowledgeSource: "project-source",
     sourceScope: "code-hotspots",
@@ -106,6 +108,7 @@ const templateOptions = [
     privacy: "local-only",
     qualitySpeed: "quality",
     buildMode: "dataset",
+    hardwarePreference: "max-quality",
     targetDevice: "this machine",
     knowledgeSource: "docs-only",
     sourceScope: "docs-first",
@@ -126,6 +129,7 @@ const templateOptions = [
     privacy: "shareable",
     qualitySpeed: "balanced",
     buildMode: "portable",
+    hardwarePreference: "portable",
     targetDevice: "another machine",
     knowledgeSource: "selected-files",
     sourceScope: "small-safe-sample",
@@ -146,6 +150,7 @@ const templateOptions = [
     privacy: "local-only",
     qualitySpeed: "quality",
     buildMode: "dataset",
+    hardwarePreference: "max-quality",
     targetDevice: "this machine",
     knowledgeSource: "mixed-local",
     sourceScope: "docs-first",
@@ -166,6 +171,7 @@ const templateOptions = [
     privacy: "local-only",
     qualitySpeed: "balanced",
     buildMode: "dataset",
+    hardwarePreference: "auto-fit",
     targetDevice: "this machine",
     knowledgeSource: "mixed-local",
     sourceScope: "small-safe-sample",
@@ -198,6 +204,13 @@ const qualityOptions = [
   { id: "fast", label: "Fast" },
   { id: "balanced", label: "Balanced" },
   { id: "quality", label: "Quality" }
+];
+
+const hardwarePreferenceOptions = [
+  { id: "auto-fit", label: "Auto fit", detail: "Let ModelForge choose safe local settings" },
+  { id: "low-memory", label: "Low memory", detail: "Smaller model, lighter context" },
+  { id: "max-quality", label: "Max quality", detail: "Use the biggest sensible local fit" },
+  { id: "portable", label: "Portable", detail: "Favor settings that can move machines" }
 ];
 
 const voiceOptions = [
@@ -437,6 +450,121 @@ function optionLabel(options: Array<{ id: string; label: string }>, id?: string)
   return options.find((option) => option.id === id)?.label || options[0]?.label || "Auto";
 }
 
+function draftModelClass(hardware: HardwareProfile | null | undefined, preference: string) {
+  const candidates = hardware?.modelFit?.candidates || [];
+  const memoryGb = (hardware?.memory.totalBytes || 0) / 1024 / 1024 / 1024;
+  const vramGb = (hardware?.gpu.totalVramMb || 0) / 1024;
+  const findCandidate = (id: string) => candidates.find((candidate) => candidate.id === id);
+  if (preference === "low-memory") return findCandidate("small-instruct") || { id: "small-instruct", label: "1B-3B instruct", localUse: "possible" };
+  if (preference === "max-quality" && (vramGb >= 16 || memoryGb >= 48)) {
+    return findCandidate("fourteen-b-quantized") || { id: "fourteen-b-quantized", label: "13B/14B quantized", localUse: "possible" };
+  }
+  if (vramGb >= 8 || memoryGb >= 24 || (preference === "max-quality" && (vramGb >= 6 || memoryGb >= 16))) {
+    return findCandidate("seven-b-quantized") || { id: "seven-b-quantized", label: "7B/8B quantized", localUse: "possible" };
+  }
+  return findCandidate("small-instruct") || { id: "small-instruct", label: "1B-3B instruct", localUse: "possible" };
+}
+
+function createDraftHardwareRecipe({
+  hardware,
+  request,
+  routeLabel
+}: {
+  hardware?: HardwareProfile | null;
+  request: BuilderPlanRequest;
+  routeLabel: string;
+}): BuilderHardwareRecipe {
+  const preference = optionLabel(hardwarePreferenceOptions, request.hardwarePreference);
+  if (!hardware) {
+    return {
+      schema: "modelforge.hardware_recipe.draft.v1",
+      createdAt: "",
+      preference,
+      fitStatus: "possible",
+      summary: "Hardware check pending before local build settings can be trusted.",
+      resources: {
+        cpuThreads: "Checking",
+        ram: "Checking",
+        gpu: "Checking",
+        vram: "Checking",
+        diskFree: "Checking",
+        ollama: "Checking"
+      },
+      recommended: {
+        modelClass: "Pending hardware scan",
+        baseModel: "best local base",
+        quantization: "Pending",
+        contextWindowTokens: 4096,
+        gpuLayers: "Pending",
+        cpuThreads: 1,
+        batchSize: 128,
+        runner: "Pending hardware scan",
+        storageBudget: "Plan required",
+        buildRoute: routeLabel
+      },
+      reasoning: ["Run the hardware check to estimate model class, quantization, context, and runner settings."],
+      warnings: [],
+      nextSteps: ["Check hardware, then create the build plan."]
+    };
+  }
+
+  const modelClass = draftModelClass(hardware, request.hardwarePreference);
+  const memoryGb = hardware.memory.totalBytes / 1024 / 1024 / 1024;
+  const vramGb = hardware.gpu.totalVramMb / 1024;
+  const quantization =
+    request.hardwarePreference === "low-memory" || memoryGb < 12
+      ? "Q4_K_S or Q3_K_M"
+      : modelClass.id === "fourteen-b-quantized" && request.hardwarePreference === "max-quality" && vramGb >= 16
+        ? "Q5_K_M"
+        : "Q4_K_M";
+  const contextWindowTokens =
+    request.hardwarePreference === "low-memory" || memoryGb < 12 ? 2048 : vramGb >= 12 || memoryGb >= 32 ? 8192 : vramGb >= 8 || memoryGb >= 24 ? 6144 : 4096;
+  const gpuLayers = !hardware.gpu.detected || !hardware.gpu.totalVramMb ? "CPU only" : vramGb >= 16 ? "All practical layers" : vramGb >= 8 ? "Most layers" : vramGb >= 6 ? "Partial layers" : "Minimal offload";
+  const cpuThreads = Math.max(1, Math.min(hardware.cpu.threads || 1, Math.max(1, (hardware.cpu.threads || 1) - 2)));
+  const batchSize = request.hardwarePreference === "low-memory" || memoryGb < 12 ? 128 : vramGb >= 12 || memoryGb >= 32 ? 512 : 256;
+  const runner = hardware.ollama.ok ? "Ollama local runner" : "Install or start Ollama before local chat tests";
+  const warnings = [
+    !hardware.ollama.ok ? "Ollama is not ready, so local chat tests need setup before the generated target can run." : "",
+    !hardware.gpu.detected ? "No GPU was detected; start compact and keep proof/export artifacts first." : "",
+    hardware.disk.freeBytes && hardware.disk.freeBytes < 10 * 1024 * 1024 * 1024 ? "Free disk space is tight for local model pulls and export packs." : ""
+  ].filter(Boolean);
+
+  return {
+    schema: "modelforge.hardware_recipe.draft.v1",
+    createdAt: hardware.createdAt,
+    preference,
+    fitStatus: modelClass.localUse || "possible",
+    summary: `${modelClass.label} with ${quantization}, ${contextWindowTokens.toLocaleString()} context tokens, ${gpuLayers.toLowerCase()}, and ${runner.toLowerCase()}.`,
+    resources: {
+      cpuThreads: `${hardware.cpu.threads || 1} threads`,
+      ram: hardware.memory.total,
+      gpu: hardware.gpu.detected ? `${hardware.gpu.devices.length} detected` : "No GPU detected",
+      vram: hardware.gpu.detected ? hardware.gpu.totalVram : "No GPU VRAM",
+      diskFree: hardware.disk.free,
+      ollama: hardware.ollama.ok ? `Ready${hardware.ollama.selectedModel ? `, ${hardware.ollama.selectedModel}` : ""}` : "Not ready"
+    },
+    recommended: {
+      modelClass: modelClass.label,
+      baseModel: hardware.ollama.selectedModel || "best local base",
+      quantization,
+      contextWindowTokens,
+      gpuLayers,
+      cpuThreads,
+      batchSize,
+      runner,
+      storageBudget: "Plan required",
+      buildRoute: routeLabel
+    },
+    reasoning: [
+      `${preference} selected from ${hardware.memory.total} RAM and ${hardware.gpu.detected ? hardware.gpu.totalVram : "no detected GPU VRAM"}.`,
+      `${modelClass.label} is the safest first model class for this hardware profile.`,
+      `${quantization} keeps memory pressure aligned with the selected route.`
+    ],
+    warnings,
+    nextSteps: ["Create the build plan to save this recipe.", `Keep first tests at ${contextWindowTokens.toLocaleString()} context tokens.`, "Run Build From Plan after the recipe is saved."]
+  };
+}
+
 function createDraftBlueprint({
   templateId,
   aiType,
@@ -444,6 +572,7 @@ function createDraftBlueprint({
   personality,
   privacy,
   buildMode,
+  hardwarePreference,
   targetDevice,
   knowledgeSource,
   sourceScope,
@@ -457,6 +586,7 @@ function createDraftBlueprint({
   personality: string;
   privacy: string;
   buildMode: string;
+  hardwarePreference: string;
   targetDevice: string;
   knowledgeSource: string;
   sourceScope: string;
@@ -469,6 +599,7 @@ function createDraftBlueprint({
   const knowledgeLabel = optionLabel(knowledgeSourceOptions, knowledgeSource).toLowerCase();
   const scopeLabel = optionLabel(sourceScopeOptions, sourceScope).toLowerCase();
   const boundaryLabel = optionLabel(boundaryOptions, boundaryMode).toLowerCase();
+  const hardwarePreferenceLabel = optionLabel(hardwarePreferenceOptions, hardwarePreference).toLowerCase();
   const hardwareFit = hardware?.modelFit?.summary || hardware?.tier.detail || "Hardware check pending.";
   return {
     schema: "modelforge.builder_blueprint.v1",
@@ -484,7 +615,7 @@ function createDraftBlueprint({
     knowledge: `Use ${knowledgeLabel}${sourceCount ? ` across ${sourceCount.toLocaleString()} local files` : ""}.`,
     sourceScope: `Start with ${scopeLabel}.`,
     boundaries: `${boundaryLabel}; ${privacy === "local-only" ? "keep artifacts local" : "prepare shareable proof"}.`,
-    route: buildMode === "auto" ? "ModelForge will choose the practical route." : `Preferred route: ${optionLabel(purposeOptions, buildMode)}.`,
+    route: buildMode === "auto" ? `ModelForge will choose the practical route with ${hardwarePreferenceLabel} settings.` : `Preferred route: ${optionLabel(purposeOptions, buildMode)} with ${hardwarePreferenceLabel} settings.`,
     hardwareFit,
     firstBuild: "Create a build plan to turn this preview into saved steps.",
     releasePosture: "Proof and release gates will be refreshed before sharing.",
@@ -672,6 +803,7 @@ function requestMatchesPlan(saved?: BuilderPlanRequest, current?: BuilderPlanReq
     saved.privacy === current.privacy &&
     saved.qualitySpeed === current.qualitySpeed &&
     saved.buildMode === current.buildMode &&
+    (saved.hardwarePreference || "auto-fit") === current.hardwarePreference &&
     saved.targetDevice === current.targetDevice &&
     saved.knowledgeSource === current.knowledgeSource &&
     saved.sourceScope === current.sourceScope &&
@@ -781,6 +913,7 @@ export function BuilderWizard({
   const [buildMode, setBuildMode] = useState(plan?.request.buildMode || "auto");
   const [privacy, setPrivacy] = useState(plan?.request.privacy || "local-only");
   const [qualitySpeed, setQualitySpeed] = useState(plan?.request.qualitySpeed || "balanced");
+  const [hardwarePreference, setHardwarePreference] = useState(plan?.request.hardwarePreference || "auto-fit");
   const [targetDevice, setTargetDevice] = useState(plan?.request.targetDevice || "this machine");
   const [knowledgeSource, setKnowledgeSource] = useState(plan?.request.knowledgeSource || "project-source");
   const [sourceScope, setSourceScope] = useState(plan?.request.sourceScope || "whole-project");
@@ -833,13 +966,14 @@ export function BuilderWizard({
       privacy,
       qualitySpeed,
       buildMode,
+      hardwarePreference,
       targetDevice,
       knowledgeSource,
       sourceScope,
       boundaryMode,
       dataTypes
     }),
-    [aiName, aiType, audience, boundaryMode, buildMode, dataTypes, intent, knowledgeSource, personality, privacy, qualitySpeed, sourceScope, targetDevice, templateId, voice]
+    [aiName, aiType, audience, boundaryMode, buildMode, dataTypes, hardwarePreference, intent, knowledgeSource, personality, privacy, qualitySpeed, sourceScope, targetDevice, templateId, voice]
   );
   const planMatchesForm = requestMatchesPlan(plan?.request, currentRequest);
   const sourceScopePreview = useMemo(
@@ -861,6 +995,7 @@ export function BuilderWizard({
         personality,
         privacy,
         buildMode,
+        hardwarePreference,
         targetDevice,
         knowledgeSource,
         sourceScope,
@@ -868,7 +1003,11 @@ export function BuilderWizard({
         hardware,
         sourceCount
       }),
-    [aiType, audience, boundaryMode, buildMode, hardware, knowledgeSource, personality, plan?.blueprint, planMatchesForm, privacy, sourceCount, sourceScope, targetDevice, templateId]
+    [aiType, audience, boundaryMode, buildMode, hardware, hardwarePreference, knowledgeSource, personality, plan?.blueprint, planMatchesForm, privacy, sourceCount, sourceScope, targetDevice, templateId]
+  );
+  const hardwareRecipe = useMemo(
+    () => (planMatchesForm && plan?.hardwareRecipe) || createDraftHardwareRecipe({ hardware, request: currentRequest, routeLabel: blueprint.route }),
+    [blueprint.route, currentRequest, hardware, plan?.hardwareRecipe, planMatchesForm]
   );
   const aiProfile = useMemo(
     () =>
@@ -922,6 +1061,7 @@ export function BuilderWizard({
     setPrivacy(template.privacy);
     setQualitySpeed(template.qualitySpeed);
     setBuildMode(template.buildMode);
+    setHardwarePreference(template.hardwarePreference);
     setTargetDevice(template.targetDevice);
     setKnowledgeSource(template.knowledgeSource);
     setSourceScope(template.sourceScope);
@@ -1259,6 +1399,24 @@ export function BuilderWizard({
           </div>
 
           <div className="builder-field builder-field-wide">
+            <span>Hardware fit priority</span>
+            <div className="segmented-grid">
+              {hardwarePreferenceOptions.map((option) => (
+                <button
+                  aria-pressed={hardwarePreference === option.id}
+                  className={hardwarePreference === option.id ? "is-selected" : ""}
+                  key={option.id}
+                  type="button"
+                  onClick={() => setHardwarePreference(option.id)}
+                >
+                  <strong>{option.label}</strong>
+                  <small>{option.detail}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="builder-field builder-field-wide">
             <span>Data this AI should learn from</span>
             <div className="checkbox-grid">
               {dataTypeOptions.map((option) => (
@@ -1370,6 +1528,66 @@ export function BuilderWizard({
               <span>Ollama</span>
               <strong>{hardware?.ollama.ok ? "Ready" : "Missing"}</strong>
             </div>
+          </div>
+
+          <div className="builder-hardware-recipe-card" aria-label="Local fit recipe">
+            <div className="builder-route-heading">
+              <div>
+                <span>{hardwareRecipe.preference}</span>
+                <h2>Local fit recipe</h2>
+              </div>
+              <StatusPill status={fitTone(hardwareRecipe.fitStatus)} label={hardwareRecipe.fitStatus} />
+            </div>
+            <p>{hardwareRecipe.summary}</p>
+            <div className="hardware-recipe-grid">
+              <div>
+                <span>Model class</span>
+                <strong>{hardwareRecipe.recommended.modelClass}</strong>
+              </div>
+              <div>
+                <span>Quantization</span>
+                <strong>{hardwareRecipe.recommended.quantization}</strong>
+              </div>
+              <div>
+                <span>Context</span>
+                <strong>{hardwareRecipe.recommended.contextWindowTokens.toLocaleString()} tokens</strong>
+              </div>
+              <div>
+                <span>GPU layers</span>
+                <strong>{hardwareRecipe.recommended.gpuLayers}</strong>
+              </div>
+              <div>
+                <span>CPU threads</span>
+                <strong>{hardwareRecipe.recommended.cpuThreads}</strong>
+              </div>
+              <div>
+                <span>Batch</span>
+                <strong>{hardwareRecipe.recommended.batchSize}</strong>
+              </div>
+              <div>
+                <span>Runner</span>
+                <strong>{hardwareRecipe.recommended.runner}</strong>
+              </div>
+              <div>
+                <span>Storage</span>
+                <strong>{hardwareRecipe.recommended.storageBudget}</strong>
+              </div>
+            </div>
+            <div className="hardware-recipe-reasoning">
+              {hardwareRecipe.reasoning.slice(0, 3).map((item) => (
+                <span key={item}>
+                  <CheckCircle2 size={12} />
+                  {item}
+                </span>
+              ))}
+            </div>
+            {hardwareRecipe.warnings.length ? (
+              <div className="hardware-recipe-warnings">
+                {hardwareRecipe.warnings.map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {fitCandidates.length ? (

@@ -223,6 +223,7 @@ export type BuilderPlanRequest = {
   privacy: string;
   qualitySpeed: string;
   buildMode: string;
+  hardwarePreference: string;
   targetDevice: string;
   knowledgeSource: string;
   sourceScope: string;
@@ -280,6 +281,14 @@ export type BuilderStarterModelCard = {
   buildRoute: string;
   baseModel: string;
   hardwareFit: string;
+  localBuildSettings?: {
+    preference: string;
+    modelClass: string;
+    quantization: string;
+    contextWindowTokens: number;
+    gpuLayers: string;
+    runner: string;
+  } | null;
   answerRules: string[];
   releaseChecklist: string[];
   limitations: string[];
@@ -289,6 +298,37 @@ export type BuilderStarterModelCard = {
     versionJson: string;
     versionMarkdown: string;
   };
+};
+
+export type BuilderHardwareRecipe = {
+  schema: string;
+  createdAt: string;
+  preference: string;
+  fitStatus: "comfortable" | "possible" | "tight" | "avoid" | string;
+  summary: string;
+  resources: {
+    cpuThreads: string;
+    ram: string;
+    gpu: string;
+    vram: string;
+    diskFree: string;
+    ollama: string;
+  };
+  recommended: {
+    modelClass: string;
+    baseModel: string;
+    quantization: string;
+    contextWindowTokens: number;
+    gpuLayers: string;
+    cpuThreads: number;
+    batchSize: number;
+    runner: string;
+    storageBudget: string;
+    buildRoute: string;
+  };
+  reasoning: string[];
+  warnings: string[];
+  nextSteps: string[];
 };
 
 export type BuilderPlan = {
@@ -316,6 +356,7 @@ export type BuilderPlan = {
   sourceScopePreview?: SourceScopePreview;
   aiProfile?: BuilderAiProfile;
   starterModelCard?: BuilderStarterModelCard;
+  hardwareRecipe?: BuilderHardwareRecipe;
   blueprint?: {
     schema: string;
     title: string;

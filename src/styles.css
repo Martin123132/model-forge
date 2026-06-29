@@ -1871,6 +1871,100 @@ h2 {
   line-height: 1.45;
 }
 
+.builder-hardware-recipe-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid #cfe0ff;
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(20, 92, 255, 0.04), rgba(15, 157, 88, 0.035)),
+    #fff;
+}
+
+.builder-hardware-recipe-card p {
+  margin: 0;
+  color: #3d4e66;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.hardware-recipe-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hardware-recipe-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.hardware-recipe-grid span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hardware-recipe-grid strong {
+  overflow: hidden;
+  min-width: 0;
+  color: #172236;
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hardware-recipe-reasoning,
+.hardware-recipe-warnings {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hardware-recipe-reasoning span {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  min-width: 0;
+  color: #3d4e66;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.hardware-recipe-reasoning svg {
+  margin-top: 1px;
+  color: var(--green);
+}
+
+.hardware-recipe-warnings span {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #fed7aa;
+  border-radius: 7px;
+  background: #fffaf1;
+  color: #8a4a09;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .fit-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6763,6 +6857,7 @@ h2 {
   .blueprint-metrics,
   .blueprint-capability-grid,
   .builder-identity-card,
+  .hardware-recipe-grid,
   .source-scope-preview-lists,
   .ai-profile-facts,
   .ai-profile-rules > div,
@@ -6817,6 +6912,8 @@ h2 {
   .ai-profile-model-card em,
   .ai-profile-output strong,
   .ai-profile-output em,
+  .hardware-recipe-grid span,
+  .hardware-recipe-grid strong,
   .builder-run-stage strong,
   .builder-run-stage em,
   .builder-run-output em,

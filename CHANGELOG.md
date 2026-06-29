@@ -12,6 +12,9 @@ forge cockpit.
   ready.
 - Added AI naming, response voice selection, and starter model-card artifacts
   for every Builder plan before the one-click build run starts.
+- Added saved hardware fit recipes for model class, quantization, context
+  window, GPU layers, CPU threads, runner, storage budget, warnings, and
+  reasoning.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,
