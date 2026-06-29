@@ -1171,6 +1171,7 @@ h2 {
 }
 
 .source-scope-grid button {
+  gap: 3px;
   min-height: 54px;
 }
 
@@ -1248,6 +1249,16 @@ h2 {
   white-space: nowrap;
 }
 
+.source-scope-grid button em {
+  overflow: hidden;
+  color: #365176;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .segmented-grid button small {
   overflow: hidden;
   max-width: 100%;
@@ -1282,6 +1293,7 @@ h2 {
 .ai-type-grid button.is-selected strong,
 .ai-type-grid button.is-selected svg,
 .source-scope-grid button.is-selected strong,
+.source-scope-grid button.is-selected em,
 .segmented-row button.is-selected {
   color: var(--blue);
 }
@@ -1632,6 +1644,101 @@ h2 {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-scope-preview-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.source-scope-preview-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.source-scope-preview-card > div:first-child strong,
+.source-scope-preview-card > div:first-child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-scope-preview-card > div:first-child strong {
+  color: #172236;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.source-scope-preview-card > div:first-child span {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.source-scope-preview-card p {
+  margin: 0;
+  color: #4b5b73;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.source-scope-preview-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.source-scope-preview-lists > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.source-scope-preview-lists strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.source-scope-preview-lists span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.source-scope-preview-lists b,
+.source-scope-preview-lists em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-scope-preview-lists b {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.source-scope-preview-lists em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .builder-checklist-card {
@@ -3473,7 +3580,7 @@ h2 {
 
 .dataset-forge-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -5120,7 +5227,8 @@ h2 {
   }
 
   .blueprint-metrics,
-  .blueprint-capability-grid {
+  .blueprint-capability-grid,
+  .source-scope-preview-lists {
     grid-template-columns: 1fr;
   }
 
@@ -5139,6 +5247,10 @@ h2 {
   .builder-blueprint-heading h2,
   .blueprint-metrics span,
   .blueprint-capability-grid span,
+  .source-scope-preview-card > div:first-child strong,
+  .source-scope-preview-card > div:first-child span,
+  .source-scope-preview-lists b,
+  .source-scope-preview-lists em,
   .builder-checklist-item strong,
   .builder-checklist-item em,
   .builder-run-heading h2,

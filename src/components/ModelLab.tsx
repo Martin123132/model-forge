@@ -355,6 +355,10 @@ export function ModelLab({
               <strong>{datasetForge ? `${datasetForge.summary.licenseReviewedPercent}%` : "Waiting"}</strong>
             </div>
             <div>
+              <span>Scope</span>
+              <strong>{datasetForge?.sourceScope ? `${datasetForge.sourceScope.includedFiles.toLocaleString()} in` : "Waiting"}</strong>
+            </div>
+            <div>
               <span>Built</span>
               <strong>{datasetStamp(datasetForge)}</strong>
             </div>

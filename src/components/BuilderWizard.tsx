@@ -20,7 +20,18 @@ import {
   Wand2
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { BuilderPlan, BuilderPlanRequest, BuilderRun, DatasetForge, ForgeRecipe, HardwareProfile, SetupState, SourceSummary } from "../lib/types";
+import type {
+  BuilderPlan,
+  BuilderPlanRequest,
+  BuilderRun,
+  DatasetForge,
+  ForgeRecipe,
+  HardwareProfile,
+  SetupState,
+  SourceScopeOption,
+  SourceScopePreview,
+  SourceSummary
+} from "../lib/types";
 import { StatusPill } from "./StatusPill";
 import type { WorkspaceView } from "./WorkspaceTabs";
 
@@ -197,6 +208,151 @@ const boundaryOptions = [
   { id: "creative-safe", label: "Creative but bounded" },
   { id: "operator", label: "Direct operator" }
 ];
+
+const sourceScopeOrder = sourceScopeOptions.map((option) => option.id);
+
+function sourceExtension(path = "") {
+  const match = path.toLowerCase().match(/\.[^.\\/]+$/);
+  return match?.[0] || "";
+}
+
+function isDocsPreviewRow(row: SourceSummary["rows"][number]) {
+  const path = row.path.toLowerCase();
+  return path === "readme.md" || path.startsWith("docs/") || row.language === "Markdown" || row.language === "Text" || [".md", ".mdx", ".txt"].includes(sourceExtension(path));
+}
+
+function isCodePreviewRow(row: SourceSummary["rows"][number]) {
+  const path = row.path.toLowerCase();
+  const codeLanguages = ["TypeScript", "JavaScript", "Python", "PowerShell", "CSS", "HTML"];
+  const configLanguages = ["JSON", "JSONL", "TOML", "YAML"];
+  return path === "server.mjs" || path.startsWith("src/") || path.startsWith("scripts/") || codeLanguages.includes(row.language) || configLanguages.includes(row.language);
+}
+
+function isDatasetPreviewCandidate(row: SourceSummary["rows"][number]) {
+  const extension = sourceExtension(row.path);
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".gz", ".pdf"].includes(extension)) return false;
+  if (row.sizeBytes > 420_000) return false;
+  return ["TypeScript", "JavaScript", "Python", "Markdown", "JSON", "JSONL", "TOML", "YAML", "CSS", "HTML", "PowerShell", "Text", "File"].includes(row.language);
+}
+
+function sourcePreviewReason(row: SourceSummary["rows"][number], scopeId: string) {
+  if (scopeId === "whole-project") return { include: true, reason: "Inside the current project boundary." };
+  if (scopeId === "docs-first") {
+    return isDocsPreviewRow(row)
+      ? { include: true, reason: "Documentation, README, or note-style source." }
+      : { include: false, reason: "Outside the docs-first starter boundary." };
+  }
+  if (scopeId === "code-hotspots") {
+    return isCodePreviewRow(row)
+      ? { include: true, reason: "Implementation, script, or code-facing config." }
+      : { include: false, reason: "Outside the code-hotspots starter boundary." };
+  }
+  if (!isDatasetPreviewCandidate(row)) return { include: false, reason: "Not a safe text candidate for the starter sample." };
+  if (row.sizeBytes > 120_000) return { include: false, reason: "Too large for the small safe starter sample." };
+  const lowerPath = row.path.toLowerCase();
+  const fileName = lowerPath.split("/").pop() || lowerPath;
+  if (fileName.startsWith(".env") || /(^|[\/_.-])(secret|token|password|credential|private|key)([\/_.-]|$)/i.test(lowerPath)) {
+    return { include: false, reason: "Path looks sensitive; review manually before inclusion." };
+  }
+  return { include: true, reason: "Reviewed, readable, and compact starter file." };
+}
+
+function sourcePreviewRank(row: SourceSummary["rows"][number], scopeId: string) {
+  const path = row.path.toLowerCase();
+  if (scopeId === "docs-first") {
+    if (path === "readme.md") return 0;
+    if (path.startsWith("docs/")) return 1;
+    if (row.language === "Markdown") return 2;
+    return 4;
+  }
+  if (scopeId === "code-hotspots") {
+    if (path === "server.mjs") return 0;
+    if (path.startsWith("src/")) return 1;
+    if (path.startsWith("scripts/")) return 2;
+    return 5;
+  }
+  if (scopeId === "small-safe-sample") {
+    if (path === "readme.md") return 0;
+    if (path === "package.json") return 1;
+    if (path === "server.mjs") return 2;
+    if (path.startsWith("src/")) return 3;
+    if (path.startsWith("scripts/")) return 4;
+    if (path.startsWith("docs/")) return 5;
+    return 8;
+  }
+  return 10;
+}
+
+function createClientSourceScopeOption(sources: SourceSummary | null | undefined, scopeId: string): SourceScopeOption {
+  const option = sourceScopeOptions.find((item) => item.id === scopeId) || sourceScopeOptions[0];
+  const rows = sources?.rows || [];
+  const decisions = rows.map((row, index) => {
+    const decision = sourcePreviewReason(row, scopeId);
+    return {
+      row,
+      index,
+      include: decision.include,
+      reason: decision.reason,
+      rank: sourcePreviewRank(row, scopeId)
+    };
+  });
+  if (scopeId === "small-safe-sample") {
+    const allowed = new Set(
+      decisions
+        .filter((decision) => decision.include)
+        .sort((left, right) => left.rank - right.rank || left.index - right.index)
+        .slice(0, 24)
+        .map((decision) => decision.index)
+    );
+    for (const decision of decisions) {
+      if (decision.include && !allowed.has(decision.index)) {
+        decision.include = false;
+        decision.reason = "Outside the first 24 reviewed starter files.";
+      }
+    }
+  }
+  const ordered = decisions.sort((left, right) => {
+    if (left.include !== right.include) return left.include ? -1 : 1;
+    return left.rank - right.rank || left.index - right.index;
+  });
+  const included = ordered.filter((decision) => decision.include);
+  const excluded = ordered.filter((decision) => !decision.include);
+  const mapRow = (decision: (typeof decisions)[number]) => ({
+    path: decision.row.path,
+    language: decision.row.language,
+    size: decision.row.size,
+    sizeBytes: decision.row.sizeBytes,
+    license: decision.row.license,
+    hashShort: decision.row.hashShort,
+    reason: decision.reason
+  });
+  const includedSizeBytes = included.reduce((total, decision) => total + decision.row.sizeBytes, 0);
+  const excludedSizeBytes = excluded.reduce((total, decision) => total + decision.row.sizeBytes, 0);
+  return {
+    id: option.id,
+    label: option.label,
+    detail: option.detail,
+    totalFiles: sources?.totalFiles || 0,
+    sampledFiles: sources?.sampledFiles || rows.length,
+    includedFiles: included.length,
+    excludedFiles: excluded.length,
+    includedSizeBytes,
+    includedSize: `${Math.round(includedSizeBytes / 1024).toLocaleString()} KB`,
+    excludedSizeBytes,
+    excludedSize: `${Math.round(excludedSizeBytes / 1024).toLocaleString()} KB`,
+    datasetCandidateFiles: included.filter((decision) => isDatasetPreviewCandidate(decision.row)).length,
+    includedPreview: included.slice(0, 8).map(mapRow),
+    excludedPreview: excluded.slice(0, 8).map(mapRow)
+  };
+}
+
+function createClientSourceScopePreview(sources: SourceSummary | null | undefined, selected: string): SourceScopePreview {
+  return {
+    schema: "modelforge.source_scope_preview.client.v1",
+    selected,
+    options: sourceScopeOrder.map((scopeId) => createClientSourceScopeOption(sources, scopeId))
+  };
+}
 
 function stepStatus(status: string): "pass" | "warn" | "fail" | "neutral" {
   if (status === "pass") return "pass";
@@ -432,7 +588,6 @@ export function BuilderWizard({
   const runProgress = buildRunProgress(activeRun);
   const fitCandidates = hardware?.modelFit?.candidates || [];
   const runIsActive = activeRun?.status === "running";
-  const sourceCount = sources?.totalFiles || 0;
   const currentRequest = useMemo<BuilderPlanRequest>(
     () => ({
       intent,
@@ -452,6 +607,15 @@ export function BuilderWizard({
     [aiType, audience, boundaryMode, buildMode, dataTypes, intent, knowledgeSource, personality, privacy, qualitySpeed, sourceScope, targetDevice, templateId]
   );
   const planMatchesForm = requestMatchesPlan(plan?.request, currentRequest);
+  const sourceScopePreview = useMemo(
+    () => (planMatchesForm && plan?.sourceScopePreview ? plan.sourceScopePreview : createClientSourceScopePreview(sources, sourceScope)),
+    [plan?.sourceScopePreview, planMatchesForm, sourceScope, sources]
+  );
+  const selectedSourceScope =
+    sourceScopePreview.options.find((option) => option.id === sourceScopePreview.selected || option.id === sourceScope) ||
+    sourceScopePreview.options[0] ||
+    createClientSourceScopeOption(sources, sourceScope);
+  const sourceCount = selectedSourceScope.includedFiles || sources?.totalFiles || 0;
   const blueprint = useMemo(
     () =>
       (planMatchesForm && plan?.blueprint) ||
@@ -480,6 +644,7 @@ export function BuilderWizard({
   const outputRows = activeRun
     ? [
         { label: "Proof", path: activeRun.outputs.proofPath },
+        { label: "Source scope", path: activeRun.outputs.sourceScopeReceiptPath },
         { label: "Dataset", path: activeRun.outputs.datasetPath },
         { label: "Recipe", path: activeRun.outputs.recipePath },
         { label: "Pack receipt", path: activeRun.outputs.packRunReceiptPath },
@@ -633,7 +798,7 @@ export function BuilderWizard({
           <div className="builder-field builder-field-wide">
             <span>Source scope</span>
             <div className="source-scope-grid">
-              {sourceScopeOptions.map((option) => (
+              {sourceScopePreview.options.map((option) => (
                 <button
                   aria-pressed={sourceScope === option.id}
                   className={sourceScope === option.id ? "is-selected" : ""}
@@ -643,9 +808,43 @@ export function BuilderWizard({
                   onClick={() => setSourceScope(option.id)}
                 >
                   <strong>{option.label}</strong>
-                  <small>{option.detail}</small>
+                  <small>
+                    {option.includedFiles.toLocaleString()} in / {option.excludedFiles.toLocaleString()} out
+                  </small>
+                  <em>{option.datasetCandidateFiles.toLocaleString()} dataset candidates</em>
                 </button>
               ))}
+            </div>
+            <div className="source-scope-preview-card">
+              <div>
+                <strong>{selectedSourceScope.label}</strong>
+                <span>
+                  {selectedSourceScope.includedFiles.toLocaleString()} included, {selectedSourceScope.excludedFiles.toLocaleString()} excluded
+                </span>
+              </div>
+              <p>{selectedSourceScope.detail}</p>
+              <div className="source-scope-preview-lists">
+                <div>
+                  <strong>Included preview</strong>
+                  {(selectedSourceScope.includedPreview.length ? selectedSourceScope.includedPreview : []).slice(0, 5).map((row) => (
+                    <span key={`in-${row.path}`} title={row.reason}>
+                      <b>{row.path}</b>
+                      <em>{row.reason}</em>
+                    </span>
+                  ))}
+                  {!selectedSourceScope.includedPreview.length ? <span>No files included yet.</span> : null}
+                </div>
+                <div>
+                  <strong>Excluded preview</strong>
+                  {(selectedSourceScope.excludedPreview.length ? selectedSourceScope.excludedPreview : []).slice(0, 5).map((row) => (
+                    <span key={`out-${row.path}`} title={row.reason}>
+                      <b>{row.path}</b>
+                      <em>{row.reason}</em>
+                    </span>
+                  ))}
+                  {!selectedSourceScope.excludedPreview.length ? <span>No files excluded by this scope.</span> : null}
+                </div>
+              </div>
             </div>
           </div>
 

@@ -62,6 +62,42 @@ export type SourceSummary = {
   rows: SourceRow[];
 };
 
+export type SourceScopeRow = {
+  path: string;
+  language: string;
+  size: string;
+  sizeBytes: number;
+  license: string;
+  hashShort: string;
+  reason: string;
+};
+
+export type SourceScopeOption = {
+  schema?: string;
+  id: string;
+  label: string;
+  detail: string;
+  totalFiles: number;
+  sampledFiles: number;
+  includedFiles: number;
+  excludedFiles: number;
+  includedSizeBytes: number;
+  includedSize: string;
+  excludedSizeBytes: number;
+  excludedSize: string;
+  datasetCandidateFiles: number;
+  includedPreview: SourceScopeRow[];
+  excludedPreview: SourceScopeRow[];
+  includedPaths?: SourceScopeRow[];
+  excludedPaths?: SourceScopeRow[];
+};
+
+export type SourceScopePreview = {
+  schema: string;
+  selected: string;
+  options: SourceScopeOption[];
+};
+
 export type ModelInfo = {
   name: string;
   id: string;
@@ -205,6 +241,7 @@ export type BuilderPlan = {
   recommendedRoute: string;
   routeLabel: string;
   routeReason: string;
+  sourceScopePreview?: SourceScopePreview;
   blueprint?: {
     schema: string;
     title: string;
@@ -293,6 +330,7 @@ export type BuilderRun = {
   outputs: {
     buildPlanPath: string;
     sourceInventoryPath: string;
+    sourceScopeReceiptPath: string;
     modelProfilePath: string;
     proofPath: string;
     evalPath: string;
@@ -463,6 +501,7 @@ export type DatasetForge = {
   sourceRoot: string;
   dataRoot: string;
   requestedBy: string;
+  sourceScope?: SourceScopeOption;
   summary: {
     totalExamples: number;
     includedFiles: number;
@@ -484,6 +523,8 @@ export type DatasetForge = {
     evalPath: string;
     sourceFiles: number;
     sampledFiles: number;
+    scopedFiles?: number;
+    scopedDatasetCandidates?: number;
     sourcesMatchProof: boolean;
     evalMatchesProof: boolean;
     licenseSignals?: LicenseSignals;
@@ -498,11 +539,15 @@ export type DatasetForge = {
     jsonl: string;
     readme: string;
     preview: string;
+    sourceScopeReceipt?: string;
+    sourceScopeJson?: string;
     versionDir?: string;
     versionManifest?: string;
     versionJsonl?: string;
     versionReadme?: string;
     versionPreview?: string;
+    versionSourceScopeReceipt?: string;
+    versionSourceScopeJson?: string;
   };
   examplesPreview: DatasetForgePreview[];
 };
@@ -535,6 +580,7 @@ export type ForgeRecipeModelPlan = {
     tokenEstimate: number;
     reviewedFiles: number;
     sampledFiles: number;
+    sourceScope?: SourceScopeOption | null;
     forgedExamples?: number;
     forgedTokens?: number;
     forgedPath?: string;
@@ -563,6 +609,7 @@ export type ForgeRecipe = {
   dataset: {
     sourceFiles: number;
     sampledFiles: number;
+    sourceScope?: SourceScopeOption | null;
     rows: number;
     tokens: number;
     estimatedSize: string;

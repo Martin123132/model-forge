@@ -810,6 +810,282 @@ function sourceScopeLabel(value = "") {
   return "the whole project boundary";
 }
 
+const sourceScopeIds = ["whole-project", "docs-first", "code-hotspots", "small-safe-sample"];
+
+function normalizeSourceScopeId(value = "") {
+  return sourceScopeIds.includes(value) ? value : "whole-project";
+}
+
+function sourceScopeSpec(value = "") {
+  const id = normalizeSourceScopeId(value);
+  const specs = {
+    "whole-project": {
+      id,
+      label: "Whole project",
+      detail: "Use every file in the current source boundary."
+    },
+    "docs-first": {
+      id,
+      label: "Docs first",
+      detail: "Start with README, docs, notes, and text knowledge."
+    },
+    "code-hotspots": {
+      id,
+      label: "Code hotspots",
+      detail: "Start with implementation files, scripts, and code-facing configs."
+    },
+    "small-safe-sample": {
+      id,
+      label: "Small safe sample",
+      detail: "Start with a compact reviewed subset that is easier to inspect."
+    }
+  };
+  return specs[id];
+}
+
+function sourceScopePreviewRow(row, reason = "") {
+  return {
+    path: row.path,
+    language: row.language,
+    size: row.size,
+    sizeBytes: row.sizeBytes,
+    license: row.license,
+    hashShort: row.hashShort,
+    reason
+  };
+}
+
+function isDocsFirstRow(row) {
+  const path = String(row.path || "").toLowerCase();
+  const extension = extname(path);
+  return (
+    path === "readme.md" ||
+    path.startsWith("docs/") ||
+    path.includes("/docs/") ||
+    ["markdown", "text"].includes(String(row.language || "").toLowerCase()) ||
+    [".md", ".mdx", ".txt", ".rst", ".adoc"].includes(extension)
+  );
+}
+
+function isCodeHotspotRow(row) {
+  const path = String(row.path || "").toLowerCase();
+  const language = String(row.language || "").toLowerCase();
+  const extension = extname(path);
+  if (path === "server.mjs" || path.startsWith("src/") || path.startsWith("scripts/") || path.startsWith("mcp/")) {
+    return true;
+  }
+  if (["typescript", "javascript", "python", "powershell", "css", "html"].includes(language)) {
+    return true;
+  }
+  return [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".ps1", ".css", ".html"].includes(extension);
+}
+
+function isCodeConfigRow(row) {
+  const path = String(row.path || "").toLowerCase();
+  const language = String(row.language || "").toLowerCase();
+  return (
+    ["json", "jsonl", "toml", "yaml"].includes(language) ||
+    path === "package.json" ||
+    path === "vite.config.ts" ||
+    path.startsWith("tsconfig") ||
+    path.endsWith(".config.js") ||
+    path.endsWith(".config.ts") ||
+    path.endsWith(".config.mjs")
+  );
+}
+
+function hasSensitiveLookingPath(row) {
+  const path = String(row.path || "").toLowerCase();
+  const name = path.split("/").pop() || path;
+  return name.startsWith(".env") || /(^|[\/_.-])(secret|token|password|credential|private|key)([\/_.-]|$)/i.test(path);
+}
+
+function sourceScopeBaseDecision(row, scopeId) {
+  if (scopeId === "whole-project") {
+    return { include: true, reason: "Inside the current project boundary." };
+  }
+  if (scopeId === "docs-first") {
+    return isDocsFirstRow(row)
+      ? { include: true, reason: "Documentation, README, or note-style source." }
+      : { include: false, reason: "Outside the docs-first starter boundary." };
+  }
+  if (scopeId === "code-hotspots") {
+    return isCodeHotspotRow(row) || isCodeConfigRow(row)
+      ? { include: true, reason: "Implementation, script, or code-facing config." }
+      : { include: false, reason: "Outside the code-hotspots starter boundary." };
+  }
+  if (!isDatasetForgeCandidate(row)) {
+    return { include: false, reason: "Not a safe text candidate for the starter sample." };
+  }
+  if (row.sizeBytes > 120_000) {
+    return { include: false, reason: "Too large for the small safe starter sample." };
+  }
+  if (hasSensitiveLookingPath(row)) {
+    return { include: false, reason: "Path looks sensitive; review manually before inclusion." };
+  }
+  if (!isLicenseReviewedLabel(row.license)) {
+    return { include: false, reason: "License posture is not reviewed yet." };
+  }
+  return { include: true, reason: "Reviewed, readable, and compact starter file." };
+}
+
+function sourceScopeRank(row, scopeId) {
+  const path = String(row.path || "").toLowerCase();
+  if (scopeId === "docs-first") {
+    if (path === "readme.md") return 0;
+    if (path.startsWith("docs/")) return 1;
+    if (String(row.language).toLowerCase() === "markdown") return 2;
+    return 4;
+  }
+  if (scopeId === "code-hotspots") {
+    if (path === "server.mjs") return 0;
+    if (path.startsWith("src/")) return 1;
+    if (path.startsWith("scripts/")) return 2;
+    if (isCodeConfigRow(row)) return 3;
+    return 5;
+  }
+  if (scopeId === "small-safe-sample") {
+    if (path === "readme.md") return 0;
+    if (path === "package.json") return 1;
+    if (path === "server.mjs") return 2;
+    if (path.startsWith("src/")) return 3;
+    if (path.startsWith("scripts/")) return 4;
+    if (path.startsWith("docs/")) return 5;
+    return 8;
+  }
+  return 10;
+}
+
+function resolveSourceScope(sources, scopeId = "whole-project", options = {}) {
+  const normalizedScopeId = normalizeSourceScopeId(scopeId);
+  const spec = sourceScopeSpec(normalizedScopeId);
+  const starterLimit = Math.max(1, Math.min(Number(options.smallSafeLimit || 24), 80));
+  const rows = [...(sources?.rows || [])];
+  const decisions = rows.map((row, index) => {
+    const decision = sourceScopeBaseDecision(row, normalizedScopeId);
+    return {
+      row,
+      index,
+      include: decision.include,
+      reason: decision.reason,
+      rank: sourceScopeRank(row, normalizedScopeId)
+    };
+  });
+  if (normalizedScopeId === "small-safe-sample") {
+    const included = decisions
+      .filter((decision) => decision.include)
+      .sort((left, right) => left.rank - right.rank || left.index - right.index);
+    const allowed = new Set(included.slice(0, starterLimit).map((decision) => decision.index));
+    for (const decision of decisions) {
+      if (decision.include && !allowed.has(decision.index)) {
+        decision.include = false;
+        decision.reason = `Outside the first ${starterLimit} reviewed starter files.`;
+      }
+    }
+  }
+  const ordered = decisions.sort((left, right) => {
+    if (left.include !== right.include) return left.include ? -1 : 1;
+    return left.rank - right.rank || left.index - right.index;
+  });
+  const includedDecisions = ordered.filter((decision) => decision.include);
+  const excludedDecisions = ordered.filter((decision) => !decision.include);
+  const includedRows = includedDecisions.map((decision) => decision.row);
+  const excludedRows = excludedDecisions.map((decision) => decision.row);
+  const includedSizeBytes = includedRows.reduce((total, row) => total + (row.sizeBytes || 0), 0);
+  const excludedSizeBytes = excludedRows.reduce((total, row) => total + (row.sizeBytes || 0), 0);
+  return {
+    schema: "modelforge.source_scope.v1",
+    id: normalizedScopeId,
+    label: spec.label,
+    detail: spec.detail,
+    totalFiles: sources?.totalFiles || 0,
+    sampledFiles: sources?.sampledFiles || rows.length,
+    includedFiles: includedRows.length,
+    excludedFiles: excludedRows.length,
+    includedSizeBytes,
+    includedSize: formatBytes(includedSizeBytes),
+    excludedSizeBytes,
+    excludedSize: formatBytes(excludedSizeBytes),
+    datasetCandidateFiles: includedRows.filter(isDatasetForgeCandidate).length,
+    includedPreview: includedDecisions.slice(0, 10).map((decision) => sourceScopePreviewRow(decision.row, decision.reason)),
+    excludedPreview: excludedDecisions.slice(0, 10).map((decision) => sourceScopePreviewRow(decision.row, decision.reason)),
+    includedRows,
+    excludedRows,
+    includedPaths: includedDecisions.map((decision) => sourceScopePreviewRow(decision.row, decision.reason)),
+    excludedPaths: excludedDecisions.map((decision) => sourceScopePreviewRow(decision.row, decision.reason))
+  };
+}
+
+function publicSourceScopeResolution(resolution) {
+  return {
+    schema: resolution.schema,
+    id: resolution.id,
+    label: resolution.label,
+    detail: resolution.detail,
+    totalFiles: resolution.totalFiles,
+    sampledFiles: resolution.sampledFiles,
+    includedFiles: resolution.includedFiles,
+    excludedFiles: resolution.excludedFiles,
+    includedSizeBytes: resolution.includedSizeBytes,
+    includedSize: resolution.includedSize,
+    excludedSizeBytes: resolution.excludedSizeBytes,
+    excludedSize: resolution.excludedSize,
+    datasetCandidateFiles: resolution.datasetCandidateFiles,
+    includedPreview: resolution.includedPreview,
+    excludedPreview: resolution.excludedPreview,
+    includedPaths: resolution.includedPaths,
+    excludedPaths: resolution.excludedPaths
+  };
+}
+
+function buildSourceScopePreview(sources, selectedScope = "whole-project") {
+  return {
+    schema: "modelforge.source_scope_preview.v1",
+    selected: normalizeSourceScopeId(selectedScope),
+    options: sourceScopeIds.map((id) => publicSourceScopeResolution(resolveSourceScope(sources, id)))
+  };
+}
+
+async function writeSourceScopeReceipt(targetDir, resolution, context = {}) {
+  const receiptJson = join(targetDir, "source-scope.json");
+  const receiptMarkdown = join(targetDir, "source-scope.md");
+  const payload = {
+    ...publicSourceScopeResolution(resolution),
+    createdAt: new Date().toISOString(),
+    requestedBy: context.requestedBy || "ModelForge",
+    sourceRoot,
+    title: context.title || "ModelForge Source Scope"
+  };
+  const includedLines = payload.includedPaths.length
+    ? payload.includedPaths.map((row) => `- ${row.path} (${row.language}, ${row.size}) - ${row.reason}`)
+    : ["- No files included by this scope."];
+  const excludedLines = payload.excludedPaths.length
+    ? payload.excludedPaths.map((row) => `- ${row.path} (${row.language}, ${row.size}) - ${row.reason}`)
+    : ["- No files excluded by this scope."];
+  const markdown = [
+    `# ${payload.title}`,
+    "",
+    `Scope: ${payload.label}`,
+    `Detail: ${payload.detail}`,
+    `Source root: ${sourceRoot}`,
+    `Included files: ${payload.includedFiles}`,
+    `Excluded files: ${payload.excludedFiles}`,
+    `Dataset candidates: ${payload.datasetCandidateFiles}`,
+    "",
+    "## Included Files",
+    "",
+    ...includedLines,
+    "",
+    "## Excluded Files",
+    "",
+    ...excludedLines,
+    ""
+  ].join("\n");
+  await writeJson(receiptJson, payload);
+  await writeFile(receiptMarkdown, markdown, "utf-8");
+  return { json: receiptJson, markdown: receiptMarkdown };
+}
+
 function boundaryLabel(value = "") {
   if (value === "strict-citations") return "strict source citations";
   if (value === "creative-safe") return "creative but source-aware";
@@ -817,8 +1093,8 @@ function boundaryLabel(value = "") {
   return "source-backed answers";
 }
 
-function firstRunChecklist({ artifacts, hardware, sources, baseModel }) {
-  const sourceCount = sources?.totalFiles || 0;
+function firstRunChecklist({ artifacts, hardware, sources, baseModel, sourceScope }) {
+  const sourceCount = sourceScope?.includedFiles ?? sources?.totalFiles ?? 0;
   return [
     {
       label: "Setup saved",
@@ -828,7 +1104,9 @@ function firstRunChecklist({ artifacts, hardware, sources, baseModel }) {
     {
       label: "Source boundary",
       status: sourceCount ? "pass" : "blocked",
-      detail: sourceCount ? `${sourceCount.toLocaleString()} files are inside the current boundary.` : "Choose or scan a source folder before building."
+      detail: sourceCount
+        ? `${sourceCount.toLocaleString()} files are included by ${sourceScope?.label || "the current source scope"}.`
+        : "Choose or scan a source folder before building."
     },
     {
       label: "Hardware route",
@@ -853,16 +1131,17 @@ function firstRunChecklist({ artifacts, hardware, sources, baseModel }) {
   ];
 }
 
-function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources }) {
+function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources, sourceScope }) {
   const type = aiTypeSpec(request.aiType);
   const sourceLabel = knowledgeSourceLabel(request.knowledgeSource);
-  const scopeLabel = sourceScopeLabel(request.sourceScope);
+  const scopeLabel = sourceScope?.label?.toLowerCase() || sourceScopeLabel(request.sourceScope);
   const boundary = boundaryLabel(request.boundaryMode);
-  const sourceCount = sources?.totalFiles || 0;
+  const sourceCount = sourceScope?.includedFiles ?? sources?.totalFiles ?? 0;
+  const excludedCount = sourceScope?.excludedFiles || 0;
   const datasetStatus = artifacts.datasetReady ? "Reuse the existing Dataset Forge pack." : "Build a fresh Dataset Forge pack first.";
   const proofStatus = artifacts.proofFresh && artifacts.evalFresh ? "Proof and gates already match the source tree." : "Refresh proof and gates before sharing.";
   const localFit = hardware.modelFit?.summary || hardware.tier.detail;
-  const checklist = firstRunChecklist({ artifacts, hardware, sources, baseModel });
+  const checklist = firstRunChecklist({ artifacts, hardware, sources, baseModel, sourceScope });
   return {
     schema: "modelforge.builder_blueprint.v1",
     title: `${type.label} for ${request.audience || "personal"} use`,
@@ -874,8 +1153,8 @@ function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, so
     },
     userPromise: `${type.label}: ${type.capability}`,
     starterTemplate: templateLabel(request.templateId),
-    knowledge: `Use ${sourceLabel}${sourceCount ? ` across ${sourceCount.toLocaleString()} files` : ""}.`,
-    sourceScope: `Start with ${scopeLabel}.`,
+    knowledge: `Use ${sourceLabel}${sourceCount ? ` across ${sourceCount.toLocaleString()} scoped files` : ""}.`,
+    sourceScope: `Start with ${scopeLabel}${excludedCount ? `; ${excludedCount.toLocaleString()} files stay out of this first scope` : ""}.`,
     boundaries: `${boundary}; ${request.privacy === "local-only" ? "keep artifacts local" : "prepare shareable proof before release"}.`,
     route: `${route.label}: ${route.reason}`,
     hardwareFit: localFit,
@@ -884,7 +1163,7 @@ function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, so
     capabilities: [
       { label: "Starter template", detail: templateLabel(request.templateId) },
       { label: "Answer style", detail: `${request.personality || "practical"} responses for ${request.audience || "personal"} users.` },
-      { label: "Source scope", detail: `Begin with ${scopeLabel}.` },
+      { label: "Source scope", detail: `${sourceScope?.includedFiles || 0} included, ${sourceScope?.excludedFiles || 0} excluded.` },
       { label: "Knowledge boundary", detail: `Ground answers in ${sourceLabel} with ${boundary}.` },
       { label: "Build route", detail: route.label },
       { label: "Base model", detail: `${baseModel.model}: ${baseModel.reason}` }
@@ -1024,7 +1303,9 @@ async function buildAiBuildPlan(body = {}) {
   };
   const route = chooseBuilderRoute(request, hardware, artifacts);
   const baseModel = chooseBaseModelRecommendation(request, hardware, ollama);
-  const blueprint = buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources });
+  const selectedSourceScope = resolveSourceScope(sources, request.sourceScope);
+  const sourceScopePreview = buildSourceScopePreview(sources, request.sourceScope);
+  const blueprint = buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources, sourceScope: selectedSourceScope });
   const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
   const estimatedTime = routeNeedsAdapter
     ? hardware.tier.id === "starter-lora"
@@ -1051,15 +1332,17 @@ async function buildAiBuildPlan(body = {}) {
       "source-boundary",
       "Scan source boundary",
       artifacts.sourceReady ? "pass" : "blocked",
-      "Build a source inventory with hashes and license signals.",
-      artifacts.sourceReady ? `${sources.totalFiles.toLocaleString()} files found.` : "Choose a readable source folder first.",
+      "Build a scoped source inventory with hashes, license signals, and include/exclude receipts.",
+      artifacts.sourceReady
+        ? `${selectedSourceScope.includedFiles.toLocaleString()} included, ${selectedSourceScope.excludedFiles.toLocaleString()} excluded by ${selectedSourceScope.label}.`
+        : "Choose a readable source folder first.",
       "sources"
     ),
     planStep(
       "dataset-forge",
       "Build Dataset Forge pack",
       artifacts.datasetReady ? "pass" : artifacts.sourceReady ? "ready" : "blocked",
-      "Create JSONL examples from local source files with hashes and provenance.",
+      "Create JSONL examples from included source-scope files with hashes and provenance.",
       artifacts.datasetReady ? `${latestDataset.summary.totalExamples.toLocaleString()} examples ready.` : "This is the next practical build step.",
       "model"
     ),
@@ -1127,6 +1410,7 @@ async function buildAiBuildPlan(body = {}) {
     recommendedRoute: route.id,
     routeLabel: route.label,
     routeReason: route.reason,
+    sourceScopePreview,
     blueprint,
     baseModelRecommendation: baseModel,
     estimates: {
@@ -1167,6 +1451,8 @@ async function buildAiBuildPlan(body = {}) {
     `AI type: ${blueprint.aiType.label}`,
     `Knowledge: ${blueprint.knowledge}`,
     `Source scope: ${blueprint.sourceScope}`,
+    `Included files: ${selectedSourceScope.includedFiles}`,
+    `Excluded files: ${selectedSourceScope.excludedFiles}`,
     `Boundaries: ${blueprint.boundaries}`,
     `First build: ${blueprint.firstBuild}`,
     `Release posture: ${blueprint.releasePosture}`,
@@ -1174,6 +1460,10 @@ async function buildAiBuildPlan(body = {}) {
     "## First-Run Checklist",
     "",
     ...blueprint.firstRunChecklist.map((item) => `- ${item.label}: ${item.status}. ${item.detail}`),
+    "",
+    "## Source Scope Preview",
+    "",
+    ...sourceScopePreview.options.map((option) => `- ${option.label}: ${option.includedFiles} included, ${option.excludedFiles} excluded, ${option.datasetCandidateFiles} dataset candidates.`),
     "",
     "## Steps",
     "",
@@ -1398,6 +1688,7 @@ async function writeBuilderRunReceipt(run) {
     "",
     `- Build plan: ${run.outputs.buildPlanPath || ""}`,
     `- Source inventory: ${run.outputs.sourceInventoryPath || ""}`,
+    `- Source scope receipt: ${run.outputs.sourceScopeReceiptPath || ""}`,
     `- Model profile: ${run.outputs.modelProfilePath || ""}`,
     `- Proof bundle: ${run.outputs.proofPath || ""}`,
     `- Eval report: ${run.outputs.evalPath || ""}`,
@@ -1455,6 +1746,7 @@ async function startBuilderRun(body = {}) {
     outputs: {
       buildPlanPath: plan.files?.json || "",
       sourceInventoryPath: "",
+      sourceScopeReceiptPath: "",
       modelProfilePath: "",
       proofPath: "",
       evalPath: "",
@@ -1510,16 +1802,24 @@ async function executeBuilderRun(runId) {
       };
     });
 
-    const sources = await runBuilderStage(job, "source-boundary", async () => {
+    const sourceBoundary = await runBuilderStage(job, "source-boundary", async () => {
       const nextSources = await walkSources(sourceRoot);
-      const inventory = await writeSourceInventory(job.run.files.dir, nextSources);
+      const sourceScope = resolveSourceScope(nextSources, activePlan.request?.sourceScope || "whole-project");
+      const inventory = await writeSourceInventory(job.run.files.dir, nextSources, sourceScope);
+      const scopeReceipt = await writeSourceScopeReceipt(job.run.files.dir, sourceScope, {
+        title: "Build From Plan Source Scope",
+        requestedBy: `Builder run ${runId}`
+      });
       return {
-        summary: `Recorded ${nextSources.totalFiles.toLocaleString()} files and ${nextSources.sampledFiles.toLocaleString()} sampled rows.`,
+        summary: `Recorded ${sourceScope.includedFiles.toLocaleString()} included files and ${sourceScope.excludedFiles.toLocaleString()} excluded files for ${sourceScope.label}.`,
         artifact: inventory.inventoryPath,
-        value: nextSources
+        value: { sources: nextSources, sourceScope, scopeReceipt }
       };
     });
+    const sources = sourceBoundary.sources;
+    const builderSourceScope = sourceBoundary.sourceScope;
     job.run.outputs.sourceInventoryPath = join(job.run.files.dir, "source-inventory.json");
+    job.run.outputs.sourceScopeReceiptPath = sourceBoundary.scopeReceipt?.markdown || join(job.run.files.dir, "source-scope.md");
 
     const modelExport = await runBuilderStage(job, "model-profile", async () => {
       const exported = await exportOllamaProfile(join(dataRoot, "models", "latest"), {
@@ -1550,9 +1850,13 @@ async function executeBuilderRun(runId) {
     job.run.outputs.sharePath = proofGateResult.shareCard.files?.json || "";
 
     const dataset = await runBuilderStage(job, "dataset-forge", async () => {
-      const nextDataset = await buildDatasetForge({ requestedBy: `Builder run ${runId}` });
+      const nextDataset = await buildDatasetForge({
+        requestedBy: `Builder run ${runId}`,
+        sourceScope: activePlan.request?.sourceScope || builderSourceScope.id,
+        request: activePlan.request
+      });
       return {
-        summary: `${nextDataset.summary.totalExamples.toLocaleString()} examples, ${nextDataset.summary.estimatedTokens.toLocaleString()} estimated tokens.`,
+        summary: `${nextDataset.summary.totalExamples.toLocaleString()} examples from ${nextDataset.sourceScope?.includedFiles?.toLocaleString() || builderSourceScope.includedFiles.toLocaleString()} scoped files.`,
         artifact: nextDataset.files.jsonl,
         value: nextDataset
       };
@@ -1593,7 +1897,7 @@ async function executeBuilderRun(runId) {
     activePlan = await runBuilderStage(job, "finalize", async () => {
       const finalPlan = await buildAiBuildPlan(activePlan.request || {});
       return {
-        summary: `${finalPlan.routeLabel}. ${sources.totalFiles.toLocaleString()} files, ${dataset.summary.totalExamples.toLocaleString()} examples, pack receipt ready.`,
+        summary: `${finalPlan.routeLabel}. ${builderSourceScope.includedFiles.toLocaleString()} scoped files, ${dataset.summary.totalExamples.toLocaleString()} examples, pack receipt ready.`,
         artifact: finalPlan.files.json,
         value: finalPlan
       };
@@ -1704,7 +2008,9 @@ async function buildDatasetForge(body = {}) {
   const versionDir = join(dataRoot, "datasets", "history", datasetId);
   const maxFiles = Math.max(1, Math.min(Number(body.maxFiles || 120), 220));
   const sources = await walkSources(sourceRoot);
-  const [latestProof, latestEval] = await Promise.all([getLatestProofBundle(), getLatestEvalReport()]);
+  const [latestProof, latestEval, latestPlan] = await Promise.all([getLatestProofBundle(), getLatestEvalReport(), getLatestBuilderPlan()]);
+  const requestedScope = normalizeSourceScopeId(body.sourceScope || body.request?.sourceScope || latestPlan?.request?.sourceScope || "whole-project");
+  const sourceScope = resolveSourceScope(sources, requestedScope);
   const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
   const sourcesMatchProof = Boolean(
     latestProof &&
@@ -1714,7 +2020,8 @@ async function buildDatasetForge(body = {}) {
       proofSourceSummary.totalSizeBytes === sources.totalSizeBytes
   );
   const evalMatchesProof = Boolean(latestEval && latestProof && latestEval.proofPath === latestProof.path);
-  const candidateRows = sources.rows.filter(isDatasetForgeCandidate).slice(0, maxFiles);
+  const scopedCandidateRows = sourceScope.includedRows.filter(isDatasetForgeCandidate);
+  const candidateRows = scopedCandidateRows.slice(0, maxFiles);
   const examples = [];
   let skippedFiles = sources.rows.length - candidateRows.length;
 
@@ -1794,6 +2101,7 @@ async function buildDatasetForge(body = {}) {
     sourceRoot,
     dataRoot,
     requestedBy: body.requestedBy || "ModelForge UI",
+    sourceScope: publicSourceScopeResolution(sourceScope),
     summary: {
       totalExamples: examples.length,
       includedFiles: examples.length,
@@ -1815,6 +2123,8 @@ async function buildDatasetForge(body = {}) {
       evalPath: latestEval ? join(dataRoot, "evals", "latest", "eval-report.json") : "",
       sourceFiles: sources.totalFiles,
       sampledFiles: sources.sampledFiles,
+      scopedFiles: sourceScope.includedFiles,
+      scopedDatasetCandidates: sourceScope.datasetCandidateFiles,
       sourcesMatchProof,
       evalMatchesProof,
       licenseSignals: sources.licenseSignals
@@ -1829,11 +2139,15 @@ async function buildDatasetForge(body = {}) {
       jsonl: join(latestDir, "dataset.jsonl"),
       readme: join(latestDir, "README.md"),
       preview: join(latestDir, "dataset-preview.md"),
+      sourceScopeReceipt: join(latestDir, "source-scope.md"),
+      sourceScopeJson: join(latestDir, "source-scope.json"),
       versionDir,
       versionManifest: join(versionDir, "dataset-manifest.json"),
       versionJsonl: join(versionDir, "dataset.jsonl"),
       versionReadme: join(versionDir, "README.md"),
-      versionPreview: join(versionDir, "dataset-preview.md")
+      versionPreview: join(versionDir, "dataset-preview.md"),
+      versionSourceScopeReceipt: join(versionDir, "source-scope.md"),
+      versionSourceScopeJson: join(versionDir, "source-scope.json")
     },
     examplesPreview: preview
   };
@@ -1843,6 +2157,9 @@ async function buildDatasetForge(body = {}) {
     `Dataset: ${datasetId}`,
     `Examples: ${examples.length}`,
     `Estimated tokens: ${estimatedTokens}`,
+    `Source scope: ${sourceScope.label}`,
+    `Scoped files: ${sourceScope.includedFiles}`,
+    `Excluded files: ${sourceScope.excludedFiles}`,
     `Proof fresh: ${sourcesMatchProof ? "yes" : "no"}`,
     "",
     ...preview.flatMap((example) => [
@@ -1866,6 +2183,7 @@ async function buildDatasetForge(body = {}) {
     `Dataset: ${datasetId}`,
     `Created: ${createdAt}`,
     `Source root: ${sourceRoot}`,
+    `Source scope: ${sourceScope.label}`,
     `Examples: ${examples.length}`,
     `Estimated tokens: ${estimatedTokens}`,
     `License reviewed: ${licenseReviewedPercent}%`,
@@ -1875,6 +2193,7 @@ async function buildDatasetForge(body = {}) {
     "- `dataset.jsonl` - chat/instruction examples with source provenance.",
     "- `dataset-manifest.json` - counts, source boundary, proof freshness, and file paths.",
     "- `dataset-preview.md` - small human-readable sample.",
+    "- `source-scope.md` - included/excluded source files for this dataset build.",
     "",
     "## Guardrails",
     "",
@@ -1887,14 +2206,32 @@ async function buildDatasetForge(body = {}) {
   for (const dir of [latestDir, versionDir]) {
     await mkdir(dir, { recursive: true });
   }
+  const versionFiles = {
+    ...manifest.files,
+    dir: versionDir,
+    manifest: manifest.files.versionManifest,
+    jsonl: manifest.files.versionJsonl,
+    readme: manifest.files.versionReadme,
+    preview: manifest.files.versionPreview,
+    sourceScopeReceipt: manifest.files.versionSourceScopeReceipt,
+    sourceScopeJson: manifest.files.versionSourceScopeJson
+  };
   await writeJson(manifest.files.manifest, manifest);
   await writeFile(manifest.files.jsonl, jsonl, "utf-8");
   await writeFile(manifest.files.readme, readme, "utf-8");
   await writeFile(manifest.files.preview, previewMarkdown, "utf-8");
-  await writeJson(manifest.files.versionManifest, { ...manifest, files: { ...manifest.files, dir: versionDir } });
+  await writeSourceScopeReceipt(latestDir, sourceScope, {
+    title: "Dataset Forge Source Scope",
+    requestedBy: manifest.requestedBy
+  });
+  await writeJson(manifest.files.versionManifest, { ...manifest, files: versionFiles });
   await writeFile(manifest.files.versionJsonl, jsonl, "utf-8");
   await writeFile(manifest.files.versionReadme, readme, "utf-8");
   await writeFile(manifest.files.versionPreview, previewMarkdown, "utf-8");
+  await writeSourceScopeReceipt(versionDir, sourceScope, {
+    title: "Dataset Forge Source Scope",
+    requestedBy: manifest.requestedBy
+  });
   return manifest;
 }
 
@@ -2078,7 +2415,7 @@ function buildLicenseReview(sources) {
   };
 }
 
-async function writeSourceInventory(targetDir, sources) {
+async function writeSourceInventory(targetDir, sources, sourceScope = null) {
   const inventoryPath = join(targetDir, "source-inventory.json");
   const summaryPath = join(targetDir, "source-summary.md");
   const payload = {
@@ -2092,8 +2429,28 @@ async function writeSourceInventory(targetDir, sources) {
     unreviewedFiles: sources.unreviewedFiles,
     licenseSignals: sources.licenseSignals,
     licenseReview: buildLicenseReview(sources),
+    sourceScope: sourceScope ? publicSourceScopeResolution(sourceScope) : null,
     rows: sources.rows
   };
+  const scopeLines = sourceScope
+    ? [
+        "",
+        "## Source Scope",
+        "",
+        `Scope: ${sourceScope.label}`,
+        `Included files: ${sourceScope.includedFiles}`,
+        `Excluded files: ${sourceScope.excludedFiles}`,
+        `Dataset candidates: ${sourceScope.datasetCandidateFiles}`,
+        "",
+        "### Included Preview",
+        "",
+        ...sourceScope.includedPreview.map((row) => `- ${row.path} (${row.language}, ${row.size}) - ${row.reason}`),
+        "",
+        "### Excluded Preview",
+        "",
+        ...sourceScope.excludedPreview.map((row) => `- ${row.path} (${row.language}, ${row.size}) - ${row.reason}`)
+      ]
+    : [];
   const summary = [
     "# Source Inventory",
     "",
@@ -2105,6 +2462,8 @@ async function writeSourceInventory(targetDir, sources) {
     `Unreviewed files: ${sources.unreviewedFiles}`,
     `Project license file: ${sources.licenseSignals?.projectLicensePath || "missing"}`,
     `Package license field: ${sources.licenseSignals?.packageLicense || "missing"}`,
+    "",
+    ...scopeLines,
     "",
     "## Sampled Paths",
     "",
@@ -2937,6 +3296,7 @@ async function buildForgeRecipe(body = {}) {
       tokenEstimate: dataset.tokens,
       reviewedFiles: sources.reviewedFiles,
       sampledFiles: sources.sampledFiles,
+      sourceScope: latestDataset?.sourceScope || null,
       forgedExamples: latestDataset?.summary?.totalExamples || 0,
       forgedTokens: latestDataset?.summary?.estimatedTokens || 0,
       forgedPath: datasetPath
@@ -2961,6 +3321,7 @@ async function buildForgeRecipe(body = {}) {
     dataset: {
       sourceFiles: sources.totalFiles,
       sampledFiles: sources.sampledFiles,
+      sourceScope: latestDataset?.sourceScope || null,
       rows: dataset.rows,
       tokens: dataset.tokens,
       estimatedSize: dataset.estimatedSize,
@@ -3028,6 +3389,9 @@ async function buildForgeRecipe(body = {}) {
     `- Estimated rows: ${dataset.rows}`,
     `- Estimated tokens: ${dataset.tokens}`,
     `- Forged examples: ${latestDataset?.summary?.totalExamples || 0}`,
+    `- Source scope: ${latestDataset?.sourceScope?.label || "not scoped"}`,
+    `- Scoped files: ${latestDataset?.sourceScope?.includedFiles || 0}`,
+    `- Excluded files: ${latestDataset?.sourceScope?.excludedFiles || 0}`,
     `- Forged JSONL: ${datasetPath || "not built"}`,
     `- Estimated size: ${dataset.estimatedSize}`,
     `- License reviewed: ${dataset.reviewedPercent}%`,
@@ -3099,6 +3463,8 @@ async function buildForgeRecipe(body = {}) {
     [latestDataset?.files?.manifest, join(exportDir, "training", "dataset-manifest.json"), "training/dataset-manifest.json"],
     [latestDataset?.files?.readme, join(exportDir, "training", "dataset-readme.md"), "training/dataset-readme.md"],
     [latestDataset?.files?.preview, join(exportDir, "training", "dataset-preview.md"), "training/dataset-preview.md"],
+    [latestDataset?.files?.sourceScopeReceipt, join(exportDir, "training", "source-scope.md"), "training/source-scope.md"],
+    [latestDataset?.files?.sourceScopeJson, join(exportDir, "training", "source-scope.json"), "training/source-scope.json"],
     ["", join(exportDir, "training", "lora-plan.json"), "training/lora-plan.json"],
     ["", join(exportDir, "runner", "adapter-contract.json"), "runner/adapter-contract.json"]
   ];

@@ -47,6 +47,8 @@ async function main() {
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
   const builderStages = latestBuilderRun?.stages || [];
+  const planScope = project.latestBuildPlan?.request?.sourceScope || "";
+  const scopePreviewOptions = project.latestBuildPlan?.sourceScopePreview?.options || [];
   const gates = evalReport?.gates || [];
   const counts = gateCounts(gates);
   const tools = project.toolStatus || {};
@@ -88,10 +90,11 @@ async function main() {
       Boolean(
         project.latestBuildPlan?.request?.templateId &&
           project.latestBuildPlan?.request?.sourceScope &&
-          project.latestBuildPlan?.blueprint?.firstRunChecklist?.length
+          project.latestBuildPlan?.blueprint?.firstRunChecklist?.length &&
+          scopePreviewOptions.length === 4
       ),
       project.latestBuildPlan
-        ? `${project.latestBuildPlan.request.templateId || "no template"} / ${project.latestBuildPlan.request.sourceScope || "no source scope"} / ${project.latestBuildPlan.blueprint?.firstRunChecklist?.length || 0} checklist items`
+        ? `${project.latestBuildPlan.request.templateId || "no template"} / ${project.latestBuildPlan.request.sourceScope || "no source scope"} / ${scopePreviewOptions.length} scope previews / ${project.latestBuildPlan.blueprint?.firstRunChecklist?.length || 0} checklist items`
         : "no guided builder plan"
     ),
     check("Proof bundle", Boolean(project.latestProof?.path), project.latestProof?.path || "no proof bundle"),
@@ -110,8 +113,20 @@ async function main() {
       dataset ? `${dataset.summary.totalExamples} examples, ${dataset.summary.estimatedTokens} tokens` : "no dataset pack"
     ),
     check(
+      "Dataset source scope",
+      Boolean(dataset?.sourceScope?.id && dataset.sourceScope.id === planScope && dataset.files?.sourceScopeReceipt),
+      dataset?.sourceScope
+        ? `${dataset.sourceScope.label}: ${dataset.sourceScope.includedFiles} included, ${dataset.sourceScope.excludedFiles} excluded, receipt=${dataset.files?.sourceScopeReceipt || "missing"}`
+        : "dataset has no source scope"
+    ),
+    check(
       "Export dataset artifacts",
-      Boolean(exportPack?.copiedArtifacts?.includes("training/dataset.jsonl") && exportPack?.copiedArtifacts?.includes("training/dataset-manifest.json")),
+      Boolean(
+        exportPack?.copiedArtifacts?.includes("training/dataset.jsonl") &&
+          exportPack?.copiedArtifacts?.includes("training/dataset-manifest.json") &&
+          exportPack?.copiedArtifacts?.includes("training/source-scope.md") &&
+          exportPack?.copiedArtifacts?.includes("training/source-scope.json")
+      ),
       exportPack ? `${exportPack.artifactCount} artifacts in ${exportPack.recipeId}` : "no export pack"
     ),
     check(
@@ -122,8 +137,11 @@ async function main() {
     ),
     check(
       "Build From Plan receipt",
-      latestBuilderRun?.status === "pass" && builderStages.length > 0 && builderStages.every((stage) => stage.status === "pass"),
-      latestBuilderRun ? `${latestBuilderRun.status}: ${latestBuilderRun.summary}` : "builder run has not been run yet"
+      latestBuilderRun?.status === "pass" &&
+        builderStages.length > 0 &&
+        builderStages.every((stage) => stage.status === "pass") &&
+        Boolean(latestBuilderRun.outputs?.sourceScopeReceiptPath),
+      latestBuilderRun ? `${latestBuilderRun.status}: ${latestBuilderRun.summary}; scope=${latestBuilderRun.outputs?.sourceScopeReceiptPath || "missing"}` : "builder run has not been run yet"
     ),
     check("Release failures", counts.fail === 0, `${counts.fail} failing gates`),
     check(

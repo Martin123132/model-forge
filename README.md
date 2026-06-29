@@ -44,13 +44,17 @@ artifacts from code and project folders.
   templates, AI type, knowledge source, source scope, answer boundaries, CPU,
   RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and
   next actions.
+- Previews source scopes before building: Whole project, Docs first, Code
+  hotspots, and Small safe sample each show included/excluded counts and sample
+  paths.
 - Estimates which model sizes are comfortable, possible, tight, or unrealistic
   for the current machine before a user starts building.
 - Runs **Build From Plan** as one guided job: source boundary, Ollama profile,
   proof gates, Dataset Forge, recipe, export pack, receipts, and a refreshed
   plan at the end.
-- Builds Dataset Forge JSONL examples with source paths, hashes, license labels,
-  and proof-bundle provenance.
+- Builds Dataset Forge JSONL examples from the selected source scope, with source
+  paths, hashes, license labels, proof-bundle provenance, and include/exclude
+  receipts.
 - Reuses local Ollama models and exports an Ollama `Modelfile`.
 - Runs release gates for source hashes, proof freshness, receipts, license
   review, PII filename sweeps, model profile creation, and tool availability.
@@ -79,6 +83,7 @@ The plan records:
   research brief bot, or game lore NPC.
 - What the user wants the AI to do.
 - The knowledge source, source scope, and answer boundary the AI should respect.
+- Included/excluded source previews for all four scope modes.
 - A plain-English blueprint with capabilities, watchouts, hardware fit, first
   build action, and release posture.
 - A first-run checklist that explains whether setup, source boundary, hardware
@@ -99,6 +104,19 @@ what happened and where the artifacts landed.
 
 Build runs also expose stage explanations, repair hints, receipts and outputs,
 and previous run history inside the Builder workspace.
+
+Source Scope v1 makes the scope selection operational:
+
+- **Whole project** includes the current source boundary.
+- **Docs first** includes README, docs, notes, and Markdown/text knowledge.
+- **Code hotspots** includes implementation files, scripts, and code-facing
+  configs.
+- **Small safe sample** includes a compact reviewed starter subset and excludes
+  larger, risky, or non-text candidates.
+
+Dataset Forge and Build From Plan honor the selected scope. Each scoped build
+writes `source-scope.md` and `source-scope.json` receipts showing included and
+excluded files, and export packs copy those receipts under `training/`.
 
 ## Screenshots
 

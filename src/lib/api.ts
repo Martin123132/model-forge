@@ -47,10 +47,10 @@ export function getLatestDatasetForge() {
   return requestJson<{ ok: boolean; dataset: DatasetForge | null }>("/api/dataset/latest");
 }
 
-export function buildDatasetForge() {
+export function buildDatasetForge(request?: Partial<BuilderPlanRequest>) {
   return requestJson<{ ok: boolean; dataset: DatasetForge; project: ProjectPayload }>("/api/dataset/build", {
     method: "POST",
-    body: JSON.stringify({ requestedBy: "ModelForge UI" })
+    body: JSON.stringify({ requestedBy: "ModelForge UI", ...(request || {}) })
   });
 }
 

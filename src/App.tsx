@@ -484,7 +484,7 @@ function App() {
     setDatasetBusy(true);
     setError("");
     try {
-      const result = await buildDatasetForge();
+      const result = await buildDatasetForge(buildPlan?.request);
       setDatasetForge(result.dataset);
       setProject(result.project);
       setSources(result.project.sources);
@@ -504,7 +504,7 @@ function App() {
     } finally {
       setDatasetBusy(false);
     }
-  }, []);
+  }, [buildPlan?.request]);
 
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
