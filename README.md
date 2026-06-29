@@ -94,6 +94,11 @@ When D: is available and ModelForge is still pointed at another drive, Setup
 shows a **Use D-drive storage** repair button. That updates the data root and
 Ollama model path without asking the user to edit environment variables by hand.
 
+Setup also includes **Issue diagnostics**. It downloads a local-safe JSON report
+for GitHub issues with setup health, hardware fit, Ollama state, artifact
+status, and recent log filenames. It does not include environment variables,
+secrets, raw source contents, or full home-directory paths.
+
 ## Builder Wizard
 
 The Builder workspace is the non-developer front door. Instead of asking people

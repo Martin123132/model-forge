@@ -35,7 +35,7 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse] = await Promise.all([
+  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
     getJson("/api/setup"),
@@ -43,13 +43,15 @@ async function main() {
     getJson("/api/export/latest"),
     getJson("/api/dataset/latest"),
     getJson("/api/models/library"),
-    getJson("/api/projects")
+    getJson("/api/projects"),
+    getJson("/api/diagnostics")
   ]);
   const evalReport = project.latestEval || null;
   const dataset = project.latestDataset || datasetResponse.dataset || null;
   const exportPack = exportPackResponse.pack || null;
   const modelLibrary = modelLibraryResponse.library || null;
   const projectRegistry = projectRegistryResponse.registry || null;
+  const diagnostics = diagnosticsResponse.diagnostics || null;
   const activeRegistryProject = projectRegistry?.projects?.find((item) => item.id === projectRegistry.activeProjectId) || null;
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
@@ -104,6 +106,17 @@ async function main() {
       "Project data reset",
       Boolean(activeRegistryProject?.dataResetReady && String(activeRegistryProject.dataRoot || "").toLowerCase().endsWith(".modelforge-data")),
       activeRegistryProject ? `${activeRegistryProject.name}: ${activeRegistryProject.dataResetReason || "reset contract ready"}` : "no active project"
+    ),
+    check(
+      "Issue diagnostics",
+      Boolean(
+        diagnostics?.schema === "modelforge.diagnostics.v1" &&
+          diagnostics.privacy?.environmentIncluded === false &&
+          diagnostics.privacy?.sourceContentsIncluded === false &&
+          diagnostics.files?.downloadName &&
+          diagnostics.setup?.doctorChecks?.length >= 6
+      ),
+      diagnostics ? `${diagnostics.setup.doctorStatus}: ${diagnostics.files?.downloadName || "no download name"}` : "no diagnostics report"
     ),
     check(
       "Source rules",

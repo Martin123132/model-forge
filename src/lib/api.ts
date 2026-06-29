@@ -110,6 +110,8 @@ export function getSetupState() {
   return requestJson<SetupState>("/api/setup");
 }
 
+export const diagnosticsDownloadUrl = "/api/diagnostics/download";
+
 export function getProjectRegistry() {
   return requestJson<{ ok: boolean; registry: ProjectRegistry }>("/api/projects");
 }

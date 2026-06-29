@@ -1150,6 +1150,320 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function diagnosticPath(pathValue = "") {
+  const raw = String(pathValue || "");
+  if (!raw) return "";
+  const normalized = raw.replaceAll("/", "\\");
+  const home = os.homedir().replaceAll("/", "\\");
+  if (home && normalized.toLowerCase().startsWith(home.toLowerCase())) {
+    return `~${normalized.slice(home.length)}`;
+  }
+  return normalized.replace(/^([A-Z]:\\Users\\)[^\\]+/i, "$1~");
+}
+
+function sanitizeDiagnosticText(value = "") {
+  let text = String(value || "");
+  const pathValues = [os.homedir(), projectRoot, sourceRoot, dataRoot, setupConfigPath, projectRegistryPath].filter(Boolean);
+  for (const pathValue of pathValues) {
+    const escaped = String(pathValue).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(escaped, "gi"), diagnosticPath(pathValue));
+  }
+  text = text
+    .replace(/[A-Z]:\\Users\\[^\\\s"]+/gi, (match) => diagnosticPath(match))
+    .replace(/(api[_-]?key|token|secret|password|credential)(["'=:\s]+)[^"'\s,}]+/gi, "$1$2[redacted]");
+  return text;
+}
+
+async function diagnosticResult(label, fn) {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (error) {
+    return { ok: false, error: sanitizeDiagnosticText(error?.message || error), label };
+  }
+}
+
+function diagnosticArtifactPath(pathValue = "") {
+  return pathValue ? diagnosticPath(pathValue) : "";
+}
+
+async function listDiagnosticsLogs() {
+  const logsRoot = join(dataRoot, "logs");
+  try {
+    await mkdir(logsRoot, { recursive: true });
+    const entries = await readdir(logsRoot, { withFileTypes: true });
+    const logs = [];
+    for (const entry of entries.filter((item) => item.isFile())) {
+      const logPath = join(logsRoot, entry.name);
+      const logStat = await stat(logPath);
+      logs.push({
+        name: entry.name,
+        path: diagnosticPath(logPath),
+        size: formatBytes(logStat.size),
+        sizeBytes: logStat.size,
+        modifiedAt: logStat.mtime.toISOString()
+      });
+    }
+    return logs.sort((a, b) => String(b.modifiedAt).localeCompare(String(a.modifiedAt))).slice(0, 12);
+  } catch (error) {
+    return [{ name: "logs-unavailable", path: diagnosticPath(logsRoot), size: "0 B", sizeBytes: 0, modifiedAt: "", error: sanitizeDiagnosticText(error?.message || error) }];
+  }
+}
+
+function diagnosticsMarkdown(report) {
+  const checks = report.setup.doctorChecks.map((check) => `- ${check.status}: ${check.label} - ${check.value}`).join("\n") || "- No doctor checks reported.";
+  const logs = report.logs.recentFiles.map((log) => `- ${log.name} (${log.size})`).join("\n") || "- No recent log files.";
+  const nextSteps = report.nextSteps.map((step) => `- ${step}`).join("\n") || "- No immediate diagnostics blocker was found. Continue with the guided build path.";
+  return [
+    "# ModelForge Diagnostics",
+    "",
+    `Created: ${report.createdAt}`,
+    `App: ${report.app.version} (${report.app.gitCommit || "unknown commit"})`,
+    `Project: ${report.project.name}`,
+    `Doctor: ${report.setup.doctorStatus} - ${report.setup.doctorTitle}`,
+    "",
+    "## Privacy",
+    "",
+    report.privacy.summary,
+    "",
+    "## Paths",
+    "",
+    `- Source: ${report.paths.sourceRoot}`,
+    `- Data: ${report.paths.dataRoot}`,
+    `- Logs: ${report.paths.logsRoot}`,
+    "",
+    "## Doctor Checks",
+    "",
+    checks,
+    "",
+    "## Current Build State",
+    "",
+    `- Sources: ${report.project.sourceFiles} files`,
+    `- Ollama: ${report.ollama.ok ? "running" : "not ready"} (${report.ollama.selectedModel || report.ollama.error || "no model"})`,
+    `- Proof: ${report.artifacts.proof.status}`,
+    `- Eval: ${report.artifacts.eval.summary || "missing"}`,
+    `- Dataset: ${report.artifacts.dataset.summary || "missing"}`,
+    `- Recipe: ${report.artifacts.recipe.status}`,
+    `- Build From Plan: ${report.artifacts.builderRun.status}`,
+    "",
+    "## Recent Logs",
+    "",
+    logs,
+    "",
+    "## Suggested Next Steps",
+    "",
+    nextSteps,
+    ""
+  ].join("\n");
+}
+
+function diagnosticsNextSteps({ setup, project, latestBuildRun }) {
+  const steps = [];
+  const failedChecks = setup?.doctor?.checks?.filter((check) => check.status === "fail") || [];
+  const warnedChecks = setup?.doctor?.checks?.filter((check) => check.status === "warn") || [];
+  if (failedChecks.length) {
+    steps.push(`Repair ${failedChecks.map((check) => check.label).join(", ")} in Setup, then press Recheck.`);
+  } else if (warnedChecks.length) {
+    steps.push(`Review ${warnedChecks.map((check) => check.label).join(", ")} before calling the machine v1-ready.`);
+  }
+  if (!project?.latestProof) {
+    steps.push("Build proof so release gates can point to current evidence.");
+  }
+  if (project?.latestProof && project?.latestEval && project.latestEval.proofPath !== project.latestProof.path) {
+    steps.push("Run release gates again because the eval report points at an older proof.");
+  }
+  if (!project?.latestRecipeRun || project.latestRecipeRun.status !== "pass") {
+    steps.push("Run the export pack to prove the Ollama target can be recreated from the recipe.");
+  }
+  if (latestBuildRun?.status === "failed" || latestBuildRun?.status === "fail") {
+    steps.push(`Rerun Build From Plan after fixing: ${latestBuildRun.error || latestBuildRun.summary}`);
+  }
+  return steps.slice(0, 5);
+}
+
+async function buildDiagnosticsReport() {
+  await ensureDataRoot();
+  const createdAt = new Date().toISOString();
+  const [packageInfo, gitCommit, gitStatus, setupResult, projectResult, hardwareResult, ollamaResult, registryResult, logs] = await Promise.all([
+    diagnosticResult("package", () => readJsonIfExists(join(projectRoot, "package.json"))),
+    diagnosticResult("git-commit", async () => (await runCommand("git", ["rev-parse", "--short", "HEAD"], { timeout: 4000 })).stdout.trim()),
+    diagnosticResult("git-status", async () => sanitizeDiagnosticText((await runCommand("git", ["status", "--short"], { timeout: 4000 })).stdout.trim())),
+    diagnosticResult("setup", () => getSetupState()),
+    diagnosticResult("project", () => getProjectPayload()),
+    diagnosticResult("hardware", () => getHardwareProfile()),
+    diagnosticResult("ollama", () => getOllamaStatus()),
+    diagnosticResult("registry", () => getProjectRegistry()),
+    listDiagnosticsLogs()
+  ]);
+
+  const setup = setupResult.ok ? setupResult.value : null;
+  const project = projectResult.ok ? projectResult.value : null;
+  const hardware = hardwareResult.ok ? hardwareResult.value : null;
+  const ollama = ollamaResult.ok ? ollamaResult.value : null;
+  const registry = registryResult.ok ? registryResult.value : null;
+  const latestBuildRun = project?.latestBuilderRun || null;
+  const diagnosticsJsonPath = join(dataRoot, "logs", "latest-diagnostics.json");
+  const diagnosticsMarkdownPath = join(dataRoot, "logs", "latest-diagnostics.md");
+  const pkg = packageInfo.ok && packageInfo.value ? packageInfo.value : {};
+
+  const report = {
+    schema: "modelforge.diagnostics.v1",
+    createdAt,
+    privacy: {
+      summary: "Environment variables, secrets, full home-directory paths, and raw source contents are not included. Home paths are shortened to ~.",
+      pathPolicy: "home-relative",
+      sourceContentsIncluded: false,
+      environmentIncluded: false
+    },
+    app: {
+      name: pkg.name || "model-forge",
+      version: pkg.version || "unknown",
+      gitCommit: gitCommit.ok ? gitCommit.value : "",
+      gitDirty: gitStatus.ok ? Boolean(gitStatus.value) : null,
+      node: process.version
+    },
+    system: {
+      os: process.platform,
+      arch: process.arch,
+      release: os.release()
+    },
+    paths: {
+      projectRoot: diagnosticPath(projectRoot),
+      sourceRoot: diagnosticPath(sourceRoot),
+      dataRoot: diagnosticPath(dataRoot),
+      setupConfig: diagnosticPath(setupConfigPath),
+      projectRegistry: diagnosticPath(projectRegistryPath),
+      logsRoot: diagnosticPath(join(dataRoot, "logs"))
+    },
+    setup: {
+      loaded: setupResult.ok,
+      error: setupResult.ok ? "" : setupResult.error,
+      configured: Boolean(setup?.configured),
+      doctorStatus: setup?.doctor?.status || "unknown",
+      doctorTitle: setup?.doctor?.title || "unknown",
+      doctorSummary: setup?.doctor?.summary || "",
+      doctorChecks: (setup?.doctor?.checks || []).map((check) => ({
+        id: check.id,
+        label: check.label,
+        status: check.status,
+        value: sanitizeDiagnosticText(check.value),
+        detail: sanitizeDiagnosticText(check.detail),
+        repairActionId: check.repairActionId || ""
+      })),
+      repairActions: (setup?.doctor?.actions || []).map((action) => ({
+        id: action.id,
+        label: action.label,
+        kind: action.kind,
+        tone: action.tone,
+        detail: sanitizeDiagnosticText(action.detail)
+      }))
+    },
+    storage: {
+      preferredDrive: setup?.doctor?.preferredDrive || registry?.recommended?.preferredDrive || "",
+      recommendedDataRoot: diagnosticPath(setup?.doctor?.recommended?.dataRoot || registry?.recommended?.dataRoot || ""),
+      recommendedOllamaModels: diagnosticPath(setup?.doctor?.recommended?.ollamaModels || registry?.recommended?.ollamaModels || "")
+    },
+    hardware: {
+      loaded: hardwareResult.ok,
+      error: hardwareResult.ok ? "" : hardwareResult.error,
+      tier: hardware?.tier?.label || setup?.doctor?.hardwareSummary?.tier || "",
+      modelFit: hardware?.modelFit?.summary || "",
+      cpuThreads: hardware?.cpu?.threads || 0,
+      ram: hardware?.memory?.total || setup?.doctor?.hardwareSummary?.ram || "",
+      gpu: hardware?.gpu?.detected ? hardware.gpu.totalVram : setup?.doctor?.hardwareSummary?.gpu || "No GPU detected",
+      diskFree: hardware?.disk?.free || setup?.doctor?.hardwareSummary?.diskFree || ""
+    },
+    ollama: {
+      loaded: ollamaResult.ok,
+      ok: Boolean(ollama?.ok),
+      version: ollama?.version || "",
+      modelCount: ollama?.models?.length || 0,
+      selectedModel: ollama?.selectedModel || "",
+      modelsRoot: diagnosticPath(ollama?.modelsRoot || ""),
+      error: sanitizeDiagnosticText(ollama?.error || ollamaResult.error || "")
+    },
+    project: {
+      loaded: projectResult.ok,
+      error: projectResult.ok ? "" : projectResult.error,
+      name: project?.name || setupConfig.projectName || "unknown",
+      status: project?.status || "unknown",
+      sourceFiles: project?.sources?.totalFiles || 0,
+      sampledFiles: project?.sources?.sampledFiles || 0,
+      dataRoot: diagnosticPath(project?.dataRoot || dataRoot)
+    },
+    registry: {
+      loaded: registryResult.ok,
+      total: registry?.summary?.total || 0,
+      active: registry?.summary?.active || 0,
+      archived: registry?.summary?.archived || 0,
+      activeProjectId: registry?.activeProjectId || ""
+    },
+    artifacts: {
+      proof: {
+        status: project?.latestProof ? "ready" : "missing",
+        path: diagnosticArtifactPath(project?.latestProof?.path),
+        builtAt: project?.latestProof?.builtAt || ""
+      },
+      eval: {
+        status: project?.latestEval ? "ready" : "missing",
+        summary: project?.latestEval?.summary || "",
+        proofPath: diagnosticArtifactPath(project?.latestEval?.proofPath)
+      },
+      dataset: {
+        status: project?.latestDataset ? "ready" : "missing",
+        datasetId: project?.latestDataset?.datasetId || "",
+        summary: project?.latestDataset?.summary ? `${project.latestDataset.summary.totalExamples} examples, ${project.latestDataset.summary.estimatedTokens} tokens` : ""
+      },
+      recipe: {
+        status: project?.latestRecipe?.status || "missing",
+        recipeId: project?.latestRecipe?.recipeId || "",
+        exportDir: diagnosticArtifactPath(project?.latestRecipe?.files?.exportDir)
+      },
+      recipeRun: {
+        status: project?.latestRecipeRun?.status || "missing",
+        runId: project?.latestRecipeRun?.runId || "",
+        summary: sanitizeDiagnosticText(project?.latestRecipeRun?.summary || "")
+      },
+      builderRun: {
+        status: latestBuildRun?.status || "missing",
+        runId: latestBuildRun?.runId || "",
+        summary: sanitizeDiagnosticText(latestBuildRun?.summary || ""),
+        receipt: diagnosticArtifactPath(latestBuildRun?.files?.receipt)
+      }
+    },
+    jobs: {
+      activeRecipeRuns: [...recipeRunJobs.values()].filter((job) => job?.run?.status === "running").length,
+      activeBuilderRuns: [...builderRunJobs.values()].filter((job) => job?.run?.status === "running").length
+    },
+    logs: {
+      recentFiles: logs,
+      latestJson: diagnosticPath(diagnosticsJsonPath),
+      latestMarkdown: diagnosticPath(diagnosticsMarkdownPath)
+    },
+    health: {
+      package: packageInfo.ok,
+      gitCommit: gitCommit.ok,
+      gitStatus: gitStatus.ok,
+      setup: setupResult.ok,
+      project: projectResult.ok,
+      hardware: hardwareResult.ok,
+      ollama: ollamaResult.ok,
+      registry: registryResult.ok
+    },
+    nextSteps: diagnosticsNextSteps({ setup, project, latestBuildRun })
+  };
+
+  await writeJson(diagnosticsJsonPath, report);
+  await writeFile(diagnosticsMarkdownPath, diagnosticsMarkdown(report), "utf-8");
+  report.files = {
+    json: diagnosticPath(diagnosticsJsonPath),
+    markdown: diagnosticPath(diagnosticsMarkdownPath),
+    downloadName: `model-forge-diagnostics-${createdAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}.json`
+  };
+  await writeJson(diagnosticsJsonPath, report);
+  await writeFile(diagnosticsMarkdownPath, diagnosticsMarkdown(report), "utf-8");
+  return report;
+}
+
 function estimateDatasetMetrics(sources) {
   const rows = Math.max(sources.totalFiles * 9, sources.sampledFiles * 8, 128);
   const tokens = Math.max(sources.totalFiles * 3600, 4200);
@@ -5141,6 +5455,17 @@ async function handleApi(request, response, url) {
         ollamaModels: process.env.OLLAMA_MODELS || "",
         node: process.version
       });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/diagnostics") {
+      sendJson(response, 200, { ok: true, diagnostics: await buildDiagnosticsReport() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/diagnostics/download") {
+      const diagnostics = await buildDiagnosticsReport();
+      sendJsonDownload(response, diagnostics.files?.downloadName || "model-forge-diagnostics.json", diagnostics);
       return;
     }
 

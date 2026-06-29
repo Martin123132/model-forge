@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Archive, CheckCircle2, Database, FolderCog, FolderPlus, HardDrive, LoaderCircle, Play, RefreshCw, RotateCcw, Save, TerminalSquare, Trash2, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Database, Download, FolderCog, FolderPlus, HardDrive, LoaderCircle, Play, RefreshCw, RotateCcw, Save, TerminalSquare, Trash2, Wrench } from "lucide-react";
 import type { OllamaStatus, ProjectPayload, ProjectRegistry, ProjectRegistryEntry, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
+import { diagnosticsDownloadUrl } from "../lib/api";
 import { StatusPill } from "./StatusPill";
 
 type SetupPanelProps = {
@@ -248,6 +249,17 @@ export function SetupPanel({
               )}
             </div>
           ) : null}
+
+          <div className="setup-diagnostics-card">
+            <div>
+              <strong>Issue diagnostics</strong>
+              <span>Download a local-safe report for GitHub issues. It includes setup health, hardware fit, model state, recent log names, and shortened paths.</span>
+            </div>
+            <a className="plain-button small" href={diagnosticsDownloadUrl} download="model-forge-diagnostics.json">
+              <Download size={14} />
+              <span>Download diagnostics</span>
+            </a>
+          </div>
 
           <div className="setup-doctor-checks">
             {doctor.checks.map((check) => (

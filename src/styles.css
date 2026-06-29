@@ -354,6 +354,7 @@ button {
 
 .plain-button {
   padding: 0 12px;
+  text-decoration: none;
 }
 
 .icon-button {
@@ -2321,6 +2322,42 @@ h2 {
   color: #172236;
   font-size: 11px;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-diagnostics-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe5f0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.setup-diagnostics-card strong,
+.setup-diagnostics-card span {
+  display: block;
+  min-width: 0;
+}
+
+.setup-diagnostics-card strong {
+  color: #172236;
+  font-size: 12px;
+  font-weight: 830;
+}
+
+.setup-diagnostics-card span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.setup-diagnostics-card .plain-button {
   white-space: nowrap;
 }
 
@@ -6750,6 +6787,14 @@ h2 {
   .setup-doctor-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .setup-diagnostics-card {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-diagnostics-card .plain-button {
+    width: 100%;
   }
 
   .setup-doctor-actions {
