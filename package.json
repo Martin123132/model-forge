@@ -1,0 +1,31 @@
+{
+  "name": "model-forge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Source-available local-first AI model forge cockpit with provenance, eval, and proof-bundle workflows.",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "node server.mjs --api-only",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "qa:smoke": "node scripts/qa-smoke.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "node server.mjs",
+    "serve": "npm run build && node server.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "vite": "^8.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "~6.0.2"
+  }
+}
