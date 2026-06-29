@@ -8,6 +8,7 @@ import {
   createOllamaModel,
   exportModelProfile,
   getRecipePackRun,
+  getLatestExportPack,
   getOllamaStatus,
   getProject,
   getSetupState,
@@ -23,6 +24,7 @@ import {
 import type {
   ChatMessage,
   EvalReport,
+  ExportPackSummary,
   ForgeRecipe,
   ModelExport,
   OllamaStatus,
@@ -151,6 +153,7 @@ function App() {
   const [evalReport, setEvalReport] = useState<EvalReport | null>(null);
   const [shareCard, setShareCard] = useState<ShareCard | null>(null);
   const [forgeRecipe, setForgeRecipe] = useState<ForgeRecipe | null>(null);
+  const [exportPack, setExportPack] = useState<ExportPackSummary | null>(null);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
   const [recipeRunHistory, setRecipeRunHistory] = useState<RecipePackRun[]>([]);
@@ -180,11 +183,12 @@ function App() {
     setError("");
     setRefreshing(true);
     try {
-      const [setupPayload, projectPayload, sourcePayload, ollamaPayload] = await Promise.all([
+      const [setupPayload, projectPayload, sourcePayload, ollamaPayload, exportPackPayload] = await Promise.all([
         getSetupState(),
         getProject(),
         getSources(),
-        getOllamaStatus()
+        getOllamaStatus(),
+        getLatestExportPack()
       ]);
       setSetupState(setupPayload);
       setProject(projectPayload);
@@ -195,6 +199,7 @@ function App() {
       setEvalReport(projectPayload.latestEval || null);
       setShareCard(projectPayload.latestShare || null);
       setForgeRecipe(projectPayload.latestRecipe || null);
+      setExportPack(exportPackPayload.pack || null);
       setRecipeRun(projectPayload.latestRecipeRun || null);
       setRecipeRunHistory(projectPayload.recipeRunHistory || []);
       setRecipeHistory(projectPayload.recipeHistory || []);
@@ -222,6 +227,7 @@ function App() {
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
       setForgeRecipe(result.project.latestRecipe || null);
+      setExportPack((await getLatestExportPack()).pack || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
@@ -237,7 +243,7 @@ function App() {
     setError("");
     try {
       const result = await saveSetupConfig(config);
-      const [sourcePayload, ollamaPayload] = await Promise.all([getSources(), getOllamaStatus()]);
+      const [sourcePayload, ollamaPayload, exportPackPayload] = await Promise.all([getSources(), getOllamaStatus(), getLatestExportPack()]);
       setSetupState(result.setup);
       setProject(result.project);
       setSources(sourcePayload);
@@ -247,6 +253,7 @@ function App() {
       setEvalReport(result.project.latestEval || null);
       setShareCard(result.project.latestShare || null);
       setForgeRecipe(result.project.latestRecipe || null);
+      setExportPack(exportPackPayload.pack || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
@@ -262,7 +269,7 @@ function App() {
     setError("");
     try {
       const result = await runFirstSetup(config, createModel);
-      const [sourcePayload, ollamaPayload] = await Promise.all([getSources(), getOllamaStatus()]);
+      const [sourcePayload, ollamaPayload, exportPackPayload] = await Promise.all([getSources(), getOllamaStatus(), getLatestExportPack()]);
       setSetupState(result.setup);
       setProject(result.project);
       setSources(sourcePayload);
@@ -272,6 +279,7 @@ function App() {
       setEvalReport(result.results.evalReport || result.project.latestEval || null);
       setShareCard(result.results.shareCard || result.project.latestShare || null);
       setForgeRecipe(result.results.recipe || result.project.latestRecipe || null);
+      setExportPack(exportPackPayload.pack || null);
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
@@ -290,6 +298,7 @@ function App() {
       const result = await buildProofBundle();
       setProof(result.bundle);
       setModelExport(result.bundle.manifest?.modelProfile || null);
+      setExportPack((await getLatestExportPack()).pack || null);
       setActiveWorkspace("proof");
     } catch (proofError) {
       setError(proofError instanceof Error ? proofError.message : String(proofError));
@@ -357,7 +366,7 @@ function App() {
     }
   }, []);
 
-  const handleBuildShare = useCallback(async () => {
+  const buildShareForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setShareBusy(true);
     setError("");
     try {
@@ -369,7 +378,7 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
-      setActiveWorkspace("release");
+      setActiveWorkspace(nextWorkspace);
     } catch (shareError) {
       setError(shareError instanceof Error ? shareError.message : String(shareError));
     } finally {
@@ -377,11 +386,20 @@ function App() {
     }
   }, []);
 
-  const handleBuildRecipe = useCallback(async () => {
+  const handleBuildShare = useCallback(() => {
+    void buildShareForWorkspace("release");
+  }, [buildShareForWorkspace]);
+
+  const handleBuildProofShare = useCallback(() => {
+    void buildShareForWorkspace("proof");
+  }, [buildShareForWorkspace]);
+
+  const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
     setError("");
     try {
       const result = await buildForgeRecipe(modelExport?.modelName, modelExport?.baseModel || ollama?.selectedModel);
+      const exportPackPayload = await getLatestExportPack();
       setForgeRecipe(result.recipe);
       setProject(result.project);
       setSources(result.project.sources);
@@ -392,7 +410,8 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
-      setActiveWorkspace("model");
+      setExportPack(exportPackPayload.pack || null);
+      setActiveWorkspace(nextWorkspace);
     } catch (recipeError) {
       setError(recipeError instanceof Error ? recipeError.message : String(recipeError));
     } finally {
@@ -400,12 +419,21 @@ function App() {
     }
   }, [modelExport, ollama?.selectedModel]);
 
+  const handleBuildRecipe = useCallback(() => {
+    void buildRecipeForWorkspace("model");
+  }, [buildRecipeForWorkspace]);
+
+  const handleBuildProofRecipe = useCallback(() => {
+    void buildRecipeForWorkspace("proof");
+  }, [buildRecipeForWorkspace]);
+
   const handleSelectRecipe = useCallback(async (recipeId: string) => {
     if (!recipeId || recipeId === forgeRecipe?.recipeId) return;
     setSelectRecipeBusy(true);
     setError("");
     try {
       const result = await selectForgeRecipe(recipeId);
+      const exportPackPayload = await getLatestExportPack();
       setForgeRecipe(result.recipe);
       setProject(result.project);
       setSources(result.project.sources);
@@ -416,6 +444,7 @@ function App() {
       setRecipeRun(result.project.latestRecipeRun || null);
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
+      setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace("model");
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : String(selectError));
@@ -425,7 +454,7 @@ function App() {
   }, [forgeRecipe?.recipeId, modelExport]);
 
   const refreshAfterPackRun = useCallback(async (fallbackRun?: RecipePackRun | null) => {
-    const [projectPayload, ollamaPayload] = await Promise.all([getProject(), getOllamaStatus()]);
+    const [projectPayload, ollamaPayload, exportPackPayload] = await Promise.all([getProject(), getOllamaStatus(), getLatestExportPack()]);
     setProject(projectPayload);
     setSources(projectPayload.sources);
     setOllama(ollamaPayload);
@@ -437,6 +466,7 @@ function App() {
     setRecipeRun(projectPayload.latestRecipeRun || fallbackRun || null);
     setRecipeRunHistory(projectPayload.recipeRunHistory || []);
     setRecipeHistory(projectPayload.recipeHistory || []);
+    setExportPack(exportPackPayload.pack || null);
   }, []);
 
   const monitorRecipePackRun = useCallback(async (runId: string) => {
@@ -791,7 +821,23 @@ function App() {
                   />
                 ) : null}
                 {activeWorkspace === "sources" ? <SourceTable sources={sources || project?.sources} onRefresh={refresh} /> : null}
-                {activeWorkspace === "proof" ? <ProofViewer proof={proof} busy={proofBusy} onBuild={handleBuildProof} /> : null}
+                {activeWorkspace === "proof" ? (
+                  <ProofViewer
+                    proof={proof}
+                    sources={sources || project?.sources}
+                    evalReport={evalReport}
+                    shareCard={shareCard}
+                    recipe={forgeRecipe}
+                    exportPack={exportPack}
+                    modelExport={modelExport}
+                    busy={proofBusy}
+                    recipeBusy={recipeBusy}
+                    shareBusy={shareBusy}
+                    onBuild={handleBuildProof}
+                    onBuildRecipe={handleBuildProofRecipe}
+                    onBuildShare={handleBuildProofShare}
+                  />
+                ) : null}
                 {activeWorkspace === "model" ? (
                   <ModelLab
                     ollama={ollama}

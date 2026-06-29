@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   ChatResponse,
   EvalReport,
+  ExportPackSummary,
   ForgeRecipe,
   ModelExport,
   OllamaStatus,
@@ -184,3 +185,9 @@ export function cancelRecipePackRun(runId: string) {
 export function getRecipeRunHistory() {
   return requestJson<{ ok: boolean; runs: RecipePackRun[] }>("/api/recipe/runs");
 }
+
+export function getLatestExportPack() {
+  return requestJson<{ ok: boolean; pack: ExportPackSummary | null }>("/api/export/latest");
+}
+
+export const exportPackDownloadUrl = "/api/export/download";

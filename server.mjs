@@ -131,6 +131,14 @@ async function readJsonIfExists(path) {
   }
 }
 
+async function readTextIfExists(path) {
+  try {
+    return await readFile(path, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
 function cleanSetting(value) {
   return String(value || "").trim();
 }
@@ -1708,6 +1716,85 @@ async function buildForgeRecipe(body = {}) {
   return recipe;
 }
 
+function isInlineExportArtifact(label = "") {
+  return /\.(md|txt|json|jsonl|yaml|yml|toml|ps1|sh|bat|mjs|js|ts|tsx|css|html|svg)$/i.test(label);
+}
+
+async function getLatestExportPack() {
+  const recipe = await getLatestForgeRecipe();
+  if (!recipe?.files?.exportDir || !recipe.files.exportManifest) {
+    return null;
+  }
+  const exportDir = resolve(recipe.files.exportDir);
+  const exportsRoot = resolve(dataRoot, "exports");
+  if (!isInsidePath(exportsRoot, exportDir)) {
+    return null;
+  }
+  const manifest = await readJsonIfExists(recipe.files.exportManifest);
+  if (!manifest) {
+    return null;
+  }
+  const readme = await readTextIfExists(recipe.files.exportReadme || join(exportDir, "README.md"));
+  return {
+    schema: "modelforge.export_pack_summary.v1",
+    recipeId: recipe.recipeId,
+    recipeStatus: recipe.status,
+    exportDir,
+    manifestPath: recipe.files.exportManifest,
+    readmePath: recipe.files.exportReadme || join(exportDir, "README.md"),
+    artifactCount: Array.isArray(manifest.copiedArtifacts) ? manifest.copiedArtifacts.length : 0,
+    copiedArtifacts: manifest.copiedArtifacts || [],
+    manifest,
+    readme,
+    downloadName: `${recipe.recipeId}-model-forge-export.json`
+  };
+}
+
+async function buildExportDownloadPayload(currentPack) {
+  const pack = currentPack || (await getLatestExportPack());
+  if (!pack) {
+    throw new Error("Build a Forge Recipe before downloading an export pack.");
+  }
+  const exportDir = resolve(pack.exportDir);
+  const artifacts = [];
+  for (const label of pack.copiedArtifacts || []) {
+    const artifactPath = resolve(exportDir, label);
+    if (!isInsidePath(exportDir, artifactPath)) {
+      continue;
+    }
+    try {
+      const artifactStat = await stat(artifactPath);
+      if (!artifactStat.isFile()) {
+        continue;
+      }
+      const inline = isInlineExportArtifact(label) && artifactStat.size <= 320_000;
+      artifacts.push({
+        path: label,
+        sizeBytes: artifactStat.size,
+        inline,
+        content: inline ? await readFile(artifactPath, "utf-8") : ""
+      });
+    } catch {
+      artifacts.push({
+        path: label,
+        sizeBytes: 0,
+        inline: false,
+        content: "",
+        missing: true
+      });
+    }
+  }
+  return {
+    schema: "modelforge.export_download.v1",
+    createdAt: new Date().toISOString(),
+    recipeId: pack.recipeId,
+    exportDir: pack.exportDir,
+    manifest: pack.manifest,
+    readme: pack.readme,
+    artifacts
+  };
+}
+
 async function chatWithOllama(body = {}) {
   const latestModelExport = await getLatestModelExport();
   const ollama = await getOllamaStatus();
@@ -2055,6 +2142,15 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload, null, 2));
 }
 
+function sendJsonDownload(response, filename, payload) {
+  response.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "content-disposition": `attachment; filename="${filename.replace(/[^a-z0-9._-]/gi, "-")}"`,
+    "cache-control": "no-store"
+  });
+  response.end(JSON.stringify(payload, null, 2));
+}
+
 function sendText(response, statusCode, text) {
   response.writeHead(statusCode, { "content-type": "text/plain; charset=utf-8" });
   response.end(text);
@@ -2155,6 +2251,22 @@ async function handleApi(request, response, url) {
 
     if (request.method === "GET" && url.pathname === "/api/recipe/runs") {
       sendJson(response, 200, { ok: true, runs: await getRecipeRunHistory() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/export/latest") {
+      sendJson(response, 200, { ok: true, pack: await getLatestExportPack() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/export/download") {
+      const pack = await getLatestExportPack();
+      if (!pack) {
+        sendJson(response, 404, { ok: false, error: "Build a Forge Recipe before downloading an export pack." });
+        return;
+      }
+      const payload = await buildExportDownloadPayload(pack);
+      sendJsonDownload(response, pack?.downloadName || "model-forge-export.json", payload);
       return;
     }
 

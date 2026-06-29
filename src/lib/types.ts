@@ -191,6 +191,38 @@ export type ShareCard = {
   };
 };
 
+export type ExportPackSummary = {
+  schema: string;
+  recipeId: string;
+  recipeStatus: string;
+  exportDir: string;
+  manifestPath: string;
+  readmePath: string;
+  artifactCount: number;
+  copiedArtifacts: string[];
+  downloadName: string;
+  readme: string;
+  manifest: {
+    schema: string;
+    createdAt: string;
+    recipeId: string;
+    recipeStatus: string;
+    targetModel: string;
+    baseModel: string;
+    publicPositioning: string;
+    copiedArtifacts: string[];
+    runner?: {
+      kind: string;
+      createCommand: string[];
+      smokePrompt: string;
+    };
+    freshness?: {
+      sourcesMatchProof: boolean;
+      evalMatchesProof: boolean;
+    };
+  };
+};
+
 export type ForgeRecipeStage = {
   id: string;
   label: string;
