@@ -40,9 +40,10 @@ ModelForge is a source-available, local-first cockpit for building model-ready
 artifacts from code and project folders.
 
 - Scans a local repo or folder into a source inventory with SHA-256 hashes.
-- Creates hardware-aware build plans from plain-English intent, AI type,
-  knowledge source, answer boundaries, CPU, RAM, GPU, disk, Ollama status,
-  recommended route, expected time/disk, and next actions.
+- Creates hardware-aware build plans from plain-English intent, starter
+  templates, AI type, knowledge source, source scope, answer boundaries, CPU,
+  RAM, GPU, disk, Ollama status, recommended route, expected time/disk, and
+  next actions.
 - Estimates which model sizes are comfortable, possible, tight, or unrealistic
   for the current machine before a user starts building.
 - Runs **Build From Plan** as one guided job: source boundary, Ollama profile,
@@ -74,10 +75,14 @@ The plan records:
 
 - The kind of AI being built, such as coding helper, tutor, support bot,
   research bot, business assistant, or game NPC.
+- The starter template used, such as repo copilot, docs tutor, support agent,
+  research brief bot, or game lore NPC.
 - What the user wants the AI to do.
-- The knowledge source and answer boundary the AI should respect.
+- The knowledge source, source scope, and answer boundary the AI should respect.
 - A plain-English blueprint with capabilities, watchouts, hardware fit, first
   build action, and release posture.
+- A first-run checklist that explains whether setup, source boundary, hardware
+  route, base model, dataset path, and release proof are ready.
 - Local hardware facts: CPU threads, RAM, GPU/VRAM, D-drive space, and Ollama
   availability.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA

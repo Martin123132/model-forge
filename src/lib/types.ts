@@ -161,6 +161,7 @@ export type HardwareProfile = {
 
 export type BuilderPlanRequest = {
   intent: string;
+  templateId: string;
   aiType: string;
   audience: string;
   personality: string;
@@ -169,6 +170,7 @@ export type BuilderPlanRequest = {
   buildMode: string;
   targetDevice: string;
   knowledgeSource: string;
+  sourceScope: string;
   boundaryMode: string;
   dataTypes: string[];
 };
@@ -213,7 +215,9 @@ export type BuilderPlan = {
       capability: string;
     };
     userPromise: string;
+    starterTemplate: string;
     knowledge: string;
+    sourceScope: string;
     boundaries: string;
     route: string;
     hardwareFit: string;
@@ -221,6 +225,11 @@ export type BuilderPlan = {
     releasePosture: string;
     capabilities: Array<{
       label: string;
+      detail: string;
+    }>;
+    firstRunChecklist: Array<{
+      label: string;
+      status: "pass" | "ready" | "warn" | "blocked" | string;
       detail: string;
     }>;
     watchouts: string[];

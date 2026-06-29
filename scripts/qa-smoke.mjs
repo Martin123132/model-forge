@@ -83,6 +83,17 @@ async function main() {
       Boolean(project.latestBuildPlan?.blueprint?.summary && project.latestBuildPlan?.request?.aiType),
       project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"
     ),
+    check(
+      "Builder guided setup",
+      Boolean(
+        project.latestBuildPlan?.request?.templateId &&
+          project.latestBuildPlan?.request?.sourceScope &&
+          project.latestBuildPlan?.blueprint?.firstRunChecklist?.length
+      ),
+      project.latestBuildPlan
+        ? `${project.latestBuildPlan.request.templateId || "no template"} / ${project.latestBuildPlan.request.sourceScope || "no source scope"} / ${project.latestBuildPlan.blueprint?.firstRunChecklist?.length || 0} checklist items`
+        : "no guided builder plan"
+    ),
     check("Proof bundle", Boolean(project.latestProof?.path), project.latestProof?.path || "no proof bundle"),
     check(
       "Proof freshness",

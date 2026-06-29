@@ -1109,13 +1109,23 @@ h2 {
 .segmented-grid,
 .segmented-row,
 .ai-type-grid,
+.builder-template-grid,
+.source-scope-grid,
 .checkbox-grid {
   display: grid;
   gap: 7px;
 }
 
+.builder-template-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .ai-type-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.source-scope-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .segmented-grid {
@@ -1128,6 +1138,8 @@ h2 {
 
 .segmented-grid button,
 .ai-type-grid button,
+.builder-template-grid button,
+.source-scope-grid button,
 .segmented-row button {
   display: grid;
   align-content: center;
@@ -1143,6 +1155,13 @@ h2 {
   cursor: pointer;
 }
 
+.builder-template-grid button {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-height: 68px;
+}
+
 .ai-type-grid button {
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: start;
@@ -1151,11 +1170,21 @@ h2 {
   min-height: 62px;
 }
 
+.source-scope-grid button {
+  min-height: 54px;
+}
+
+.builder-template-grid button svg {
+  margin-top: 2px;
+  color: #365176;
+}
+
 .ai-type-grid button svg {
   margin-top: 2px;
   color: #365176;
 }
 
+.builder-template-grid button span,
 .ai-type-grid button span {
   display: grid;
   min-width: 0;
@@ -1178,6 +1207,7 @@ h2 {
   white-space: nowrap;
 }
 
+.builder-template-grid button strong,
 .ai-type-grid button strong {
   overflow: hidden;
   color: #172236;
@@ -1187,12 +1217,33 @@ h2 {
   white-space: nowrap;
 }
 
+.source-scope-grid button strong {
+  overflow: hidden;
+  color: #172236;
+  font-size: 12px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-template-grid button small,
 .ai-type-grid button small {
   overflow: hidden;
   color: var(--muted);
   font-size: 10px;
   font-weight: 620;
   line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-scope-grid button small {
+  overflow: hidden;
+  max-width: 100%;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1216,6 +1267,8 @@ h2 {
 
 .segmented-grid button.is-selected,
 .ai-type-grid button.is-selected,
+.builder-template-grid button.is-selected,
+.source-scope-grid button.is-selected,
 .segmented-row button.is-selected {
   border-color: #b9d4ff;
   background: #eef6ff;
@@ -1224,8 +1277,11 @@ h2 {
 }
 
 .segmented-grid button.is-selected strong,
+.builder-template-grid button.is-selected strong,
+.builder-template-grid button.is-selected svg,
 .ai-type-grid button.is-selected strong,
 .ai-type-grid button.is-selected svg,
+.source-scope-grid button.is-selected strong,
 .segmented-row button.is-selected {
   color: var(--blue);
 }
@@ -1406,7 +1462,7 @@ h2 {
 }
 
 .blueprint-metrics {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .blueprint-capability-grid {
@@ -1576,6 +1632,60 @@ h2 {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.builder-checklist-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.builder-checklist-list {
+  display: grid;
+  gap: 7px;
+}
+
+.builder-checklist-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.builder-checklist-item span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.builder-checklist-item strong,
+.builder-checklist-item em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-checklist-item strong {
+  color: #172236;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.builder-checklist-item em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .builder-run-card {
@@ -4892,7 +5002,7 @@ h2 {
     padding: 0 9px;
   }
 
-  .primary-action {
+  .topbar .primary-action {
     grid-column: 3 / 5;
     grid-row: 2;
     width: 100%;
@@ -4985,7 +5095,12 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .builder-template-grid,
   .ai-type-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .source-scope-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -5024,6 +5139,8 @@ h2 {
   .builder-blueprint-heading h2,
   .blueprint-metrics span,
   .blueprint-capability-grid span,
+  .builder-checklist-item strong,
+  .builder-checklist-item em,
   .builder-run-heading h2,
   .builder-run-stage strong,
   .builder-run-stage em,

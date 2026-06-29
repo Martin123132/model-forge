@@ -58,6 +58,99 @@ const aiTypeOptions = [
   { id: "game-npc", label: "Game NPC", detail: "Lore-aware dialogue and behavior", Icon: Bot }
 ];
 
+const templateOptions = [
+  {
+    id: "repo-copilot",
+    label: "Repo copilot",
+    detail: "Explain, fix, and navigate a codebase",
+    Icon: BrainCircuit,
+    intent: "Build a local coding helper that can explain this repo, answer implementation questions, point to source files, and suggest safe next changes with evidence.",
+    aiType: "coding-helper",
+    audience: "personal",
+    personality: "operator",
+    privacy: "local-only",
+    qualitySpeed: "balanced",
+    buildMode: "auto",
+    targetDevice: "this machine",
+    knowledgeSource: "project-source",
+    sourceScope: "code-hotspots",
+    boundaryMode: "source-backed",
+    dataTypes: ["code", "documents", "configs"]
+  },
+  {
+    id: "docs-tutor",
+    label: "Docs tutor",
+    detail: "Teach from local notes and project docs",
+    Icon: Sparkles,
+    intent: "Build a patient tutor that turns the project docs and notes into clear lessons, practice prompts, and source-backed explanations for non-developers.",
+    aiType: "learning-tutor",
+    audience: "team",
+    personality: "teacher",
+    privacy: "local-only",
+    qualitySpeed: "quality",
+    buildMode: "dataset",
+    targetDevice: "this machine",
+    knowledgeSource: "docs-only",
+    sourceScope: "docs-first",
+    boundaryMode: "strict-citations",
+    dataTypes: ["documents", "research"]
+  },
+  {
+    id: "support-agent",
+    label: "Support agent",
+    detail: "Approved answers from known sources",
+    Icon: ShieldCheck,
+    intent: "Build a support assistant that answers common questions from approved local knowledge, refuses unsupported claims, and keeps answers concise enough for public use.",
+    aiType: "support-bot",
+    audience: "public",
+    personality: "practical",
+    privacy: "shareable",
+    qualitySpeed: "balanced",
+    buildMode: "portable",
+    targetDevice: "another machine",
+    knowledgeSource: "selected-files",
+    sourceScope: "small-safe-sample",
+    boundaryMode: "strict-citations",
+    dataTypes: ["documents", "configs"]
+  },
+  {
+    id: "research-brief",
+    label: "Research brief",
+    detail: "Compare evidence and keep citations tight",
+    Icon: FileText,
+    intent: "Build a research bot that gathers evidence from local research material, compares competing claims, and clearly separates sourced facts from open questions.",
+    aiType: "research-bot",
+    audience: "team",
+    personality: "practical",
+    privacy: "local-only",
+    qualitySpeed: "quality",
+    buildMode: "dataset",
+    targetDevice: "this machine",
+    knowledgeSource: "mixed-local",
+    sourceScope: "docs-first",
+    boundaryMode: "strict-citations",
+    dataTypes: ["documents", "research"]
+  },
+  {
+    id: "game-lore",
+    label: "Game lore NPC",
+    detail: "In-character replies from lore and rules",
+    Icon: Bot,
+    intent: "Build a game NPC assistant that uses local lore, rules, and character notes to answer in character while keeping world facts consistent.",
+    aiType: "game-npc",
+    audience: "personal",
+    personality: "creative",
+    privacy: "local-only",
+    qualitySpeed: "balanced",
+    buildMode: "dataset",
+    targetDevice: "this machine",
+    knowledgeSource: "mixed-local",
+    sourceScope: "small-safe-sample",
+    boundaryMode: "creative-safe",
+    dataTypes: ["documents", "research"]
+  }
+];
+
 const purposeOptions = [
   { id: "auto", label: "Auto", detail: "Let ModelForge pick the path" },
   { id: "profile", label: "Local profile", detail: "Fastest Ollama target" },
@@ -89,6 +182,13 @@ const knowledgeSourceOptions = [
   { id: "docs-only", label: "Docs only" },
   { id: "selected-files", label: "Selected files first" },
   { id: "mixed-local", label: "Mixed local notes" }
+];
+
+const sourceScopeOptions = [
+  { id: "whole-project", label: "Whole project", detail: "Use the current source boundary" },
+  { id: "docs-first", label: "Docs first", detail: "Prioritize README, docs, notes" },
+  { id: "code-hotspots", label: "Code hotspots", detail: "Start with implementation files" },
+  { id: "small-safe-sample", label: "Small safe sample", detail: "Begin with a reviewed subset" }
 ];
 
 const boundaryOptions = [
@@ -147,6 +247,7 @@ function optionLabel(options: Array<{ id: string; label: string }>, id?: string)
 }
 
 function createDraftBlueprint({
+  templateId,
   aiType,
   audience,
   personality,
@@ -154,10 +255,12 @@ function createDraftBlueprint({
   buildMode,
   targetDevice,
   knowledgeSource,
+  sourceScope,
   boundaryMode,
   hardware,
   sourceCount
 }: {
+  templateId: string;
   aiType: string;
   audience: string;
   personality: string;
@@ -165,12 +268,15 @@ function createDraftBlueprint({
   buildMode: string;
   targetDevice: string;
   knowledgeSource: string;
+  sourceScope: string;
   boundaryMode: string;
   hardware?: HardwareProfile | null;
   sourceCount: number;
 }): BuilderBlueprint {
   const aiLabel = optionLabel(aiTypeOptions, aiType);
+  const templateLabel = templateOptions.find((option) => option.id === templateId)?.label || "Custom build";
   const knowledgeLabel = optionLabel(knowledgeSourceOptions, knowledgeSource).toLowerCase();
+  const scopeLabel = optionLabel(sourceScopeOptions, sourceScope).toLowerCase();
   const boundaryLabel = optionLabel(boundaryOptions, boundaryMode).toLowerCase();
   const hardwareFit = hardware?.modelFit?.summary || hardware?.tier.detail || "Hardware check pending.";
   return {
@@ -183,17 +289,37 @@ function createDraftBlueprint({
       capability: `${aiLabel} behavior with ${personality || "practical"} responses.`
     },
     userPromise: `${aiLabel} behavior with ${personality || "practical"} responses.`,
+    starterTemplate: templateLabel,
     knowledge: `Use ${knowledgeLabel}${sourceCount ? ` across ${sourceCount.toLocaleString()} local files` : ""}.`,
+    sourceScope: `Start with ${scopeLabel}.`,
     boundaries: `${boundaryLabel}; ${privacy === "local-only" ? "keep artifacts local" : "prepare shareable proof"}.`,
     route: buildMode === "auto" ? "ModelForge will choose the practical route." : `Preferred route: ${optionLabel(purposeOptions, buildMode)}.`,
     hardwareFit,
     firstBuild: "Create a build plan to turn this preview into saved steps.",
     releasePosture: "Proof and release gates will be refreshed before sharing.",
     capabilities: [
+      { label: "Template", detail: templateLabel },
       { label: "AI type", detail: aiLabel },
-      { label: "Knowledge", detail: knowledgeLabel },
+      { label: "Source scope", detail: scopeLabel },
       { label: "Boundary", detail: boundaryLabel },
       { label: "Hardware", detail: hardwareFit }
+    ],
+    firstRunChecklist: [
+      {
+        label: "Source boundary",
+        status: sourceCount ? "pass" : "ready",
+        detail: sourceCount ? `${sourceCount.toLocaleString()} files are ready to inspect.` : "Scan a folder before starting the build."
+      },
+      {
+        label: "Hardware route",
+        status: hardware ? "pass" : "ready",
+        detail: hardwareFit
+      },
+      {
+        label: "First dataset",
+        status: sourceCount ? "ready" : "blocked",
+        detail: `Begin with ${scopeLabel} and keep proof attached.`
+      }
     ],
     watchouts: [
       privacy === "local-only" ? "Local-only builds should stay inside the configured data root." : "Shareable builds need a fresh proof review.",
@@ -209,6 +335,29 @@ function formatStamp(value?: string) {
 function compactPath(path?: string) {
   if (!path) return "Not set";
   return path.replace(/^([A-Z]:\\Users\\[^\\]+\\Documents\\)/i, "~\\Documents\\");
+}
+
+function sameStringList(left: string[] = [], right: string[] = []) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function requestMatchesPlan(saved?: BuilderPlanRequest, current?: BuilderPlanRequest) {
+  if (!saved || !current) return false;
+  return (
+    saved.intent === current.intent &&
+    saved.templateId === current.templateId &&
+    saved.aiType === current.aiType &&
+    saved.audience === current.audience &&
+    saved.personality === current.personality &&
+    saved.privacy === current.privacy &&
+    saved.qualitySpeed === current.qualitySpeed &&
+    saved.buildMode === current.buildMode &&
+    saved.targetDevice === current.targetDevice &&
+    saved.knowledgeSource === current.knowledgeSource &&
+    saved.sourceScope === current.sourceScope &&
+    saved.boundaryMode === current.boundaryMode &&
+    sameStringList(saved.dataTypes, current.dataTypes)
+  );
 }
 
 export function BuilderWizard({
@@ -236,6 +385,7 @@ export function BuilderWizard({
   const [intent, setIntent] = useState(
     plan?.request.intent || "Build a practical local AI assistant that understands this project and can answer with source-backed evidence."
   );
+  const [templateId, setTemplateId] = useState(plan?.request.templateId || "custom");
   const [aiType, setAiType] = useState(plan?.request.aiType || "coding-helper");
   const [audience, setAudience] = useState(plan?.request.audience || "personal");
   const [personality, setPersonality] = useState(plan?.request.personality || "practical");
@@ -244,6 +394,7 @@ export function BuilderWizard({
   const [qualitySpeed, setQualitySpeed] = useState(plan?.request.qualitySpeed || "balanced");
   const [targetDevice, setTargetDevice] = useState(plan?.request.targetDevice || "this machine");
   const [knowledgeSource, setKnowledgeSource] = useState(plan?.request.knowledgeSource || "project-source");
+  const [sourceScope, setSourceScope] = useState(plan?.request.sourceScope || "whole-project");
   const [boundaryMode, setBoundaryMode] = useState(plan?.request.boundaryMode || "source-backed");
   const [dataTypes, setDataTypes] = useState<string[]>(plan?.request.dataTypes?.length ? plan.request.dataTypes : ["code", "documents"]);
 
@@ -282,10 +433,30 @@ export function BuilderWizard({
   const fitCandidates = hardware?.modelFit?.candidates || [];
   const runIsActive = activeRun?.status === "running";
   const sourceCount = sources?.totalFiles || 0;
+  const currentRequest = useMemo<BuilderPlanRequest>(
+    () => ({
+      intent,
+      templateId,
+      aiType,
+      audience,
+      personality,
+      privacy,
+      qualitySpeed,
+      buildMode,
+      targetDevice,
+      knowledgeSource,
+      sourceScope,
+      boundaryMode,
+      dataTypes
+    }),
+    [aiType, audience, boundaryMode, buildMode, dataTypes, intent, knowledgeSource, personality, privacy, qualitySpeed, sourceScope, targetDevice, templateId]
+  );
+  const planMatchesForm = requestMatchesPlan(plan?.request, currentRequest);
   const blueprint = useMemo(
     () =>
-      plan?.blueprint ||
+      (planMatchesForm && plan?.blueprint) ||
       createDraftBlueprint({
+        templateId,
         aiType,
         audience,
         personality,
@@ -293,11 +464,12 @@ export function BuilderWizard({
         buildMode,
         targetDevice,
         knowledgeSource,
+        sourceScope,
         boundaryMode,
         hardware,
         sourceCount
       }),
-    [aiType, audience, boundaryMode, buildMode, hardware, knowledgeSource, personality, plan?.blueprint, privacy, sourceCount, targetDevice]
+    [aiType, audience, boundaryMode, buildMode, hardware, knowledgeSource, personality, plan?.blueprint, planMatchesForm, privacy, sourceCount, sourceScope, targetDevice, templateId]
   );
   const activeStage =
     activeRun?.stages.find((stage) => stage.status === "running") ||
@@ -315,25 +487,30 @@ export function BuilderWizard({
       ].filter((row) => row.path)
     : [];
   const pastRuns = builderRunHistory.filter((run) => run.runId !== activeRun?.runId).slice(0, 4);
+  const checklistItems = blueprint.firstRunChecklist || [];
+
+  function applyTemplate(template: (typeof templateOptions)[number]) {
+    setTemplateId(template.id);
+    setIntent(template.intent);
+    setAiType(template.aiType);
+    setAudience(template.audience);
+    setPersonality(template.personality);
+    setPrivacy(template.privacy);
+    setQualitySpeed(template.qualitySpeed);
+    setBuildMode(template.buildMode);
+    setTargetDevice(template.targetDevice);
+    setKnowledgeSource(template.knowledgeSource);
+    setSourceScope(template.sourceScope);
+    setBoundaryMode(template.boundaryMode);
+    setDataTypes(template.dataTypes);
+  }
 
   function toggleDataType(id: string) {
     setDataTypes((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
 
   function submitPlan() {
-    onBuildPlan({
-      intent,
-      aiType,
-      audience,
-      personality,
-      privacy,
-      qualitySpeed,
-      buildMode,
-      targetDevice,
-      knowledgeSource,
-      boundaryMode,
-      dataTypes
-    });
+    onBuildPlan(currentRequest);
   }
 
   function goToPlanAction(workspace: string) {
@@ -364,9 +541,9 @@ export function BuilderWizard({
               <span>Cancel Build</span>
             </button>
           ) : (
-            <button className="primary-action compact" type="button" onClick={onStartBuild} disabled={!plan || builderRunBusy}>
+            <button className="primary-action compact" type="button" onClick={onStartBuild} disabled={!plan || !planMatchesForm || builderRunBusy}>
               {builderRunBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Rocket size={15} />}
-              <span>{builderRunBusy ? "Starting" : "Start Build"}</span>
+              <span>{builderRunBusy ? "Starting" : plan && !planMatchesForm ? "Plan Changed" : "Start Build"}</span>
             </button>
           )}
         </div>
@@ -374,6 +551,31 @@ export function BuilderWizard({
 
       <div className="builder-layout">
         <form className="builder-form" onSubmit={(event) => event.preventDefault()}>
+          <div className="builder-field builder-field-wide">
+            <span>Start with a template</span>
+            <div className="builder-template-grid">
+              {templateOptions.map((option) => {
+                const Icon = option.Icon;
+                return (
+                  <button
+                    aria-pressed={templateId === option.id}
+                    className={templateId === option.id ? "is-selected" : ""}
+                    data-template-id={option.id}
+                    key={option.id}
+                    type="button"
+                    onClick={() => applyTemplate(option)}
+                  >
+                    <Icon size={16} />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.detail}</small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="builder-field builder-field-wide">
             <span>Choose the AI shape</span>
             <div className="ai-type-grid">
@@ -385,7 +587,10 @@ export function BuilderWizard({
                     className={aiType === option.id ? "is-selected" : ""}
                     key={option.id}
                     type="button"
-                    onClick={() => setAiType(option.id)}
+                    onClick={() => {
+                      setTemplateId("custom");
+                      setAiType(option.id);
+                    }}
                   >
                     <Icon size={16} />
                     <span>
@@ -423,6 +628,25 @@ export function BuilderWizard({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="builder-field builder-field-wide">
+            <span>Source scope</span>
+            <div className="source-scope-grid">
+              {sourceScopeOptions.map((option) => (
+                <button
+                  aria-pressed={sourceScope === option.id}
+                  className={sourceScope === option.id ? "is-selected" : ""}
+                  data-source-scope-id={option.id}
+                  key={option.id}
+                  type="button"
+                  onClick={() => setSourceScope(option.id)}
+                >
+                  <strong>{option.label}</strong>
+                  <small>{option.detail}</small>
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="builder-field">
@@ -519,13 +743,17 @@ export function BuilderWizard({
                 <span>Blueprint preview</span>
                 <h2>{blueprint.title}</h2>
               </div>
-              <StatusPill status={plan ? "pass" : "neutral"} label={plan ? "Saved" : "Draft"} />
+              <StatusPill status={planMatchesForm ? "pass" : "neutral"} label={planMatchesForm ? "Saved" : "Draft"} />
             </div>
             <p>{blueprint.summary}</p>
             <div className="blueprint-metrics">
               <div>
                 <strong>Knowledge</strong>
                 <span>{blueprint.knowledge}</span>
+              </div>
+              <div>
+                <strong>Source scope</strong>
+                <span>{blueprint.sourceScope}</span>
               </div>
               <div>
                 <strong>Boundary</strong>
@@ -596,31 +824,51 @@ export function BuilderWizard({
           <div className="builder-route-card">
             <div className="builder-route-heading">
               <div>
-                <span>{formatStamp(plan?.createdAt)}</span>
-                <h2>{plan?.routeLabel || "No build plan yet"}</h2>
+                <span>{planMatchesForm ? formatStamp(plan?.createdAt) : "Draft"}</span>
+                <h2>{planMatchesForm ? plan?.routeLabel || "No build plan yet" : "Create this build plan"}</h2>
               </div>
-              <StatusPill status={plan ? "pass" : "neutral"} label={plan ? "Planned" : "Draft"} />
+              <StatusPill status={planMatchesForm ? "pass" : "neutral"} label={planMatchesForm ? "Planned" : "Draft"} />
             </div>
-            <p>{plan?.routeReason || "Create a plan to see the best route this machine can honestly support."}</p>
+            <p>{planMatchesForm ? plan?.routeReason || "Create a plan to see the best route this machine can honestly support." : "Save this template and source scope before starting the build run."}</p>
             <dl className="builder-estimates">
               <div>
                 <dt>Hardware tier</dt>
-                <dd>{plan?.estimates.hardwareTier || hardware?.tier.label || "Checking"}</dd>
+                <dd>{planMatchesForm ? plan?.estimates.hardwareTier || hardware?.tier.label || "Checking" : hardware?.tier.label || "Checking"}</dd>
               </div>
               <div>
                 <dt>Base model</dt>
-                <dd>{plan?.baseModelRecommendation.model || hardware?.ollama.selectedModel || "Not selected"}</dd>
+                <dd>{planMatchesForm ? plan?.baseModelRecommendation.model || hardware?.ollama.selectedModel || "Not selected" : hardware?.ollama.selectedModel || "Not selected"}</dd>
               </div>
               <div>
                 <dt>Time</dt>
-                <dd>{plan?.estimates.time || "Plan required"}</dd>
+                <dd>{planMatchesForm ? plan?.estimates.time || "Plan required" : "Plan required"}</dd>
               </div>
               <div>
                 <dt>Disk</dt>
-                <dd>{plan?.estimates.disk || hardware?.disk.free || "Checking"}</dd>
+                <dd>{planMatchesForm ? plan?.estimates.disk || hardware?.disk.free || "Checking" : hardware?.disk.free || "Checking"}</dd>
               </div>
             </dl>
           </div>
+
+          {checklistItems.length ? (
+            <div className="builder-checklist-card">
+              <div className="builder-subheading">
+                <ListChecks size={16} />
+                <strong>First-run checklist</strong>
+              </div>
+              <div className="builder-checklist-list">
+                {checklistItems.map((item) => (
+                  <div className="builder-checklist-item" key={item.label}>
+                    <StatusPill status={stepStatus(item.status)} label={stepLabel(item.status)} />
+                    <span>
+                      <strong>{item.label}</strong>
+                      <em>{item.detail}</em>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className={`builder-run-card ${activeRun?.status || "ready"}`} aria-live="polite">
             <div className="builder-run-heading">

@@ -736,6 +736,7 @@ function normalizeBuilderRequest(body = {}) {
   const dataTypes = rawDataTypes.map((item) => cleanSetting(item).toLowerCase()).filter(Boolean).slice(0, 8);
   return {
     intent: cleanSetting(body.intent).slice(0, 1200),
+    templateId: cleanSetting(body.templateId || "custom").slice(0, 80),
     aiType: cleanSetting(body.aiType || "coding-helper").slice(0, 80),
     audience: cleanSetting(body.audience || "personal").slice(0, 80),
     personality: cleanSetting(body.personality || "practical").slice(0, 80),
@@ -744,6 +745,7 @@ function normalizeBuilderRequest(body = {}) {
     buildMode: cleanSetting(body.buildMode || "auto").slice(0, 80),
     targetDevice: cleanSetting(body.targetDevice || "this machine").slice(0, 120),
     knowledgeSource: cleanSetting(body.knowledgeSource || "project-source").slice(0, 80),
+    sourceScope: cleanSetting(body.sourceScope || "whole-project").slice(0, 80),
     boundaryMode: cleanSetting(body.boundaryMode || "source-backed").slice(0, 80),
     dataTypes: dataTypes.length ? dataTypes : ["code", "documents"]
   };
@@ -792,6 +794,22 @@ function knowledgeSourceLabel(value = "") {
   return "the configured project source";
 }
 
+function templateLabel(value = "") {
+  if (value === "repo-copilot") return "Repo copilot";
+  if (value === "docs-tutor") return "Docs tutor";
+  if (value === "support-agent") return "Support agent";
+  if (value === "research-brief") return "Research brief bot";
+  if (value === "game-lore") return "Game lore NPC";
+  return "Custom build";
+}
+
+function sourceScopeLabel(value = "") {
+  if (value === "docs-first") return "docs and README first";
+  if (value === "code-hotspots") return "code hotspots first";
+  if (value === "small-safe-sample") return "a small reviewed starter sample";
+  return "the whole project boundary";
+}
+
 function boundaryLabel(value = "") {
   if (value === "strict-citations") return "strict source citations";
   if (value === "creative-safe") return "creative but source-aware";
@@ -799,14 +817,52 @@ function boundaryLabel(value = "") {
   return "source-backed answers";
 }
 
+function firstRunChecklist({ artifacts, hardware, sources, baseModel }) {
+  const sourceCount = sources?.totalFiles || 0;
+  return [
+    {
+      label: "Setup saved",
+      status: artifacts.setupConfigured ? "pass" : "ready",
+      detail: artifacts.setupConfigured ? "Local paths and model names are saved." : "Save Setup once so artifacts stay in the configured data root."
+    },
+    {
+      label: "Source boundary",
+      status: sourceCount ? "pass" : "blocked",
+      detail: sourceCount ? `${sourceCount.toLocaleString()} files are inside the current boundary.` : "Choose or scan a source folder before building."
+    },
+    {
+      label: "Hardware route",
+      status: hardware.tier.canTrainAdapter ? "pass" : "warn",
+      detail: hardware.modelFit?.summary || hardware.tier.detail
+    },
+    {
+      label: "Base model",
+      status: hardware.ollama.ok ? "pass" : "warn",
+      detail: hardware.ollama.ok ? `${baseModel.model} is the recommended starting point.` : "Ollama is not ready, so keep this as an export plan until it starts."
+    },
+    {
+      label: "Dataset path",
+      status: artifacts.datasetReady ? "pass" : sourceCount ? "ready" : "blocked",
+      detail: artifacts.datasetReady ? "A Dataset Forge pack already exists." : "First build should create source-grounded examples."
+    },
+    {
+      label: "Release proof",
+      status: artifacts.proofFresh && artifacts.evalFresh ? "pass" : "ready",
+      detail: artifacts.proofFresh && artifacts.evalFresh ? "Proof and gates match the current source tree." : "Refresh proof before making public claims."
+    }
+  ];
+}
+
 function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources }) {
   const type = aiTypeSpec(request.aiType);
   const sourceLabel = knowledgeSourceLabel(request.knowledgeSource);
+  const scopeLabel = sourceScopeLabel(request.sourceScope);
   const boundary = boundaryLabel(request.boundaryMode);
   const sourceCount = sources?.totalFiles || 0;
   const datasetStatus = artifacts.datasetReady ? "Reuse the existing Dataset Forge pack." : "Build a fresh Dataset Forge pack first.";
   const proofStatus = artifacts.proofFresh && artifacts.evalFresh ? "Proof and gates already match the source tree." : "Refresh proof and gates before sharing.";
   const localFit = hardware.modelFit?.summary || hardware.tier.detail;
+  const checklist = firstRunChecklist({ artifacts, hardware, sources, baseModel });
   return {
     schema: "modelforge.builder_blueprint.v1",
     title: `${type.label} for ${request.audience || "personal"} use`,
@@ -817,18 +873,23 @@ function buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, so
       capability: type.capability
     },
     userPromise: `${type.label}: ${type.capability}`,
+    starterTemplate: templateLabel(request.templateId),
     knowledge: `Use ${sourceLabel}${sourceCount ? ` across ${sourceCount.toLocaleString()} files` : ""}.`,
+    sourceScope: `Start with ${scopeLabel}.`,
     boundaries: `${boundary}; ${request.privacy === "local-only" ? "keep artifacts local" : "prepare shareable proof before release"}.`,
     route: `${route.label}: ${route.reason}`,
     hardwareFit: localFit,
     firstBuild: datasetStatus,
     releasePosture: proofStatus,
     capabilities: [
+      { label: "Starter template", detail: templateLabel(request.templateId) },
       { label: "Answer style", detail: `${request.personality || "practical"} responses for ${request.audience || "personal"} users.` },
+      { label: "Source scope", detail: `Begin with ${scopeLabel}.` },
       { label: "Knowledge boundary", detail: `Ground answers in ${sourceLabel} with ${boundary}.` },
       { label: "Build route", detail: route.label },
       { label: "Base model", detail: `${baseModel.model}: ${baseModel.reason}` }
     ],
+    firstRunChecklist: checklist,
     watchouts: [
       hardware.tier.canTrainAdapter ? "Adapter training is plausible but still depends on exact model settings." : "This machine should prepare or run compact models rather than train heavy adapters.",
       request.privacy === "local-only" ? "Keep source, datasets, and receipts inside the configured local data root." : "Review license and proof before any external runner or public share."
@@ -1102,11 +1163,17 @@ async function buildAiBuildPlan(body = {}) {
     "",
     "## Blueprint",
     "",
+    `Template: ${blueprint.starterTemplate}`,
     `AI type: ${blueprint.aiType.label}`,
     `Knowledge: ${blueprint.knowledge}`,
+    `Source scope: ${blueprint.sourceScope}`,
     `Boundaries: ${blueprint.boundaries}`,
     `First build: ${blueprint.firstBuild}`,
     `Release posture: ${blueprint.releasePosture}`,
+    "",
+    "## First-Run Checklist",
+    "",
+    ...blueprint.firstRunChecklist.map((item) => `- ${item.label}: ${item.status}. ${item.detail}`),
     "",
     "## Steps",
     "",
