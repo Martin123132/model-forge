@@ -1,189 +1,153 @@
 # ModelForge
 
-Source-available local-first AI model forge cockpit.
+<p align="center">
+  <strong>A local-first AI model forge with receipts.</strong>
+</p>
 
-ModelForge turns a local repo or folder into a provenance-backed model workflow:
+<p align="center">
+  Turn a repo or folder into source inventories, dataset drafts, Ollama profiles,
+  eval gates, and proof bundles you can inspect before anyone asks you to trust it.
+</p>
 
-1. scan source files on disk
-2. draft dataset/source summaries
-3. reuse local Ollama models
-4. run eval/proof gates
-5. export model-building plans, runner adapters, and proof-bundle artifacts under a local data root
+<p align="center">
+  <a href="#why-it-exists">Why</a> |
+  <a href="#what-it-does">What it does</a> |
+  <a href="#screenshots">Screenshots</a> |
+  <a href="#quickstart">Quickstart</a> |
+  <a href="#proof-posture">Proof posture</a> |
+  <a href="#license">License</a>
+</p>
 
-This first scaffold deliberately starts with a thin local API and a React cockpit.
-RepoMori, AgentLedger, ManifoldGuard, Sentinel, and fine-tuning backends can be
-connected behind the same pipeline without changing the product shell.
+![ModelForge release dashboard](docs/screenshots/model-forge-release.png)
 
-## D-Drive First
+## Why It Exists
 
-By default, ModelForge writes local proof bundles and run records into
-`.modelforge-data` inside the project folder. On smaller Windows system drives,
-set the data root to a `D:` path before running the app:
+Most AI tooling asks builders to accept a black-box claim: this model is safe,
+this dataset is allowed, this release is fine. ModelForge goes in the other
+direction. It starts with the local source boundary, records hashes and receipts,
+builds a model recipe, and makes the proof visible.
 
-```text
-MODEL_FORGE_DATA_ROOT=D:\AI\ModelForge\.modelforge-data
-```
+The goal is not to pretend that a dashboard magically solves AI safety. The goal
+is to make model-building measurable, inspectable, and reproducible enough that
+open builders can improve it in public.
 
-If Ollama is installed on `D:`, point Ollama at that model store:
+## What It Does
 
-```text
-OLLAMA_MODELS=D:\AI\Ollama\models
-```
+ModelForge is a source-available, local-first cockpit for building model-ready
+artifacts from code and project folders.
 
-For local development, keep npm and temporary caches off `C:` when useful:
+- Scans a local repo or folder into a source inventory with SHA-256 hashes.
+- Drafts dataset and source summaries from the reviewed project boundary.
+- Reuses local Ollama models and exports an Ollama `Modelfile`.
+- Runs release gates for source hashes, proof freshness, receipts, license
+  review, PII filename sweeps, model profile creation, and tool availability.
+- Builds proof bundles with model cards, evidence manifests, RepoMori snapshots,
+  AgentLedger run records, and local evidence paths.
+- Exports model-building recipes for Ollama now, with LoRA/QLoRA and external
+  runner adapter plans shaped for the next stage.
+
+This alpha is intentionally focused on the forge layer: source boundary, recipe,
+evidence, local model profile, and release gates. It is not a full foundation
+model trainer yet.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%">
+      <strong>Model Lab</strong><br />
+      <img src="docs/screenshots/model-forge-model-lab.png" alt="ModelForge Model Lab showing a fresh forge recipe and runner plan" />
+    </td>
+    <td width="50%">
+      <strong>Source Browser</strong><br />
+      <img src="docs/screenshots/model-forge-sources.png" alt="ModelForge source browser showing hashed local project files" />
+    </td>
+  </tr>
+</table>
+
+## Quickstart
+
+Requirements:
+
+- Node.js and npm
+- Ollama, recommended for local model profile creation
+- Windows PowerShell users should run `npm.cmd`, because some systems block
+  `npm.ps1`
+
+Clone and run:
 
 ```powershell
-$env:npm_config_cache='D:\AI\ModelForge\.cache\npm'
-$env:TEMP='D:\AI\ModelForge\.cache\temp'
-$env:TMP='D:\AI\ModelForge\.cache\temp'
-$env:PLAYWRIGHT_BROWSERS_PATH='D:\AI\ModelForge\.cache\playwright'
-```
-
-PowerShell blocks `npm.ps1` on this machine, so use `npm.cmd`.
-
-## License
-
-ModelForge follows the same repo posture as the newer Two Hands Network tools:
-source-available for personal and non-commercial use under PolyForm
-Noncommercial 1.0.0. See `LICENSE`. Commercial use requires a separate written
-license.
-
-## Development
-
-```powershell
+git clone https://github.com/Martin123132/model-forge.git
+cd model-forge
 npm.cmd install
 npm.cmd run dev
 ```
 
-The app starts:
+The dev command starts both services:
 
 ```text
 API: http://127.0.0.1:4188
-Web: Vite prints the browser URL, usually http://127.0.0.1:5178
+Web: http://127.0.0.1:5178
 ```
 
-## Public Alpha Smoke
+The dev script defaults the data root to `.modelforge-data` inside the repo and
+keeps npm/temp/browser caches beside the workspace instead of leaning on a small
+system drive. If you want explicit D-drive paths, set them before running:
 
-With `npm.cmd run dev` already running, use the repeatable smoke check:
+```powershell
+$env:MODEL_FORGE_DATA_ROOT='D:\AI\ModelForge\.modelforge-data'
+$env:MODEL_FORGE_SOURCE_ROOT='D:\Users\ollet\Documents\ai stuff\model-forge'
+$env:OLLAMA_MODELS='D:\AI\Ollama\models'
+npm.cmd run dev
+```
+
+Use `.env.example` as a checklist for local shell values. The dev runner reads
+environment variables from the process.
+
+## Proof Posture
+
+The current public alpha smoke target is:
+
+```text
+8/8 gates passing, 0 warnings, 0 failures.
+```
+
+The gates check:
+
+- Source hashes exist for sampled files.
+- RepoMori and AgentLedger receipts are linked.
+- Proof bundles match the current source inventory.
+- License review coverage meets the release threshold.
+- Filenames pass the basic PII signal sweep.
+- An Ollama model profile exists.
+- The local Ollama create step completed.
+- Required local tools are available.
+
+Run the repeatable smoke check while `npm.cmd run dev` is active:
 
 ```powershell
 npm.cmd run qa:smoke
 ```
 
-A healthy local-alpha run should prove:
+## Project Map
 
-- the API returns the active project
-- the source inventory is non-empty
-- RepoMori, AgentLedger, and Ollama are available
-- proof and eval artifacts are linked
-- proof and eval artifacts match the current source inventory
-- no release gate is failing
+- `src/` - React cockpit UI
+- `server.mjs` - local API, source inventory, proof, eval, recipe, and export flow
+- `scripts/dev.mjs` - D-drive-friendly local dev runner
+- `scripts/qa-smoke.mjs` - public alpha smoke gate
+- `docs/screenshots/` - README screenshots
+- `.modelforge-data/` - ignored local proof bundles, evals, models, and exports
 
-Warnings are still meaningful. The current baseline uses the same PolyForm
-Noncommercial license posture as the other Two Hands Network repos and can pass
-the license gate after proof/eval are rebuilt. Treat any remaining smoke warning
-as a specific evidence/tooling caveat, not as a broad public-release clearance.
+## Roadmap
 
-## Local Tooling
+- Better project onboarding for choosing any local source folder.
+- LoRA/QLoRA runner package generation from the existing recipe export.
+- Stronger dataset review queues and license explainability.
+- Shareable release pages backed by proof-bundle artifacts.
+- CI-friendly proof checks for public repository releases.
 
-The API prefers the project venv when it exists:
+## License
 
-```text
-.\.venv\Scripts\python.exe
-```
-
-That venv should carry:
-
-- RepoMori `0.2.0`
-- AgentLedger `0.1.26a0`
-
-You can override the Python runtime with:
-
-```text
-MODEL_FORGE_PYTHON=D:\AI\ModelForge\.venv\Scripts\python.exe
-```
-
-## Production-Style Run
-
-```powershell
-npm.cmd run build
-npm.cmd run start
-```
-
-The production server serves the built app and API from:
-
-```text
-http://127.0.0.1:4178
-```
-
-## Release Posture
-
-The Release tab is the public-alpha decision surface. It separates:
-
-- gate posture: pass/warn/fail counts from the eval report
-- proof bundle: whether evidence paths are linked
-- license review: the current release review blocker or warning
-- share card: whether public summary copy exists
-
-Do not present a pack as public-release cleared until the Release tab shows no
-failures and no review warnings. A warning state is still useful: it means the
-forge has receipts, but the claim boundary must remain explicit.
-
-The License Review Queue shows the first files still waiting on a license
-decision. A clean queue means the repo has both a project `LICENSE` file and
-package license metadata, and the source inventory has been regenerated after
-that decision.
-
-## Public Alpha Export Pack
-
-The Model Lab builds a versioned Forge Recipe and an export folder under
-`.modelforge-data\exports`. The export pack is designed to be shared or copied
-without local cache noise. It includes:
-
-- project README, LICENSE, and package metadata
-- Forge Recipe JSON and Markdown
-- Ollama Modelfile, system prompt, and model profile
-- proof manifest, model card, dataset card, and source summary
-- eval report and share card
-- LoRA/QLoRA planning JSON
-- external runner adapter contract
-
-The pack is still local-first: rebuild proof/eval after any source change before
-presenting it as fresh.
-
-## Useful Environment Variables
-
-```text
-MODEL_FORGE_DATA_ROOT   Where proof bundles and run records are written.
-MODEL_FORGE_SOURCE_ROOT Source folder to scan for the current project.
-MODEL_FORGE_PORT        API/web port for server.mjs.
-MODEL_FORGE_PYTHON      Python runtime used for RepoMori and AgentLedger.
-OLLAMA_MODELS           Ollama model storage root.
-```
-
-## Current MVP Boundary
-
-Implemented now:
-
-- D-drive local data root
-- Ollama status/model detection
-- local source scan with SHA-256 hashes
-- RepoMori source-pack snapshots
-- AgentLedger summary/privacy receipt snapshots
-- Ollama Modelfile/profile export
-- gated Ollama model creation as `modelforge-local:latest`
-- local chat smoke test against the created Ollama model
-- pipeline run records
-- selectable versioned forge recipe artifacts with model target, dataset estimates, gates, evidence paths, and local export packs
-- source-available release wording and PolyForm Noncommercial license review gate
-- export packs with project license/readme, LoRA/QLoRA planning JSON, and runner adapter contract
-- proof bundle with model card, dataset card, evidence manifest, receipts, and model profile
-- in-app proof viewer, release gates, and share-card generation
-- React cockpit matching the first product concept
-
-Next intended integrations:
-
-- ManifoldGuard/Sentinel release-gate suites
-- real dataset materialization from selected source packs
-- executable LoRA/QLoRA training backends
-- external runner adapters that can launch and report receipts
+ModelForge follows the same source-available posture as the current project
+license: personal and non-commercial use under PolyForm Noncommercial 1.0.0.
+Commercial use requires a separate written license. See `LICENSE`.
