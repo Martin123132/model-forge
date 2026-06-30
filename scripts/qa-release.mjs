@@ -44,7 +44,8 @@ async function main() {
     check("README starter model card", /starter model card/i.test(readme) && /response voice/i.test(readme), "README.md"),
     check("README hardware recipe", /hardware fit recipe/i.test(readme) && /quantization/i.test(readme) && /context window/i.test(readme), "README.md"),
     check("README apply recipe", /Apply Hardware Recipe/i.test(readme) && /guided source-backed test prompt/i.test(readme), "README.md"),
-    check("README guided test receipt", /Guided Builder Test Receipt/i.test(readme) && /pass\/warn\/fail/i.test(readme), "README.md")
+    check("README guided test receipt", /Guided Builder Test Receipt/i.test(readme) && /pass\/warn\/fail/i.test(readme), "README.md"),
+    check("README create/update AI", /Create\/Update AI/i.test(readme) && /Your AIs/i.test(readme) && /Rebuild AI/i.test(readme), "README.md")
   ];
 
   const latestPath = join(releaseRoot, "latest.json");

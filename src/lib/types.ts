@@ -428,6 +428,55 @@ export type BuilderGuidedTestReceipt = {
   };
 };
 
+export type BuilderAiCreateReceipt = {
+  schema: string;
+  receiptId: string;
+  createdAt: string;
+  planId: string;
+  appliedReceiptId: string;
+  guidedTestId: string;
+  ok: boolean;
+  status: "created" | "updated" | "blocked" | "failed" | string;
+  action: "create" | "update" | string;
+  summary: string;
+  aiName: string;
+  route: string;
+  modelName: string;
+  baseModel: string;
+  hardwareRecipe: BuilderHardwareRecipe;
+  model: {
+    modelName: string;
+    baseModel: string;
+    installedBefore: boolean;
+    installedAfter: boolean;
+    profilePath: string;
+    modelfilePath: string;
+    promptPath: string;
+    createReceiptPath: string;
+    createReceiptOk: boolean;
+    createReceipt?: Receipt | null;
+  };
+  readiness: {
+    ollamaReady: boolean;
+    installed: boolean;
+    canChat: boolean;
+    label: string;
+    detail: string;
+  };
+  nextActions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    workspace: string;
+  }>;
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
+};
+
 export type BuilderPlan = {
   schema: string;
   planId: string;
@@ -1187,6 +1236,14 @@ export type ModelLibrarySource = {
   hashShort: string;
 };
 
+export type ModelLibraryAction = {
+  id: string;
+  label: string;
+  kind: "builder-create" | "builder-test" | "chat" | "recipe" | string;
+  workspace: string;
+  detail: string;
+};
+
 export type ModelLibraryItem = {
   id: string;
   name: string;
@@ -1202,6 +1259,7 @@ export type ModelLibraryItem = {
   metrics: Record<string, string | number | boolean>;
   receipts: ModelLibraryReceipt[];
   sources: ModelLibrarySource[];
+  actions?: ModelLibraryAction[];
 };
 
 export type ModelLibrary = {
@@ -1270,6 +1328,7 @@ export type ProjectPayload = {
   latestBuilderRun?: BuilderRun | null;
   latestAppliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
   latestGuidedBuilderTest?: BuilderGuidedTestReceipt | null;
+  latestBuilderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];
   sources: SourceSummary;

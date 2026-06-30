@@ -21,6 +21,9 @@ forge cockpit.
 - Added Guided Builder Test Receipts so Run Test Prompt captures the model
   answer, checks source-backed citations against the selected source scope, and
   shows pass/warn/fail in Builder.
+- Added Builder Create/Update AI receipts so the applied hardware recipe can
+  create or refresh the Ollama target, mark it installed/ready in Builder, and
+  register it in Your AIs with Rebuild AI and Retest AI actions.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,

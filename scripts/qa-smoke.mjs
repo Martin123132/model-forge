@@ -70,6 +70,7 @@ async function main() {
   const activeRegistryProject = projectRegistry?.projects?.find((item) => item.id === projectRegistry.activeProjectId) || null;
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
+  const latestBuilderAiCreateReceipt = project.latestBuilderAiCreateReceipt || null;
   const builderStages = latestBuilderRun?.stages || [];
   const planScope = project.latestBuildPlan?.request?.sourceScope || "";
   const scopePreviewOptions = project.latestBuildPlan?.sourceScopePreview?.options || [];
@@ -88,6 +89,7 @@ async function main() {
       proofSummary.totalSizeBytes === sources.totalSizeBytes
   );
   const evalFresh = Boolean(evalReport && project.latestProof?.path && evalReport.proofPath === project.latestProof.path && proofFresh);
+  const forgedLibraryItem = modelLibrary?.items?.find((item) => item.kind === "forged") || null;
 
   const checks = [
     check("Project API", project.name && project.status, `${project.name || "unknown"} / ${project.status || "unknown"}`),
@@ -222,6 +224,25 @@ async function main() {
         : "no guided Builder test receipt"
     ),
     check(
+      "Builder create/update AI receipt",
+      Boolean(
+        latestBuilderAiCreateReceipt?.schema === "modelforge.builder_create_ai_receipt.v1" &&
+          latestBuilderAiCreateReceipt.ok === true &&
+          latestBuilderAiCreateReceipt.planId === project.latestBuildPlan?.planId &&
+          latestBuilderAiCreateReceipt.appliedReceiptId === project.latestAppliedHardwareRecipe?.receiptId &&
+          latestBuilderAiCreateReceipt.model?.installedAfter === true &&
+          latestBuilderAiCreateReceipt.model?.profilePath &&
+          existsSync(latestBuilderAiCreateReceipt.model.profilePath) &&
+          latestBuilderAiCreateReceipt.model?.modelfilePath &&
+          existsSync(latestBuilderAiCreateReceipt.model.modelfilePath) &&
+          latestBuilderAiCreateReceipt.files?.latestJson &&
+          existsSync(latestBuilderAiCreateReceipt.files.latestJson)
+      ),
+      latestBuilderAiCreateReceipt
+        ? `${latestBuilderAiCreateReceipt.status}: ${latestBuilderAiCreateReceipt.modelName}; installed=${latestBuilderAiCreateReceipt.model?.installedAfter ? "yes" : "no"}`
+        : "no Builder create/update receipt"
+    ),
+    check(
       "Builder blueprint",
       Boolean(project.latestBuildPlan?.blueprint?.summary && project.latestBuildPlan?.request?.aiType),
       project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"
@@ -280,6 +301,17 @@ async function main() {
       "Model receipts",
       Boolean(modelLibrary?.receipts?.length && modelLibrary.items?.some((item) => item.kind === "forged" && item.receipts?.length)),
       modelLibrary ? `${modelLibrary.receipts?.length || 0} shared receipts, forged=${modelLibrary.items?.find((item) => item.kind === "forged")?.receipts?.length || 0}` : "no receipts"
+    ),
+    check(
+      "Your AIs Builder actions",
+      Boolean(
+        forgedLibraryItem?.actions?.some((action) => action.id === "builder-rebuild-ai" && action.kind === "builder-create") &&
+          forgedLibraryItem.actions.some((action) => action.id === "builder-retest-ai" && action.kind === "builder-test") &&
+          forgedLibraryItem.receipts?.some((receipt) => receipt.label === "Builder create receipt" && receipt.exists)
+      ),
+      forgedLibraryItem
+        ? `${forgedLibraryItem.name}: ${(forgedLibraryItem.actions || []).map((action) => action.id).join(", ") || "no actions"}`
+        : "no forged library item"
     ),
     check(
       "Compare playground contract",

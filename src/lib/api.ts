@@ -1,4 +1,5 @@
 import type {
+  BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
   BuilderPlan,
@@ -113,6 +114,22 @@ export function runBuilderGuidedTest(planId?: string, prompt?: string, modelName
   }>("/api/builder/guided-test/run", {
     method: "POST",
     body: JSON.stringify({ planId, prompt, modelName })
+  });
+}
+
+export function createOrUpdateBuilderAi(planId?: string, modelName?: string) {
+  return requestJson<{
+    ok: boolean;
+    receipt: BuilderAiCreateReceipt;
+    applied: BuilderAppliedHardwareRecipe;
+    guidedTest: BuilderGuidedTestReceipt | null;
+    plan: BuilderPlan;
+    modelExport: ModelExport | null;
+    project: ProjectPayload;
+    ollama: OllamaStatus;
+  }>("/api/builder/ai/create-update", {
+    method: "POST",
+    body: JSON.stringify({ planId, modelName })
   });
 }
 

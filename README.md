@@ -59,6 +59,10 @@ artifacts from code and project folders.
 - Writes a **Guided Builder Test Receipt** when that prompt runs: captures the
   model answer, checks cited paths and retrieval sources against the expected
   source scope, and shows a pass/warn/fail result back in Builder.
+- Provides **Create/Update AI** in Builder: creates or updates the Ollama target
+  from the applied hardware recipe, writes a create/update receipt, marks the AI
+  installed/ready, and registers it in **Your AIs** with Rebuild AI and Retest AI
+  actions.
 - Shows an **AI build contract** before the user starts: what AI is being made,
   what it is allowed to know, how ModelForge will build it, what artifacts will
   be produced, and what counts as done.
@@ -163,6 +167,9 @@ The plan records:
 - A **Guided Builder Test Receipt** after Run Test Prompt captures the answer,
   verifies cited source paths and retrieved evidence against the expected
   source scope, and stores the pass/warn/fail result beside the applied recipe.
+- A **Create/Update AI** receipt after Builder installs or refreshes the Ollama
+  target from that applied recipe, including the target model, Modelfile, create
+  receipt, ready status, and next actions.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
   prep when the hardware makes that realistic.
 - Ordered next steps mapped back to the app: Setup, Sources, Dataset Forge,
@@ -207,8 +214,12 @@ The library shows:
 - Dataset rows, token estimates, source-file counts, proof freshness, and eval
   freshness.
 - Receipts behind the build, including Modelfiles, model profiles, Dataset
-  Forge artifacts, export manifests, proof bundles, and Ollama create receipts.
+  Forge artifacts, export manifests, proof bundles, Builder create/update
+  receipts, and Ollama create receipts.
 - Source evidence previews with local paths and hashes.
+- Rebuild AI and Retest AI actions on the forged target, so the library can
+  create/update the local Ollama target from the applied Builder recipe and rerun
+  the guided source-backed test.
 
 The same workspace includes a **Test side by side** playground. It sends one
 prompt to the base model and the forged target, then shows both answers plus any
@@ -323,12 +334,14 @@ After setup, or after a successful **Build From Plan** run:
 1. Open **Model Lab**.
 2. Review **Your AIs** to see created targets, recipes, receipts, and source
    evidence.
-3. Use **Test side by side** to compare the base model against the forged target.
-4. Use **Dataset Forge** to rebuild or download `dataset.jsonl`; the same build
+3. Use **Rebuild AI** or **Retest AI** on the forged target when you want Builder
+   to refresh the Ollama target or rerun the guided receipt-backed test.
+4. Use **Test side by side** to compare the base model against the forged target.
+5. Use **Dataset Forge** to rebuild or download `dataset.jsonl`; the same build
    refreshes the local knowledge pack used by chat.
-5. Build a **Forge Recipe** to package the dataset, knowledge pack, proof, eval
+6. Build a **Forge Recipe** to package the dataset, knowledge pack, proof, eval
    report, Ollama profile, LoRA/QLoRA plan, and runner contract.
-6. Enable **Allow Ollama create**, then run the export pack to produce a receipt
+7. Enable **Allow Ollama create**, then run the export pack to produce a receipt
    proving the exported folder can recreate the local model target.
 
 The dev script defaults the data root to `.modelforge-data` inside the repo and

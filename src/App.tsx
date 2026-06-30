@@ -11,6 +11,7 @@ import {
   cancelBuilderRun,
   cancelRecipePackRun,
   compareModels,
+  createOrUpdateBuilderAi,
   createProject,
   createOllamaModel,
   deleteProject,
@@ -1035,6 +1036,41 @@ function App() {
     }
   }, [buildPlan, refreshModelLibrary]);
 
+  const handleCreateOrUpdateBuilderAi = useCallback(async () => {
+    if (!buildPlan) return;
+    setCreateBusy(true);
+    setError("");
+    try {
+      const result = await createOrUpdateBuilderAi(buildPlan.planId);
+      setBuildPlan(result.plan);
+      setAppliedHardwareRecipe(result.applied);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || result.guidedTest || null);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setOllama(result.ollama);
+      setModelExport(result.modelExport || result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
+      setActiveWorkspace("builder");
+      await refreshModelLibrary();
+      if (!result.ok) {
+        setError(result.receipt.summary || "Builder could not create or update the AI target.");
+      }
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setCreateBusy(false);
+    }
+  }, [buildPlan, refreshModelLibrary]);
+
   const handleCancelBuilderRun = useCallback(async (runId: string) => {
     if (!runId) return;
     try {
@@ -1109,6 +1145,16 @@ function App() {
       setBuilderTestBusy(false);
     }
   }, [buildPlan, refreshModelLibrary]);
+
+  const handleRetestBuilderAi = useCallback(async () => {
+    const guidedPrompt = appliedHardwareRecipe?.testPrompt;
+    setActiveWorkspace("builder");
+    if (!guidedPrompt?.unlocked || !guidedPrompt.prompt || !guidedPrompt.modelName) {
+      setError("Apply the Builder hardware recipe before retesting the AI target.");
+      return;
+    }
+    await handleRunGuidedBuilderTest(guidedPrompt.prompt, guidedPrompt.modelName);
+  }, [appliedHardwareRecipe?.testPrompt, handleRunGuidedBuilderTest]);
 
   const handleCompareModels = useCallback(async (prompt: string, baseModel?: string, forgedModel?: string) => {
     setCompareBusy(true);
@@ -1444,17 +1490,20 @@ function App() {
                     recipe={forgeRecipe}
                     appliedHardwareRecipe={appliedHardwareRecipe}
                     guidedBuilderTest={guidedBuilderTest}
+                    builderAiCreateReceipt={project?.latestBuilderAiCreateReceipt || null}
                     builderRun={builderRun}
                     builderRunHistory={builderRunHistory}
                     busy={builderBusy}
                     builderRunBusy={builderRunBusy || builderRun?.status === "running"}
                     applyRecipeBusy={applyRecipeBusy}
+                    createAiBusy={createBusy}
                     chatBusy={chatBusy || builderTestBusy}
                     hardwareBusy={hardwareBusy}
                     datasetBusy={datasetBusy}
                     recipeBusy={recipeBusy}
                     onBuildPlan={handleBuildPlan}
                     onApplyHardwareRecipe={handleApplyHardwareRecipe}
+                    onCreateOrUpdateAi={handleCreateOrUpdateBuilderAi}
                     onRunGuidedTest={handleRunGuidedBuilderTest}
                     onStartBuild={handleStartBuilderRun}
                     onCancelBuild={handleCancelBuilderRun}
@@ -1528,6 +1577,8 @@ function App() {
                     onRunPack={handleRunRecipePack}
                     onCancelPack={handleCancelRecipePack}
                     onCreate={handleCreateModel}
+                    onRebuildBuilderAi={handleCreateOrUpdateBuilderAi}
+                    onRetestBuilderAi={handleRetestBuilderAi}
                     onSend={handleSendChat}
                     onCompare={handleCompareModels}
                   />

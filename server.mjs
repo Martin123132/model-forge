@@ -3173,12 +3173,20 @@ async function getLatestGuidedBuilderTestReceipt() {
   return readJsonIfExists(join(dataRoot, "builder", "latest", "guided-test-receipt.json"));
 }
 
+async function getLatestBuilderAiCreateReceipt() {
+  return readJsonIfExists(join(dataRoot, "builder", "latest", "created-ai-receipt.json"));
+}
+
 function appliedHardwareRecipeId() {
   return `applied-recipe-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
 }
 
 function guidedBuilderTestId() {
   return `guided-test-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function builderAiCreateId() {
+  return `created-ai-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
 }
 
 function resolveRecommendedBaseModel(value = "", ollama = null) {
@@ -3612,6 +3620,181 @@ async function runBuilderGuidedTest(body = {}) {
     applied,
     plan,
     project: await getProjectPayload()
+  };
+}
+
+function builderAiCreateMarkdown(receipt) {
+  const lines = [
+    `# ${receipt.aiName} Create/Update AI`,
+    "",
+    `Receipt: ${receipt.receiptId}`,
+    `Created: ${receipt.createdAt}`,
+    `Plan: ${receipt.planId}`,
+    `Applied recipe: ${receipt.appliedReceiptId}`,
+    ...(receipt.guidedTestId ? [`Guided test: ${receipt.guidedTestId}`] : []),
+    `Status: ${receipt.status}`,
+    `Action: ${receipt.action}`,
+    `Model: ${receipt.modelName}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary,
+    "",
+    "## Ollama Target",
+    "",
+    `Base model: ${receipt.baseModel}`,
+    `Installed before: ${receipt.model.installedBefore}`,
+    `Installed after: ${receipt.model.installedAfter}`,
+    `Profile: ${receipt.model.profilePath}`,
+    `Modelfile: ${receipt.model.modelfilePath}`,
+    `System prompt: ${receipt.model.promptPath}`,
+    `Ollama create receipt: ${receipt.model.createReceiptPath || "Not written"}`,
+    "",
+    "## Applied Settings",
+    "",
+    `Model class: ${receipt.hardwareRecipe.recommended.modelClass}`,
+    `Quantization: ${receipt.hardwareRecipe.recommended.quantization}`,
+    `Context window: ${receipt.hardwareRecipe.recommended.contextWindowTokens.toLocaleString()} tokens`,
+    `GPU layers: ${receipt.hardwareRecipe.recommended.gpuLayers}`,
+    `CPU threads: ${receipt.hardwareRecipe.recommended.cpuThreads}`,
+    `Batch size: ${receipt.hardwareRecipe.recommended.batchSize}`,
+    "",
+    "## Next Actions",
+    "",
+    ...receipt.nextActions.map((action) => `- ${action.label}: ${action.detail}`),
+    ""
+  ];
+  return lines.join("\n");
+}
+
+async function createOrUpdateBuilderAi(body = {}) {
+  await ensureDataRoot();
+  const applied = await getLatestAppliedHardwareRecipe();
+  if (!applied?.ok || !applied.modelProfile?.modelfilePath) {
+    throw new Error("Apply the Builder hardware recipe before creating the AI target.");
+  }
+  const plan = await getBuilderPlanById(body.planId || applied.planId || "");
+  if (!plan?.planId || plan.planId !== applied.planId) {
+    throw new Error("The latest applied hardware recipe does not match the requested Builder plan.");
+  }
+
+  const createdAt = new Date().toISOString();
+  const receiptId = builderAiCreateId();
+  const latestDir = join(dataRoot, "builder", "latest");
+  const historyDir = join(dataRoot, "builder", "history", plan.planId, "created-ai");
+  const files = {
+    latestJson: join(latestDir, "created-ai-receipt.json"),
+    latestMarkdown: join(latestDir, "created-ai-receipt.md"),
+    historyJson: join(historyDir, `${receiptId}.json`),
+    historyMarkdown: join(historyDir, `${receiptId}.md`)
+  };
+  await mkdir(latestDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+
+  const targetModel = safeModelName(body.modelName) || safeModelName(applied.modelProfile.modelName) || defaultTargetModelName();
+  const baseModel = safeModelName(body.baseModel) || safeModelName(applied.modelProfile.baseModel) || safeModelName(applied.baseModel?.resolved) || defaultStarterModelName();
+  const before = await getOllamaStatus({ force: true });
+  const installedBefore = before.models.some((model) => model.name === targetModel);
+  const guidedTest = await getLatestGuidedBuilderTestReceipt();
+  const guidedTestMatches = Boolean(guidedTest?.planId === plan.planId && guidedTest.appliedReceiptId === applied.receiptId);
+  let modelExport = null;
+  let createError = "";
+
+  if (!before.ok) {
+    createError = before.error || "Ollama is not ready, so ModelForge could not create or update the target.";
+  } else {
+    try {
+      modelExport = await exportOllamaProfile(join(dataRoot, "models", "latest"), {
+        baseModel,
+        modelName: targetModel,
+        create: true,
+        hardwareRecipe: applied.hardwareRecipe,
+        appliedHardwareRecipePath: applied.files?.latestJson || applied.files?.historyJson || ""
+      });
+    } catch (error) {
+      createError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const after = await getOllamaStatus({ force: true });
+  const installedAfter = after.models.some((model) => model.name === targetModel);
+  const createReceiptPath = modelExport?.path ? join(modelExport.path, "ollama-create-receipt.json") : "";
+  const ok = Boolean(modelExport?.createReceipt?.ok && installedAfter);
+  const action = installedBefore ? "update" : "create";
+  if (ok) {
+    await saveSetupConfig({ ...currentSetupConfig(), baseModel, targetModel });
+  }
+  const status = ok ? (installedBefore ? "updated" : "created") : before.ok ? "failed" : "blocked";
+  const summary = ok
+    ? `${installedBefore ? "Updated" : "Created"} ${targetModel} from the applied ${applied.hardwareRecipe.recommended.modelClass} recipe.`
+    : `Could not ${action} ${targetModel}: ${createError || modelExport?.createReceipt?.error || "Ollama create did not produce an installed model."}`;
+
+  const receipt = {
+    schema: "modelforge.builder_create_ai_receipt.v1",
+    receiptId,
+    createdAt,
+    planId: plan.planId,
+    appliedReceiptId: applied.receiptId,
+    guidedTestId: guidedTestMatches ? guidedTest.testId : "",
+    ok,
+    status,
+    action,
+    summary,
+    aiName: applied.aiName || plan.aiProfile?.name || "Local AI",
+    route: applied.route || plan.routeLabel || "Builder",
+    modelName: targetModel,
+    baseModel,
+    hardwareRecipe: applied.hardwareRecipe,
+    model: {
+      modelName: targetModel,
+      baseModel,
+      installedBefore,
+      installedAfter,
+      profilePath: modelExport?.profilePath || applied.modelProfile.profilePath || "",
+      modelfilePath: modelExport?.modelfilePath || applied.modelProfile.modelfilePath || "",
+      promptPath: modelExport?.promptPath || applied.modelProfile.promptPath || "",
+      createReceiptPath,
+      createReceiptOk: Boolean(modelExport?.createReceipt?.ok),
+      createReceipt: modelExport?.createReceipt || null
+    },
+    readiness: {
+      ollamaReady: Boolean(after.ok),
+      installed: installedAfter,
+      canChat: Boolean(after.ok && installedAfter),
+      label: ok ? "Ready" : before.ok ? "Review" : "Blocked",
+      detail: ok ? `${targetModel} is installed and ready for local tests.` : createError || after.error || "The target could not be verified."
+    },
+    nextActions: [
+      {
+        id: "builder-rebuild-ai",
+        label: installedBefore ? "Rebuild AI" : "Build AI again",
+        detail: "Create/update the Ollama target again from the latest applied hardware recipe.",
+        workspace: "builder"
+      },
+      {
+        id: "builder-retest-ai",
+        label: "Retest AI",
+        detail: "Run the guided source-backed Builder test against this installed target.",
+        workspace: "builder"
+      }
+    ],
+    files
+  };
+
+  await writeJson(files.latestJson, receipt);
+  await writeFile(files.latestMarkdown, builderAiCreateMarkdown(receipt), "utf-8");
+  await writeJson(files.historyJson, receipt);
+  await writeFile(files.historyMarkdown, builderAiCreateMarkdown(receipt), "utf-8");
+
+  return {
+    ok,
+    receipt,
+    applied,
+    guidedTest: guidedTestMatches ? guidedTest : null,
+    plan,
+    modelExport,
+    project: await getProjectPayload(),
+    ollama: after
   };
 }
 
@@ -6733,6 +6916,7 @@ async function buildModelLibrary() {
     latestEval,
     latestExportPack,
     latestRecipeRun,
+    latestBuilderAiCreateReceipt,
     recipeRunHistory,
     recipeHistory
   ] = await Promise.all([
@@ -6746,6 +6930,7 @@ async function buildModelLibrary() {
     getLatestEvalReport(),
     getLatestExportPack(),
     getLatestRecipeRun(),
+    getLatestBuilderAiCreateReceipt(),
     getRecipeRunHistory(),
     getForgeRecipeHistory()
   ]);
@@ -6753,6 +6938,9 @@ async function buildModelLibrary() {
   const baseModel = latestModelExport?.baseModel || latestRecipe?.baseModel || ollama.selectedModel || "";
   const forgedModel = latestModelExport?.modelName || latestRecipe?.targetModel || defaultTargetModelName();
   const forgedInstalled = Boolean(forgedModel && installedNames.has(forgedModel));
+  const builderCreatedModel = latestBuilderAiCreateReceipt?.model?.modelName || latestBuilderAiCreateReceipt?.modelName || "";
+  const builderCreateMatchesForged = Boolean(latestBuilderAiCreateReceipt?.ok && builderCreatedModel && builderCreatedModel === forgedModel);
+  const builderCreateReady = Boolean(builderCreateMatchesForged && latestBuilderAiCreateReceipt?.model?.installedAfter);
   const proofSourceSummary = latestProof?.manifest?.sourceSummary || null;
   const proofFresh = Boolean(
     proofSourceSummary &&
@@ -6763,6 +6951,8 @@ async function buildModelLibrary() {
   const evalFresh = Boolean(latestEval && latestProof?.path && latestEval.proofPath === latestProof.path && proofFresh);
   const sourceEvidence = (sources.rows || []).slice(0, 6).map(compactSourceEvidence);
   const globalReceipts = [
+    libraryReceipt("Builder create receipt", latestBuilderAiCreateReceipt?.files?.latestJson, "receipt"),
+    libraryReceipt("Builder create notes", latestBuilderAiCreateReceipt?.files?.latestMarkdown, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
     libraryReceipt("Modelfile", latestModelExport?.modelfilePath || latestRecipe?.evidence?.modelfilePath, "model"),
     libraryReceipt("System prompt", latestModelExport?.promptPath, "model"),
@@ -6780,23 +6970,31 @@ async function buildModelLibrary() {
   const items = [];
 
   if (forgedModel || latestRecipe || latestModelExport) {
-    const created = Boolean(latestModelExport?.created || forgedInstalled || latestRecipeRun?.status === "pass");
+    const created = Boolean(builderCreateReady || latestModelExport?.created || forgedInstalled || latestRecipeRun?.status === "pass");
     items.push({
       id: "forged-current",
       name: forgedModel || "modelforge-local:latest",
       kind: "forged",
       status: created ? "created" : latestModelExport ? "profile" : latestRecipe ? "recipe" : "missing",
-      statusLabel: created ? "Runnable" : latestModelExport ? "Profile ready" : latestRecipe ? "Recipe ready" : "Needs build",
+      statusLabel: builderCreateReady ? "Builder ready" : created ? "Runnable" : latestModelExport ? "Profile ready" : latestRecipe ? "Recipe ready" : "Needs build",
       modelName: forgedModel || "",
       baseModel,
-      description: created
-        ? "Your current local AI target is available for chat tests."
+      description: builderCreateReady
+        ? "Created from the applied Builder hardware recipe and ready for guided tests."
+        : created
+          ? "Your current local AI target is available for chat tests."
         : latestModelExport
           ? "Profile is ready; enable Ollama create when you want the local target built."
           : "Build from plan to create the local AI target.",
       canChat: Boolean(ollama.ok && (created || forgedInstalled) && forgedModel),
       canRunPack: Boolean(latestRecipe?.recipeId),
-      createdAt: latestModelExport?.createReceipt?.endedAt || latestRecipeRun?.endedAt || latestModelExport?.createReceipt?.startedAt || latestRecipe?.createdAt || "",
+      createdAt:
+        latestBuilderAiCreateReceipt?.createdAt ||
+        latestModelExport?.createReceipt?.endedAt ||
+        latestRecipeRun?.endedAt ||
+        latestModelExport?.createReceipt?.startedAt ||
+        latestRecipe?.createdAt ||
+        "",
       metrics: {
         examples: latestDataset?.summary?.totalExamples || latestRecipe?.dataset?.rows || 0,
         tokens: latestDataset?.summary?.estimatedTokens || latestRecipe?.dataset?.tokens || 0,
@@ -6804,10 +7002,27 @@ async function buildModelLibrary() {
         sourceFiles: sources.totalFiles,
         proofFresh,
         evalFresh,
-        evalSummary: latestEval?.summary || "No eval report yet."
+        evalSummary: latestEval?.summary || "No eval report yet.",
+        builderReady: builderCreateReady
       },
       receipts: globalReceipts,
-      sources: sourceEvidence
+      sources: sourceEvidence,
+      actions: [
+        {
+          id: "builder-rebuild-ai",
+          label: builderCreateReady ? "Rebuild AI" : "Create AI",
+          kind: "builder-create",
+          workspace: "builder",
+          detail: "Create/update this Ollama target from the applied hardware recipe."
+        },
+        {
+          id: "builder-retest-ai",
+          label: "Retest AI",
+          kind: "builder-test",
+          workspace: "builder",
+          detail: "Run the guided source-backed Builder test for this target."
+        }
+      ]
     });
   }
 
@@ -7229,7 +7444,25 @@ async function getOllamaStatus({ force = false } = {}) {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestKnowledgePack, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, latestAppliedHardwareRecipe, latestGuidedBuilderTest, builderRunHistory] = await Promise.all([
+  const [
+    toolStatus,
+    latestModelExport,
+    latestProof,
+    latestEval,
+    latestShare,
+    latestDataset,
+    latestKnowledgePack,
+    latestRecipe,
+    latestRecipeRun,
+    recipeRunHistory,
+    recipeHistory,
+    latestBuildPlan,
+    latestBuilderRun,
+    latestAppliedHardwareRecipe,
+    latestGuidedBuilderTest,
+    latestBuilderAiCreateReceipt,
+    builderRunHistory
+  ] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
@@ -7245,6 +7478,7 @@ async function getProjectPayload() {
     getLatestBuilderRun(),
     getLatestAppliedHardwareRecipe(),
     getLatestGuidedBuilderTestReceipt(),
+    getLatestBuilderAiCreateReceipt(),
     getBuilderRunHistory()
   ]);
   const dataset = estimateDatasetMetrics(sources);
@@ -7281,6 +7515,7 @@ async function getProjectPayload() {
     latestBuilderRun,
     latestAppliedHardwareRecipe,
     latestGuidedBuilderTest,
+    latestBuilderAiCreateReceipt,
     builderRunHistory,
     pipeline: [
       {
@@ -7636,6 +7871,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/builder/guided-test/run") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await runBuilderGuidedTest(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/ai/create-update") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await createOrUpdateBuilderAi(body));
       return;
     }
 

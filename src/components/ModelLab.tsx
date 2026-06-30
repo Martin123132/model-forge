@@ -1,4 +1,4 @@
-import { Bot, Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, Send, ShieldCheck, XCircle } from "lucide-react";
+import { Bot, Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, RefreshCw, Send, ShieldCheck, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { datasetForgeDownloadUrl } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
@@ -29,6 +29,8 @@ type ModelLabProps = {
   onRunPack: (recipeId: string, modelName?: string) => void;
   onCancelPack: (runId: string) => void;
   onCreate: (modelName: string) => void;
+  onRebuildBuilderAi: () => void;
+  onRetestBuilderAi: () => void;
   onSend: (prompt: string, modelName: string) => void;
   onCompare: (prompt: string, baseModel?: string, forgedModel?: string) => void;
 };
@@ -159,6 +161,8 @@ export function ModelLab({
   onRunPack,
   onCancelPack,
   onCreate,
+  onRebuildBuilderAi,
+  onRetestBuilderAi,
   onSend,
   onCompare
 }: ModelLabProps) {
@@ -352,6 +356,28 @@ export function ModelLab({
                         <strong>{receipt.label}</strong>
                       </span>
                     ))}
+                  </div>
+                ) : null}
+                {item.actions?.length ? (
+                  <div className="model-library-actions">
+                    {item.actions.slice(0, 2).map((action) => {
+                      const isRebuild = action.id === "builder-rebuild-ai";
+                      const disabled = isRebuild ? createBusy : action.id === "builder-retest-ai" ? chatBusy : false;
+                      const Icon = isRebuild ? RefreshCw : MessageSquare;
+                      return (
+                        <button
+                          className={isRebuild ? "primary-action compact" : "plain-button small"}
+                          disabled={disabled}
+                          key={`${item.id}-${action.id}`}
+                          onClick={isRebuild ? onRebuildBuilderAi : onRetestBuilderAi}
+                          title={action.detail}
+                          type="button"
+                        >
+                          <Icon className={disabled ? "spin-icon" : ""} size={14} />
+                          <span>{disabled ? (isRebuild ? "Rebuilding" : "Testing") : action.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : null}
                 {item.sources.length ? (

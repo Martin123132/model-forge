@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
+  BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
   BuilderAiProfile,
@@ -50,17 +51,20 @@ type BuilderWizardProps = {
   recipe?: ForgeRecipe | null;
   appliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
   guidedBuilderTest?: BuilderGuidedTestReceipt | null;
+  builderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   builderRun?: BuilderRun | null;
   builderRunHistory?: BuilderRun[];
   busy: boolean;
   builderRunBusy: boolean;
   applyRecipeBusy: boolean;
+  createAiBusy: boolean;
   chatBusy: boolean;
   hardwareBusy: boolean;
   datasetBusy: boolean;
   recipeBusy: boolean;
   onBuildPlan: (request: BuilderPlanRequest) => void;
   onApplyHardwareRecipe: () => void;
+  onCreateOrUpdateAi: () => void;
   onRunGuidedTest: (prompt: string, modelName: string) => void;
   onStartBuild: () => void;
   onCancelBuild: (runId: string) => void;
@@ -458,6 +462,13 @@ function fitTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
 
 function receiptTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
   if (status === "pass" || status === "warn" || status === "fail") return status;
+  return "neutral";
+}
+
+function createReceiptTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "created" || status === "updated" || status === "ready") return "pass";
+  if (status === "blocked" || status === "failed") return "fail";
+  if (status === "review") return "warn";
   return "neutral";
 }
 
@@ -903,17 +914,20 @@ export function BuilderWizard({
   recipe,
   appliedHardwareRecipe,
   guidedBuilderTest,
+  builderAiCreateReceipt,
   builderRun,
   builderRunHistory = [],
   busy,
   builderRunBusy,
   applyRecipeBusy,
+  createAiBusy,
   chatBusy,
   hardwareBusy,
   datasetBusy,
   recipeBusy,
   onBuildPlan,
   onApplyHardwareRecipe,
+  onCreateOrUpdateAi,
   onRunGuidedTest,
   onStartBuild,
   onCancelBuild,
@@ -1042,6 +1056,16 @@ export function BuilderWizard({
   const guidedReceiptTone =
     guidedReceipt?.status === "pass" ? "pass" : guidedReceipt?.status === "warn" ? "warn" : guidedReceipt?.status === "fail" ? "fail" : "neutral";
   const guidedReceiptPath = guidedReceipt?.files.latestJson || guidedReceipt?.files.historyJson || "";
+  const createReceiptMatchesPlan = Boolean(
+    appliedRecipeMatchesPlan &&
+      builderAiCreateReceipt?.planId === plan?.planId &&
+      builderAiCreateReceipt?.appliedReceiptId === appliedHardwareRecipe?.receiptId
+  );
+  const createReceipt = createReceiptMatchesPlan ? builderAiCreateReceipt : null;
+  const createReceiptPath = createReceipt?.files.latestJson || createReceipt?.files.historyJson || "";
+  const createReceiptStatus = createReceipt?.ok && createReceipt.readiness?.installed ? "Ready" : createReceipt ? createReceipt.readiness?.label || createReceipt.status : "Not installed";
+  const createReceiptSummary = createReceipt?.summary || "Create the Ollama target from the applied hardware recipe.";
+  const createActionLabel = createAiBusy ? "Creating" : createReceipt?.ok ? "Update AI" : "Create AI";
   const aiProfile = useMemo(
     () =>
       (planMatchesForm && plan?.aiProfile) ||
@@ -1647,12 +1671,20 @@ export function BuilderWizard({
                     <strong>Receipt</strong>
                     <em title={appliedReceiptPath}>{compactPath(appliedReceiptPath)}</em>
                   </span>
+                  <span>
+                    <strong>AI target</strong>
+                    <em>{createReceipt?.modelName || appliedHardwareRecipe?.modelProfile.modelName}</em>
+                  </span>
                 </div>
               ) : null}
               <div className="hardware-apply-actions">
                 <button className="primary-action compact" type="button" onClick={onApplyHardwareRecipe} disabled={!planMatchesForm || !plan || applyRecipeBusy}>
                   {applyRecipeBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Hammer size={15} />}
                   <span>{applyRecipeBusy ? "Applying" : appliedRecipeMatchesPlan ? "Reapply Recipe" : "Apply Recipe"}</span>
+                </button>
+                <button className="primary-action compact" type="button" onClick={onCreateOrUpdateAi} disabled={!appliedRecipeMatchesPlan || createAiBusy}>
+                  {createAiBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Rocket size={15} />}
+                  <span>{createActionLabel}</span>
                 </button>
                 {guidedTest?.unlocked ? (
                   <button className="plain-button small" type="button" onClick={() => onRunGuidedTest(guidedTest.prompt, guidedTest.modelName)} disabled={chatBusy}>
@@ -1661,6 +1693,29 @@ export function BuilderWizard({
                   </button>
                 ) : null}
               </div>
+              {appliedRecipeMatchesPlan ? (
+                <div className={`hardware-create-result ${createReceipt?.status || "pending"}`}>
+                  <div>
+                    <strong>{createReceipt?.ok ? "AI installed" : "Ollama target"}</strong>
+                    <StatusPill status={createReceipt ? createReceiptTone(createReceipt.status) : "neutral"} label={createReceiptStatus} />
+                  </div>
+                  <p>{createReceiptSummary}</p>
+                  <div className="hardware-test-facts">
+                    <span>
+                      <strong>Action</strong>
+                      <em>{createReceipt?.action || "create"}</em>
+                    </span>
+                    <span>
+                      <strong>Installed</strong>
+                      <em>{createReceipt?.model.installedAfter ? "Yes" : "No"}</em>
+                    </span>
+                    <span>
+                      <strong>Receipt</strong>
+                      <em title={createReceiptPath}>{compactPath(createReceiptPath)}</em>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
               {guidedTest?.unlocked ? (
                 <div className="hardware-test-prompt">
                   <strong>Guided source-backed test</strong>
