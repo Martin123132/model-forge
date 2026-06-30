@@ -15,6 +15,10 @@ model trainer.
   runner scripts, checkpoint folders, manifests, and receipts. It dry-runs by
   default unless hardware, Python ML dependencies, explicit long-run approval,
   and a compatible Transformers/Hugging Face or local base model id are present.
+- Adapter Training Readiness can check Python, CUDA, packages, D-drive cache
+  paths, dataset examples, and a recommended Transformers base model. The
+  dependency installer uses pip and can still fail because of platform wheels,
+  driver/CUDA mismatches, network outages, or package resolver changes.
 - Dry-run adapter receipts prove the dataset/config/runner path executed, but
   they do not claim trained weights. Promotion into an Ollama target is blocked
   until real adapter weight and config files are detected.

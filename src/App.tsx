@@ -8,11 +8,13 @@ import {
   buildProofBundle,
   buildShareCard,
   applyBuilderHardwareRecipe,
+  applyRecommendedAdapterBaseModel,
   archiveProject,
   cancelAdapterTrainingRun,
   cancelBuilderRun,
   cancelRecipePackRun,
   compareModels,
+  checkAdapterTrainingReadiness,
   createOrUpdateBuilderAi,
   createProject,
   createOllamaModel,
@@ -29,6 +31,7 @@ import {
   getProjectRegistry,
   getSetupState,
   getSources,
+  installAdapterTrainingDependencies,
   runFirstSetup,
   runSetupDoctorAction,
   runBuilderGuidedTest,
@@ -47,6 +50,7 @@ import {
 import type {
   AdapterBuilderReceipt,
   AdapterPromotionReceipt,
+  AdapterTrainingReadiness,
   AdapterTrainingRun,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
@@ -199,6 +203,7 @@ function App() {
   const [guidedBuilderTest, setGuidedBuilderTest] = useState<BuilderGuidedTestReceipt | null>(null);
   const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
   const [adapterBuild, setAdapterBuild] = useState<AdapterBuilderReceipt | null>(null);
+  const [adapterReadiness, setAdapterReadiness] = useState<AdapterTrainingReadiness | null>(null);
   const [adapterTrainingRun, setAdapterTrainingRun] = useState<AdapterTrainingRun | null>(null);
   const [adapterPromotion, setAdapterPromotion] = useState<AdapterPromotionReceipt | null>(null);
   const [adapterTrainingRunHistory, setAdapterTrainingRunHistory] = useState<AdapterTrainingRun[]>([]);
@@ -242,6 +247,9 @@ function App() {
   const [applyRecipeBusy, setApplyRecipeBusy] = useState(false);
   const [builderTestBusy, setBuilderTestBusy] = useState(false);
   const [adapterBusy, setAdapterBusy] = useState(false);
+  const [adapterReadinessBusy, setAdapterReadinessBusy] = useState(false);
+  const [adapterDepsBusy, setAdapterDepsBusy] = useState(false);
+  const [adapterBaseModelBusy, setAdapterBaseModelBusy] = useState(false);
   const [adapterTrainingBusy, setAdapterTrainingBusy] = useState(false);
   const [adapterPromoteBusy, setAdapterPromoteBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
@@ -281,6 +289,7 @@ function App() {
       setBuilderRun(projectPayload.latestBuilderRun || null);
       setBuilderRunHistory(projectPayload.builderRunHistory || []);
       setAdapterBuild(projectPayload.latestAdapterBuild || null);
+      setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
       setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || null);
       setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -327,6 +336,7 @@ function App() {
     setBuilderRun(result.project.latestBuilderRun || null);
     setBuilderRunHistory(result.project.builderRunHistory || []);
     setAdapterBuild(result.project.latestAdapterBuild || null);
+    setAdapterReadiness(result.project.latestAdapterReadiness || null);
     setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
     setAdapterPromotion(result.project.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -813,6 +823,7 @@ function App() {
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
+      setAdapterReadiness(result.project.latestAdapterReadiness || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -824,6 +835,79 @@ function App() {
       setAdapterBusy(false);
     }
   }, [buildPlan, refreshModelLibrary]);
+
+  const handleCheckAdapterReadiness = useCallback(async () => {
+    const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    setAdapterReadinessBusy(true);
+    setError("");
+    try {
+      const result = await checkAdapterTrainingReadiness(adapterBuildId);
+      setAdapterReadiness(result.readiness);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setBuildPlan(result.project.latestBuildPlan || null);
+      setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      await refreshModelLibrary();
+    } catch (readinessError) {
+      setError(readinessError instanceof Error ? readinessError.message : String(readinessError));
+    } finally {
+      setAdapterReadinessBusy(false);
+    }
+  }, [adapterBuild, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
+
+  const handleInstallAdapterDeps = useCallback(async () => {
+    const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    setAdapterDepsBusy(true);
+    setError("");
+    try {
+      const result = await installAdapterTrainingDependencies(adapterBuildId, false);
+      setAdapterReadiness(result.readiness || result.project.latestAdapterReadiness || null);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setBuildPlan(result.project.latestBuildPlan || null);
+      setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      await refreshModelLibrary();
+      if (!result.ok) {
+        setError(result.receipt.summary || "Adapter dependency install did not unlock real training yet.");
+      }
+    } catch (installError) {
+      setError(installError instanceof Error ? installError.message : String(installError));
+    } finally {
+      setAdapterDepsBusy(false);
+    }
+  }, [adapterBuild, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
+
+  const handleApplyRecommendedAdapterBaseModel = useCallback(async () => {
+    const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    if (!adapterBuildId) return;
+    setAdapterBaseModelBusy(true);
+    setError("");
+    try {
+      const result = await applyRecommendedAdapterBaseModel(adapterBuildId);
+      setAdapterBuild(result.receipt || result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterReadiness(result.readiness || result.project.latestAdapterReadiness || null);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setBuildPlan(result.project.latestBuildPlan || null);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      await refreshModelLibrary();
+      if (!result.ok) {
+        setError(result.readiness?.summary || "Recommended base model was applied, but other readiness blockers remain.");
+      }
+    } catch (baseModelError) {
+      setError(baseModelError instanceof Error ? baseModelError.message : String(baseModelError));
+    } finally {
+      setAdapterBaseModelBusy(false);
+    }
+  }, [adapterBuild, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
 
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
@@ -1162,6 +1246,7 @@ function App() {
     setOllama(ollamaPayload);
     setBuildPlan(projectPayload.latestBuildPlan || null);
     setAdapterBuild(projectPayload.latestAdapterBuild || null);
+    setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
     setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || fallbackRun || null);
     setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -1203,6 +1288,7 @@ function App() {
       setAdapterTrainingRun(result.run);
       setProject(result.project);
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterReadiness(result.project.latestAdapterReadiness || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory((history) => [result.run, ...history.filter((run) => run.runId !== result.run.runId)].slice(0, 8));
       setActiveWorkspace("builder");
@@ -1240,6 +1326,7 @@ function App() {
       setProject(result.project);
       setSources(result.project.sources);
       setOllama(result.ollama);
+      setAdapterReadiness(result.project.latestAdapterReadiness || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
       await refreshModelLibrary();
@@ -1661,6 +1748,7 @@ function App() {
                     guidedBuilderTest={guidedBuilderTest}
                     builderAiCreateReceipt={project?.latestBuilderAiCreateReceipt || null}
                     adapterBuild={project?.latestAdapterBuild || adapterBuild}
+                    adapterReadiness={project?.latestAdapterReadiness || adapterReadiness}
                     adapterTrainingRun={project?.latestAdapterTrainingRun || adapterTrainingRun}
                     adapterPromotion={project?.latestAdapterPromotion || adapterPromotion}
                     builderRun={builderRun}
@@ -1670,6 +1758,9 @@ function App() {
                     applyRecipeBusy={applyRecipeBusy}
                     createAiBusy={createBusy}
                     adapterBusy={adapterBusy}
+                    adapterReadinessBusy={adapterReadinessBusy}
+                    adapterDepsBusy={adapterDepsBusy}
+                    adapterBaseModelBusy={adapterBaseModelBusy}
                     adapterTrainingBusy={adapterTrainingBusy}
                     adapterPromoteBusy={adapterPromoteBusy}
                     chatBusy={chatBusy || builderTestBusy}
@@ -1680,6 +1771,9 @@ function App() {
                     onApplyHardwareRecipe={handleApplyHardwareRecipe}
                     onCreateOrUpdateAi={handleCreateOrUpdateBuilderAi}
                     onBuildAdapter={handleBuildAdapter}
+                    onCheckAdapterReadiness={handleCheckAdapterReadiness}
+                    onInstallAdapterDeps={handleInstallAdapterDeps}
+                    onApplyRecommendedAdapterBaseModel={handleApplyRecommendedAdapterBaseModel}
                     onRunAdapterTraining={handleRunAdapterTraining}
                     onCancelAdapterTraining={handleCancelAdapterTraining}
                     onPromoteAdapter={handlePromoteAdapter}
@@ -1702,10 +1796,15 @@ function App() {
                     running={setupRunning}
                     doctorActionBusy={setupDoctorBusy}
                     projectBusy={projectBusy}
+                    adapterReadiness={project?.latestAdapterReadiness || adapterReadiness}
+                    adapterReadinessBusy={adapterReadinessBusy}
+                    adapterDepsBusy={adapterDepsBusy}
                     onRefresh={refresh}
                     onSave={handleSaveSetup}
                     onRun={handleRunFirstSetup}
                     onDoctorAction={handleSetupDoctorAction}
+                    onCheckAdapterReadiness={handleCheckAdapterReadiness}
+                    onInstallAdapterDeps={handleInstallAdapterDeps}
                     onCreateProject={handleCreateProject}
                     onSelectProject={handleSelectProject}
                     onArchiveProject={handleArchiveProject}

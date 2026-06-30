@@ -103,8 +103,11 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "builder", "history"), { recursive: true });
   await mkdir(join(root, "builder", "runs"), { recursive: true });
   await mkdir(join(root, "adapters"), { recursive: true });
+  await mkdir(join(root, "adapters", "latest"), { recursive: true });
   await mkdir(join(root, "adapters", "history"), { recursive: true });
   await mkdir(join(root, "adapters", "runs"), { recursive: true });
+  await mkdir(join(root, "adapters", "readiness"), { recursive: true });
+  await mkdir(join(root, "adapters", "readiness", "history"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
 }
 
@@ -112,13 +115,62 @@ async function ensureDataRoot() {
   await ensureDataRootAt(dataRoot);
 }
 
+function adapterTrainingCacheRoot() {
+  const fallbackRoot = join(resolve(dataRoot, ".."), ".cache");
+  const configured = cleanSetting(process.env.MODEL_FORGE_CACHE_ROOT || setupConfig.cacheRoot || "");
+  if (configured) return resolvePathSetting(configured, fallbackRoot);
+  if (process.platform === "win32" && existsSync("D:\\") && !isWindowsPathOnDrive(fallbackRoot, "D")) {
+    return join("D:\\", "AI", "ModelForge", ".cache");
+  }
+  return fallbackRoot;
+}
+
+function adapterTrainingCachePlan() {
+  const root = resolve(adapterTrainingCacheRoot());
+  const dirs = {
+    root,
+    temp: join(root, "temp"),
+    pip: join(root, "pip"),
+    npm: join(root, "npm"),
+    hfHome: join(root, "huggingface"),
+    hfHub: join(root, "huggingface", "hub"),
+    transformers: join(root, "huggingface", "transformers"),
+    datasets: join(root, "huggingface", "datasets"),
+    torch: join(root, "torch")
+  };
+  const env = {
+    TEMP: dirs.temp,
+    TMP: dirs.temp,
+    PIP_CACHE_DIR: dirs.pip,
+    npm_config_cache: dirs.npm,
+    HF_HOME: dirs.hfHome,
+    HUGGINGFACE_HUB_CACHE: dirs.hfHub,
+    TRANSFORMERS_CACHE: dirs.transformers,
+    HF_DATASETS_CACHE: dirs.datasets,
+    TORCH_HOME: dirs.torch,
+    XDG_CACHE_HOME: root
+  };
+  const onPreferredDrive = process.platform !== "win32" || isWindowsPathOnDrive(root, "D");
+  return {
+    schema: "modelforge.adapter_training_cache_plan.v1",
+    root,
+    preferredDrive: process.platform === "win32" ? "D:" : "current system",
+    onPreferredDrive,
+    dirs,
+    env,
+    summary: onPreferredDrive ? `Training caches are pinned to ${root}.` : `Training caches are pinned to ${root}; D: was not available.`
+  };
+}
+
+async function ensureAdapterTrainingCacheDirs(plan = adapterTrainingCachePlan()) {
+  await Promise.all(Object.values(plan.dirs || {}).map((dir) => mkdir(dir, { recursive: true })));
+}
+
 function commandEnv(extra = {}) {
+  const cachePlan = adapterTrainingCachePlan();
   const env = {
     ...process.env,
-    TEMP: process.env.TEMP || join(resolve(projectRoot, ".."), ".cache", "temp"),
-    TMP: process.env.TMP || join(resolve(projectRoot, ".."), ".cache", "temp"),
-    PIP_CACHE_DIR: process.env.PIP_CACHE_DIR || join(resolve(projectRoot, ".."), ".cache", "pip"),
-    npm_config_cache: process.env.npm_config_cache || join(resolve(projectRoot, ".."), ".cache", "npm"),
+    ...cachePlan.env,
     ...extra
   };
   const command = ollamaCommand();
@@ -4171,33 +4223,580 @@ function adapterNameForPlan(plan) {
   return `${raw || "modelforge"}-lora`;
 }
 
-async function checkAdapterPythonPackages() {
-  const required = ["torch", "transformers", "datasets", "peft", "accelerate"];
-  const optional = ["bitsandbytes", "trl", "sentencepiece"];
-  const script = [
-    "import importlib.util, json, sys",
-    `required=${JSON.stringify(required)}`,
-    `optional=${JSON.stringify(optional)}`,
-    "packages={name:{'ok': importlib.util.find_spec(name) is not None, 'required': name in required} for name in required+optional}",
-    "print(json.dumps({'python': sys.executable, 'packages': packages}))"
-  ].join("; ");
-  const result = await runCommand(pythonCommand, ["-c", script], { timeout: 10000, maxBuffer: 1024 * 1024 });
-  const parsed = parseJsonLoose(result.stdout);
-  const packages = parsed?.packages || Object.fromEntries([...required, ...optional].map((name) => [name, { ok: false, required: required.includes(name) }]));
-  const missingRequired = required.filter((name) => !packages[name]?.ok);
+const adapterRequiredPackages = ["torch", "transformers", "datasets", "peft", "accelerate"];
+const adapterOptionalPackages = ["bitsandbytes", "trl", "sentencepiece"];
+
+async function inspectAdapterPythonRuntime() {
+  await ensureAdapterTrainingCacheDirs();
+  const script = `
+import importlib.metadata as metadata
+import importlib.util
+import json
+import platform
+import sys
+
+required = ${JSON.stringify(adapterRequiredPackages)}
+optional = ${JSON.stringify(adapterOptionalPackages)}
+packages = {}
+for name in required + optional:
+    found = importlib.util.find_spec(name) is not None
+    version = ""
+    if found:
+        try:
+            version = metadata.version(name)
+        except Exception:
+            version = ""
+    packages[name] = {"ok": found, "version": version, "required": name in required}
+
+cuda = {
+    "checked": False,
+    "available": False,
+    "torchCudaVersion": "",
+    "deviceCount": 0,
+    "devices": [],
+    "summary": "torch is not importable."
+}
+if packages.get("torch", {}).get("ok"):
+    cuda["checked"] = True
+    try:
+        import torch
+        cuda["available"] = bool(torch.cuda.is_available())
+        cuda["torchCudaVersion"] = str(getattr(torch.version, "cuda", "") or "")
+        cuda["deviceCount"] = int(torch.cuda.device_count()) if cuda["available"] else 0
+        devices = []
+        for index in range(cuda["deviceCount"]):
+            props = torch.cuda.get_device_properties(index)
+            devices.append({
+                "index": index,
+                "name": torch.cuda.get_device_name(index),
+                "totalMemoryBytes": int(getattr(props, "total_memory", 0) or 0)
+            })
+        cuda["devices"] = devices
+        cuda["summary"] = "CUDA available." if cuda["available"] else "torch imported, but CUDA is not available."
+    except Exception as error:
+        cuda["summary"] = str(error)
+
+print(json.dumps({
+    "executable": sys.executable,
+    "version": platform.python_version(),
+    "versionInfo": list(sys.version_info[:3]),
+    "implementation": platform.python_implementation(),
+    "platform": platform.platform(),
+    "packages": packages,
+    "cuda": cuda
+}))
+`;
+  const result = await runCommand(pythonCommand, ["-c", script], { timeout: 15000, maxBuffer: 1024 * 1024 * 2 });
+  const parsed = parseJsonLoose(result.stdout) || {};
+  const packages = parsed.packages || Object.fromEntries([...adapterRequiredPackages, ...adapterOptionalPackages].map((name) => [name, { ok: false, version: "", required: adapterRequiredPackages.includes(name) }]));
+  const versionInfo = Array.isArray(parsed.versionInfo) ? parsed.versionInfo.map((part) => Number(part) || 0) : [];
+  const versionOk = versionInfo.length >= 2 ? versionInfo[0] > 3 || (versionInfo[0] === 3 && versionInfo[1] >= 10) : false;
+  return {
+    schema: "modelforge.adapter_python_runtime.v1",
+    ok: Boolean(result.ok && parsed.executable && versionOk),
+    commandOk: Boolean(result.ok),
+    pythonCommand,
+    executable: parsed.executable || pythonCommand,
+    version: parsed.version || "",
+    versionInfo,
+    versionOk,
+    implementation: parsed.implementation || "",
+    platform: parsed.platform || "",
+    packages,
+    cuda: parsed.cuda || {
+      checked: false,
+      available: false,
+      torchCudaVersion: "",
+      deviceCount: 0,
+      devices: [],
+      summary: result.stderr || result.error || "Python runtime check did not complete."
+    },
+    stdoutTail: tail(result.stdout || "", 1000),
+    stderrTail: tail(result.stderr || "", 1000),
+    summary: result.ok
+      ? versionOk
+        ? `Python ${parsed.version || "unknown"} is usable for adapter training.`
+        : `Python ${parsed.version || "unknown"} is older than the recommended 3.10+ runtime.`
+      : `Python runtime check failed: ${result.error || tail(result.stderr || "", 240) || "unknown error"}`
+  };
+}
+
+function adapterPackageStatusFromRuntime(runtime) {
+  const packages = runtime?.packages || Object.fromEntries([...adapterRequiredPackages, ...adapterOptionalPackages].map((name) => [name, { ok: false, version: "", required: adapterRequiredPackages.includes(name) }]));
+  const missingRequired = adapterRequiredPackages.filter((name) => !packages[name]?.ok);
   return {
     schema: "modelforge.adapter_package_status.v1",
-    ok: Boolean(result.ok && !missingRequired.length),
+    ok: Boolean(runtime?.commandOk && !missingRequired.length),
     pythonCommand,
-    python: parsed?.python || pythonCommand,
-    commandOk: Boolean(result.ok),
+    python: runtime?.executable || pythonCommand,
+    commandOk: Boolean(runtime?.commandOk),
     packages,
-    required,
-    optional,
+    required: adapterRequiredPackages,
+    optional: adapterOptionalPackages,
     missingRequired,
     summary: missingRequired.length
       ? `Missing required adapter packages: ${missingRequired.join(", ")}.`
       : "Required adapter Python packages are importable."
+  };
+}
+
+async function checkAdapterPythonPackages() {
+  return adapterPackageStatusFromRuntime(await inspectAdapterPythonRuntime());
+}
+
+function recommendAdapterTransformersBaseModel({ hardware = {}, runtime = {}, config = {} } = {}) {
+  const vramGb = (hardware.gpu?.totalVramMb || 0) / 1024;
+  const ramGb = (hardware.memory?.totalBytes || 0) / 1024 / 1024 / 1024;
+  const cudaReady = Boolean(runtime.cuda?.available);
+  let selected = {
+    modelId: "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    label: "TinyLlama 1.1B Chat",
+    family: "llama",
+    minVramGb: 0,
+    estimatedDownloadGb: 2.3,
+    contextWindowTokens: ramGb >= 32 ? 4096 : 2048,
+    reason: "Small public Transformers model for starter LoRA tests and CPU-safe dry-runs."
+  };
+  if (vramGb >= 24 && cudaReady) {
+    selected = {
+      modelId: "mistralai/Mistral-7B-Instruct-v0.3",
+      label: "Mistral 7B Instruct v0.3",
+      family: "mistral",
+      minVramGb: 24,
+      estimatedDownloadGb: 16,
+      contextWindowTokens: 8192,
+      reason: "Enough CUDA VRAM was detected for a practical 7B LoRA/QLoRA route."
+    };
+  } else if (vramGb >= 12 && cudaReady) {
+    selected = {
+      modelId: "Qwen/Qwen2.5-3B-Instruct",
+      label: "Qwen2.5 3B Instruct",
+      family: "qwen2",
+      minVramGb: 12,
+      estimatedDownloadGb: 7,
+      contextWindowTokens: 8192,
+      reason: "CUDA VRAM fits a mid-sized public instruct model for adapter experiments."
+    };
+  } else if (vramGb >= 6 && cudaReady) {
+    selected = {
+      modelId: "Qwen/Qwen2.5-1.5B-Instruct",
+      label: "Qwen2.5 1.5B Instruct",
+      family: "qwen2",
+      minVramGb: 6,
+      estimatedDownloadGb: 3.5,
+      contextWindowTokens: 4096,
+      reason: "CUDA VRAM fits a compact public instruct model with lower memory pressure."
+    };
+  }
+  const targetModules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"];
+  const configuredModelId = cleanSetting(config.trainer?.transformersModelId || "");
+  return {
+    schema: "modelforge.adapter_base_model_recommendation.v1",
+    ...selected,
+    configuredModelId,
+    applied: Boolean(configuredModelId && (existsSync(configuredModelId) || configuredModelId.includes("/"))),
+    targetModules,
+    trustRemoteCode: false,
+    cacheRoot: adapterTrainingCachePlan().dirs.hfHome,
+    summary: configuredModelId
+      ? `Adapter config is set to ${configuredModelId}.`
+      : `Recommended Transformers base model: ${selected.modelId}.`
+  };
+}
+
+function adapterDependencyInstallPlan({ runtime = {}, config = {}, hardware = {} } = {}) {
+  const cachePlan = adapterTrainingCachePlan();
+  const packageStatus = adapterPackageStatusFromRuntime(runtime);
+  const qloraNeedsBitsAndBytes = String(config.method || "").toLowerCase() === "qlora";
+  const cudaLikely = Boolean(runtime.cuda?.available || hardware.gpu?.detected);
+  const torchIndexUrl = cudaLikely ? "https://download.pytorch.org/whl/cu121" : "https://download.pytorch.org/whl/cpu";
+  const commands = [
+    {
+      id: "pip-upgrade",
+      label: "Upgrade pip",
+      required: true,
+      command: [pythonCommand, "-m", "pip", "install", "--upgrade", "pip"],
+      summary: "Keep pip current before installing trainer packages."
+    },
+    {
+      id: "torch",
+      label: cudaLikely ? "Install PyTorch CUDA wheels" : "Install PyTorch CPU wheels",
+      required: true,
+      command: [pythonCommand, "-m", "pip", "install", "--upgrade", "torch", "torchvision", "torchaudio", "--index-url", torchIndexUrl],
+      summary: cudaLikely ? "Use PyTorch CUDA 12.1 wheels so torch can see the GPU." : "Use CPU PyTorch wheels for dry-run and CPU fallback checks."
+    },
+    {
+      id: "adapter-core",
+      label: "Install adapter trainer packages",
+      required: true,
+      command: [pythonCommand, "-m", "pip", "install", "--upgrade", "transformers", "datasets", "peft", "accelerate", "sentencepiece", "trl"],
+      summary: "Install the core Hugging Face, PEFT, and dataset stack."
+    },
+    {
+      id: "bitsandbytes",
+      label: "Install bitsandbytes for QLoRA",
+      required: qloraNeedsBitsAndBytes,
+      command: [pythonCommand, "-m", "pip", "install", "--upgrade", "bitsandbytes"],
+      summary: qloraNeedsBitsAndBytes ? "QLoRA needs bitsandbytes for 4-bit loading." : "Optional unless this adapter config is set to QLoRA."
+    }
+  ];
+  return {
+    schema: "modelforge.adapter_dependency_install_plan.v1",
+    createdAt: new Date().toISOString(),
+    pythonCommand,
+    missingRequired: packageStatus.missingRequired,
+    cachePlan,
+    commands,
+    summary: packageStatus.ok
+      ? "Required trainer packages are already importable; reinstall only if the environment is broken."
+      : `Install ${packageStatus.missingRequired.join(", ")} and supporting trainer packages.`
+  };
+}
+
+function adapterTrainingReadinessMarkdown(receipt) {
+  return [
+    `# Adapter Training Readiness`,
+    "",
+    `Receipt: ${receipt.receiptId}`,
+    `Created: ${receipt.createdAt}`,
+    `Status: ${receipt.status}`,
+    `Adapter build: ${receipt.adapterBuildId || "not prepared"}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary,
+    "",
+    "## Python",
+    "",
+    `Command: ${receipt.python.pythonCommand}`,
+    `Executable: ${receipt.python.executable}`,
+    `Version: ${receipt.python.version || "unknown"}`,
+    `CUDA: ${receipt.cuda.available ? "available" : "not available"} (${receipt.cuda.summary})`,
+    "",
+    "## Packages",
+    "",
+    ...Object.entries(receipt.packageStatus.packages || {}).map(([name, info]) => `- ${name}: ${info.ok ? "ok" : "missing"}${info.version ? ` ${info.version}` : ""}${info.required ? " (required)" : ""}`),
+    "",
+    "## Cache Plan",
+    "",
+    `Root: ${receipt.cachePlan.root}`,
+    `Preferred drive: ${receipt.cachePlan.onPreferredDrive ? "yes" : "no"}`,
+    "",
+    "## Recommended Base Model",
+    "",
+    `Model: ${receipt.recommendedBaseModel.modelId}`,
+    `Applied: ${receipt.recommendedBaseModel.applied ? "yes" : "no"}`,
+    `Reason: ${receipt.recommendedBaseModel.reason}`,
+    "",
+    "## Unlock",
+    "",
+    `Real training: ${receipt.unlock.realTraining ? "unlocked" : "locked"}`,
+    `Dry-run: ${receipt.unlock.dryRun ? "available" : "blocked"}`,
+    ...(receipt.blockers.length ? ["", "Blockers:", "", ...receipt.blockers.map((item) => `- ${item}`)] : []),
+    ...(receipt.warnings.length ? ["", "Warnings:", "", ...receipt.warnings.map((item) => `- ${item}`)] : []),
+    "",
+    "## Next Actions",
+    "",
+    ...receipt.nextActions.map((item) => `- ${item.label}: ${item.detail}`),
+    ""
+  ].join("\n");
+}
+
+async function buildAdapterTrainingReadiness(body = {}, options = {}) {
+  const writeReceipt = options.write !== false;
+  await ensureDataRoot();
+  const receiptId = `adapter-readiness-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+  const latestDir = join(dataRoot, "adapters", "readiness");
+  const historyDir = join(latestDir, "history", receiptId);
+  await mkdir(latestDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  const config = adapterReceipt?.files?.trainingConfigJson ? await readJsonIfExists(adapterReceipt.files.trainingConfigJson) : null;
+  const hardware = await getHardwareProfile();
+  const runtime = await inspectAdapterPythonRuntime();
+  const packageStatus = adapterPackageStatusFromRuntime(runtime);
+  const cachePlan = adapterTrainingCachePlan();
+  const recommendation = recommendAdapterTransformersBaseModel({ hardware, runtime, config: config || {} });
+  const installPlan = adapterDependencyInstallPlan({ runtime, config: config || {}, hardware });
+  const datasetExamples = Number(adapterReceipt?.dataset?.examples ?? config?.dataset?.examples ?? 0) || 0;
+  const baseModelBlocker = config ? adapterBaseModelBlocker(config) : "Prepare an adapter before real training can be unlocked.";
+  const qloraNeedsBitsAndBytes = String(config?.method || "").toLowerCase() === "qlora" && !runtime.packages?.bitsandbytes?.ok;
+  const preferredCacheDriveAvailable = process.platform === "win32" && existsSync("D:\\");
+  const blockers = [
+    !runtime.commandOk ? "Python command did not run successfully." : "",
+    runtime.commandOk && !runtime.versionOk ? "Python 3.10 or newer is recommended for the local trainer stack." : "",
+    !packageStatus.ok ? packageStatus.summary : "",
+    qloraNeedsBitsAndBytes ? "QLoRA is selected but bitsandbytes is not importable." : "",
+    !datasetExamples ? "Adapter dataset has no training examples yet." : "",
+    !hardware.tier?.canTrainAdapter ? "Hardware tier is not marked adapter-training capable." : "",
+    hardware.tier?.canTrainAdapter && !runtime.cuda?.available ? "Hardware route expects adapter training, but torch cannot see CUDA yet." : "",
+    baseModelBlocker,
+    preferredCacheDriveAvailable && !cachePlan.onPreferredDrive ? "Training caches are not on the preferred D: drive." : ""
+  ].filter(Boolean);
+  const warnings = [
+    runtime.cuda?.available ? "" : "Real LoRA/QLoRA training can be very slow or impossible without CUDA.",
+    packageStatus.packages?.trl?.ok ? "" : "trl is optional for the current runner but useful for future supervised fine-tuning flows.",
+    recommendation.estimatedDownloadGb >= 10 ? `Recommended base model may need about ${recommendation.estimatedDownloadGb} GB of cache/download space.` : ""
+  ].filter(Boolean);
+  const realTraining = blockers.length === 0;
+  const status = realTraining
+    ? "ready"
+    : !packageStatus.ok || qloraNeedsBitsAndBytes
+      ? "needs-deps"
+      : baseModelBlocker
+        ? "needs-base-model"
+        : !hardware.tier?.canTrainAdapter || !runtime.cuda?.available
+          ? "dry-run-only"
+          : "blocked";
+  const files = {
+    latestJson: join(latestDir, "latest-readiness.json"),
+    latestMarkdown: join(latestDir, "latest-readiness.md"),
+    historyJson: join(historyDir, "readiness.json"),
+    historyMarkdown: join(historyDir, "readiness.md")
+  };
+  const receipt = {
+    schema: "modelforge.adapter_training_readiness.v1",
+    receiptId,
+    createdAt: new Date().toISOString(),
+    ok: realTraining,
+    status,
+    adapterBuildId: adapterReceipt?.adapterBuildId || "",
+    planId: adapterReceipt?.planId || "",
+    adapterName: adapterReceipt?.adapter?.name || "",
+    method: config?.method || adapterReceipt?.adapter?.method || "",
+    summary: realTraining
+      ? "Adapter environment is ready for explicit real LoRA/QLoRA training."
+      : `Adapter trainer is locked to dry-run until ${blockers[0] || "the readiness blockers are cleared"}`,
+    python: runtime,
+    cuda: runtime.cuda,
+    packageStatus,
+    cachePlan,
+    hardware: {
+      tier: hardware.tier,
+      gpu: hardware.gpu,
+      memory: hardware.memory,
+      disk: hardware.disk
+    },
+    dataset: {
+      examples: datasetExamples,
+      jsonl: adapterReceipt?.files?.trainingDatasetJsonl || config?.dataset?.jsonl || "",
+      sourceScope: adapterReceipt?.dataset?.sourceScope || config?.dataset?.sourceScope || null
+    },
+    recommendedBaseModel: recommendation,
+    installPlan,
+    blockers,
+    warnings,
+    unlock: {
+      realTraining,
+      dryRun: Boolean(adapterReceipt?.adapterBuildId && datasetExamples),
+      reason: realTraining ? "Environment, dataset, hardware, cache, and Transformers base model are ready." : blockers[0] || "Readiness checks are incomplete."
+    },
+    nextActions: [
+      {
+        id: "install-adapter-deps",
+        label: packageStatus.ok && !qloraNeedsBitsAndBytes ? "Dependencies ready" : "Install training deps",
+        detail: packageStatus.ok && !qloraNeedsBitsAndBytes ? "Required trainer imports are present." : installPlan.summary,
+        workspace: "setup"
+      },
+      {
+        id: "apply-transformers-base",
+        label: recommendation.applied ? "Base model applied" : "Use recommended base",
+        detail: recommendation.applied ? recommendation.summary : `Set trainer.transformersModelId to ${recommendation.modelId}.`,
+        workspace: "builder"
+      },
+      {
+        id: "run-adapter-trainer",
+        label: realTraining ? "Run real trainer" : "Run dry-run trainer",
+        detail: realTraining ? "Run Trainer can launch train mode when explicitly armed." : "Run Trainer will dry-run and write a receipt until readiness passes.",
+        workspace: "builder"
+      }
+    ],
+    files
+  };
+  if (writeReceipt) {
+    await writeJson(files.latestJson, receipt);
+    await writeFile(files.latestMarkdown, adapterTrainingReadinessMarkdown(receipt), "utf-8");
+    await writeJson(files.historyJson, receipt);
+    await writeFile(files.historyMarkdown, adapterTrainingReadinessMarkdown(receipt), "utf-8");
+  }
+  return receipt;
+}
+
+async function getLatestAdapterTrainingReadiness() {
+  return readJsonIfExists(join(dataRoot, "adapters", "readiness", "latest-readiness.json"));
+}
+
+function adapterDependencyInstallMarkdown(receipt) {
+  return [
+    "# Adapter Dependency Install Receipt",
+    "",
+    `Receipt: ${receipt.receiptId}`,
+    `Created: ${receipt.createdAt}`,
+    `Status: ${receipt.status}`,
+    `Dry run: ${receipt.dryRun ? "yes" : "no"}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary,
+    "",
+    "## Cache",
+    "",
+    `Root: ${receipt.cachePlan.root}`,
+    "",
+    "## Commands",
+    "",
+    ...receipt.commands.map((item) => `- ${item.label}: ${item.status} (${item.command.join(" ")})`),
+    ""
+  ].join("\n");
+}
+
+async function installAdapterTrainingDependencies(body = {}) {
+  await ensureDataRoot();
+  const dryRun = body.dryRun === true;
+  const startedAt = new Date().toISOString();
+  const receiptId = `adapter-deps-${startedAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+  const latestDir = join(dataRoot, "adapters", "readiness");
+  const historyDir = join(latestDir, "history", receiptId);
+  await mkdir(latestDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+  const before = await buildAdapterTrainingReadiness({ adapterBuildId: body.adapterBuildId || "" }, { write: false });
+  const commands = [];
+  let ok = true;
+  if (!dryRun) {
+    await ensureAdapterTrainingCacheDirs(before.cachePlan);
+  }
+  for (const item of before.installPlan.commands || []) {
+    if (!item.required && !body.includeOptional) {
+      commands.push({ ...item, status: "skipped", ok: true, stdoutTail: "", stderrTail: "", error: "" });
+      continue;
+    }
+    if (dryRun) {
+      commands.push({ ...item, status: "dry-run", ok: true, stdoutTail: "", stderrTail: "", error: "" });
+      continue;
+    }
+    const [command, ...args] = item.command;
+    const result = await runCommand(command, args, { timeout: Number(body.timeoutMs || 30 * 60 * 1000), maxBuffer: 1024 * 1024 * 3 });
+    const commandOk = Boolean(result.ok);
+    ok = ok && commandOk;
+    commands.push({
+      ...item,
+      status: commandOk ? "ok" : "failed",
+      ok: commandOk,
+      stdoutTail: tail(result.stdout || "", 1600),
+      stderrTail: tail(result.stderr || "", 1600),
+      error: result.error || ""
+    });
+    if (!commandOk) break;
+  }
+  const after = dryRun ? before : await buildAdapterTrainingReadiness({ adapterBuildId: body.adapterBuildId || "" }, { write: true });
+  const endedAt = new Date().toISOString();
+  const files = {
+    latestJson: join(latestDir, "latest-install.json"),
+    latestMarkdown: join(latestDir, "latest-install.md"),
+    historyJson: join(historyDir, "install.json"),
+    historyMarkdown: join(historyDir, "install.md")
+  };
+  const receipt = {
+    schema: "modelforge.adapter_dependency_install_receipt.v1",
+    receiptId,
+    adapterBuildId: before.adapterBuildId || "",
+    createdAt: startedAt,
+    endedAt,
+    dryRun,
+    ok: dryRun ? true : ok && after.unlock.realTraining,
+    status: dryRun ? "dry-run" : ok ? after.status : "failed",
+    summary: dryRun
+      ? "Dependency installer dry-run wrote the commands ModelForge would execute."
+      : ok
+        ? after.summary
+        : "Dependency installation failed before readiness could pass.",
+    cachePlan: before.cachePlan,
+    before,
+    after,
+    commands,
+    files
+  };
+  await writeJson(files.latestJson, receipt);
+  await writeFile(files.latestMarkdown, adapterDependencyInstallMarkdown(receipt), "utf-8");
+  await writeJson(files.historyJson, receipt);
+  await writeFile(files.historyMarkdown, adapterDependencyInstallMarkdown(receipt), "utf-8");
+  return {
+    ok: receipt.ok,
+    receipt,
+    readiness: after,
+    project: await getProjectPayload()
+  };
+}
+
+async function applyRecommendedAdapterBaseModel(body = {}) {
+  await ensureDataRoot();
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  if (!adapterReceipt?.adapterBuildId) {
+    throw new Error("Prepare an adapter before applying a Transformers base model.");
+  }
+  const config = await readJsonIfExists(adapterReceipt.files?.trainingConfigJson);
+  if (!config?.schema) {
+    throw new Error("Adapter training config was not found.");
+  }
+  const readiness = await buildAdapterTrainingReadiness({ adapterBuildId: adapterReceipt.adapterBuildId }, { write: false });
+  const modelId = cleanSetting(body.modelId || readiness.recommendedBaseModel?.modelId || "");
+  if (!modelId || (!existsSync(modelId) && !modelId.includes("/"))) {
+    throw new Error("A Hugging Face model id or local Transformers path is required.");
+  }
+  config.trainer = {
+    ...(config.trainer || {}),
+    transformersModelId: modelId,
+    transformersModelSource: body.modelId ? "user-selected" : "model-forge-recommended",
+    recommendedTransformersModelId: readiness.recommendedBaseModel?.modelId || modelId
+  };
+  await writeJson(adapterReceipt.files.trainingConfigJson, config);
+  if (adapterReceipt.files.historyTrainingConfigJson) {
+    const historyConfig = (await readJsonIfExists(adapterReceipt.files.historyTrainingConfigJson)) || config;
+    await writeJson(adapterReceipt.files.historyTrainingConfigJson, { ...historyConfig, trainer: config.trainer });
+  }
+  const packageStatus = readiness.packageStatus || (await checkAdapterPythonPackages());
+  const plan = await getBuilderPlanById(adapterReceipt.planId || "");
+  const updatedReadiness = await buildAdapterTrainingReadiness({ adapterBuildId: adapterReceipt.adapterBuildId }, { write: true });
+  const runnerRecipe = adapterRunnerRecipeFor({
+    config,
+    packageStatus,
+    plan: plan || {},
+    executionMode: updatedReadiness.unlock.realTraining ? "local-ready" : "dry-run",
+    blockedReasons: updatedReadiness.blockers
+  });
+  if (adapterReceipt.files.runnerRecipeJson) await writeJson(adapterReceipt.files.runnerRecipeJson, runnerRecipe);
+  if (adapterReceipt.files.historyRunnerRecipeJson) await writeJson(adapterReceipt.files.historyRunnerRecipeJson, runnerRecipe);
+  const updatedReceipt = {
+    ...adapterReceipt,
+    status: updatedReadiness.unlock.realTraining ? "ready" : adapterReceipt.status,
+    summary: updatedReadiness.unlock.realTraining
+      ? `${adapterReceipt.adapter.name} has a compatible Transformers base model and readiness is unlocked for explicit local training.`
+      : adapterReceipt.summary,
+    adapter: {
+      ...adapterReceipt.adapter,
+      transformersModelId: modelId
+    },
+    config,
+    runner: {
+      ...adapterReceipt.runner,
+      canTrainNow: updatedReadiness.unlock.realTraining,
+      packageStatus,
+      blockedReasons: updatedReadiness.blockers,
+      readiness: updatedReadiness,
+      recipe: runnerRecipe
+    },
+    files: {
+      ...adapterReceipt.files,
+      latestReadinessJson: updatedReadiness.files.latestJson,
+      latestReadinessMarkdown: updatedReadiness.files.latestMarkdown
+    }
+  };
+  await writeUpdatedAdapterReceipt(updatedReceipt);
+  return {
+    ok: updatedReadiness.unlock.realTraining,
+    receipt: updatedReceipt,
+    readiness: updatedReadiness,
+    project: await getProjectPayload()
   };
 }
 
@@ -4210,6 +4809,7 @@ function adapterTrainingConfigFor({ plan, dataset, hardware, adapterName, latest
   const microBatchSize = vramGb >= 16 ? 2 : 1;
   const gradientAccumulation = vramGb >= 16 ? 8 : 16;
   const maxSteps = Math.max(20, Math.min(300, Math.ceil(exampleCount * 2)));
+  const recommendedTransformersBase = recommendAdapterTransformersBaseModel({ hardware });
   return {
     schema: "modelforge.adapter_training_config.v1",
     createdAt: new Date().toISOString(),
@@ -4236,6 +4836,9 @@ function adapterTrainingConfigFor({ plan, dataset, hardware, adapterName, latest
       targetModules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     },
     trainer: {
+      transformersModelId: "",
+      recommendedTransformersModelId: recommendedTransformersBase.modelId,
+      transformersModelSource: "not-applied",
       maxSteps,
       epochs: 1,
       learningRate: 0.0002,
@@ -4612,6 +5215,8 @@ async function buildBuilderAdapter(body = {}) {
     adapterManifestJson: join(latestDir, "adapter-manifest.json"),
     receiptJson: join(latestDir, "adapter-builder-receipt.json"),
     receiptMarkdown: join(latestDir, "adapter-builder-receipt.md"),
+    latestReadinessJson: join(dataRoot, "adapters", "readiness", "latest-readiness.json"),
+    latestReadinessMarkdown: join(dataRoot, "adapters", "readiness", "latest-readiness.md"),
     checkpointDir,
     historyTrainingDatasetJsonl: join(historyDir, "training-dataset.jsonl"),
     historyTrainingDatasetManifest: join(historyDir, "training-dataset-manifest.json"),
@@ -4787,13 +5392,26 @@ async function buildBuilderAdapter(body = {}) {
   await writeFile(files.historyRunnerScript, adapterRunnerScriptSource(), "utf-8");
   await writeJson(files.historyRunnerRecipeJson, { ...runnerRecipe, runnerScript: files.historyRunnerScript });
   await writeFile(files.historyRunnerRecipeMarkdown, runnerMarkdown, "utf-8");
-  await writeJson(files.historyAdapterManifestJson, { ...adapterManifest, checkpointDir: files.historyCheckpointDir });
+    await writeJson(files.historyAdapterManifestJson, { ...adapterManifest, checkpointDir: files.historyCheckpointDir });
   await writeJson(files.historyReceiptJson, receipt);
   await writeFile(files.historyReceiptMarkdown, adapterBuilderReceiptMarkdown(receipt), "utf-8");
+  const readiness = await buildAdapterTrainingReadiness({ adapterBuildId: adapterBuildIdValue }, { write: true });
+  const updatedReceipt = await writeUpdatedAdapterReceipt({
+    ...receipt,
+    runner: {
+      ...receipt.runner,
+      readiness
+    },
+    files: {
+      ...receipt.files,
+      latestReadinessJson: readiness.files.latestJson,
+      latestReadinessMarkdown: readiness.files.latestMarkdown
+    }
+  });
 
   return {
     ok: true,
-    receipt,
+    receipt: updatedReceipt,
     dataset,
     plan,
     project: await getProjectPayload()
@@ -4841,6 +5459,12 @@ function adapterTrainingRunMarkdown(run) {
     "## Summary",
     "",
     run.summary,
+    "",
+    "## Readiness",
+    "",
+    `Status: ${run.readiness?.status || "not checked"}`,
+    `Real training: ${run.readiness?.unlock?.realTraining ? "unlocked" : "locked"}`,
+    ...(run.blockedReasons?.length ? run.blockedReasons.map((item) => `- ${item}`) : ["- No readiness blockers recorded."]),
     "",
     "## Progress",
     "",
@@ -4943,11 +5567,18 @@ async function detectAdapterCheckpoint(dir = "") {
 
 function adapterBaseModelBlocker(config = {}) {
   const trainer = config.trainer || {};
-  const candidate = cleanSetting(trainer.transformersModelId || config.baseModel);
-  if (!candidate) return "No Transformers model id or local model path is configured.";
-  if (existsSync(candidate) || candidate.includes("/")) return "";
-  if (candidate.includes(":")) return `Base model ${candidate} looks like an Ollama tag; set trainer.transformersModelId to a Hugging Face id or local Transformers model path for real training.`;
-  return "";
+  const candidate = cleanSetting(trainer.transformersModelId || "");
+  if (!candidate && trainer.recommendedTransformersModelId) {
+    return `Recommended Transformers base model ${trainer.recommendedTransformersModelId} has not been applied to trainer.transformersModelId.`;
+  }
+  const fallback = cleanSetting(config.baseModel);
+  const modelId = candidate || fallback;
+  if (!modelId) return "No Transformers model id or local model path is configured.";
+  if (!candidate && fallback.includes(":")) return `Base model ${fallback} looks like an Ollama tag; set trainer.transformersModelId to a Hugging Face id or local Transformers model path for real training.`;
+  if (!candidate && fallback && !fallback.includes("/")) return `Base model ${fallback} is not a Hugging Face id or local Transformers model path.`;
+  if (existsSync(modelId) || modelId.includes("/")) return "";
+  if (modelId.includes(":")) return `Base model ${modelId} looks like an Ollama tag; set trainer.transformersModelId to a Hugging Face id or local Transformers model path for real training.`;
+  return `Base model ${modelId} is not a Hugging Face id or local Transformers model path.`;
 }
 
 async function persistAdapterTrainingRun(run) {
@@ -5090,22 +5721,18 @@ async function startAdapterTrainingRun(body = {}) {
     adapterReceipt.files = { ...(adapterReceipt.files || {}), runnerScript: runnerScriptPath };
     await writeUpdatedAdapterReceipt(adapterReceipt);
   }
-  const hardware = await getHardwareProfile();
-  const packageStatus = await checkAdapterPythonPackages();
+  await ensureAdapterTrainingCacheDirs();
+  const readiness = await buildAdapterTrainingReadiness({ adapterBuildId: adapterReceipt.adapterBuildId }, { write: true });
   const runId = adapterTrainingRunId();
   const startedAt = new Date().toISOString();
   const runDir = join(dataRoot, "adapters", "runs", runId);
   const checkpointDir = join(runDir, "checkpoint");
   const realTrainingRequested = body.runTraining === true && body.allowLongRun === true;
-  const baseModelBlocker = adapterBaseModelBlocker(config);
   const blockedReasons = [
-    !adapterReceipt.dataset?.examples ? "Adapter dataset has no examples." : "",
-    !hardware.tier?.canTrainAdapter ? "Hardware tier is not marked adapter-training capable." : "",
-    !packageStatus.ok ? packageStatus.summary : "",
-    baseModelBlocker,
+    ...((readiness.blockers || []).length ? readiness.blockers : []),
     !realTrainingRequested ? "Real training was not explicitly armed; running the safe local dry-run." : ""
   ].filter(Boolean);
-  const canTrainNow = Boolean(realTrainingRequested && adapterReceipt.dataset?.examples && hardware.tier?.canTrainAdapter && packageStatus.ok && !baseModelBlocker);
+  const canTrainNow = Boolean(realTrainingRequested && readiness.unlock?.realTraining);
   const mode = canTrainNow ? "train" : "dry-run";
   const files = {
     runDir,
@@ -5160,6 +5787,7 @@ async function startAdapterTrainingRun(body = {}) {
     },
     checkpointDir,
     checkpoint: await detectAdapterCheckpoint(checkpointDir),
+    readiness,
     receipt: {
       name: "adapter_training_run",
       ok: false,
@@ -5266,6 +5894,7 @@ async function finishAdapterTrainingRun(runId, result = {}) {
     mode: job.run.mode,
     summary,
     checkpoint,
+    readiness: job.run.readiness || null,
     receipt,
     endedAt
   });
@@ -8616,6 +9245,7 @@ async function buildModelLibrary() {
     latestBuilderAiCreateReceipt,
     latestTrainingRoutePlan,
     latestAdapterBuild,
+    latestAdapterReadiness,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     recipeRunHistory,
@@ -8634,6 +9264,7 @@ async function buildModelLibrary() {
     getLatestBuilderAiCreateReceipt(),
     getLatestTrainingRoutePlan(),
     getLatestAdapterBuilderReceipt(),
+    getLatestAdapterTrainingReadiness(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getRecipeRunHistory(),
@@ -8663,6 +9294,7 @@ async function buildModelLibrary() {
     libraryReceipt("Adapter training config", latestAdapterBuild?.files?.trainingConfigJson, "artifact"),
     libraryReceipt("Adapter runner script", latestAdapterBuild?.files?.runnerScript, "artifact"),
     libraryReceipt("Adapter runner recipe", latestAdapterBuild?.files?.runnerRecipeJson, "artifact"),
+    libraryReceipt("Adapter readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
     libraryReceipt("Adapter training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
     libraryReceipt("Adapter promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
@@ -8766,13 +9398,15 @@ async function buildModelLibrary() {
         dryRun: Boolean(latestAdapterBuild.adapter?.dryRun),
         trained: adapterTrained,
         promoted: adapterPromoted,
-        latestRun: latestAdapterTrainingRun?.status || "not run"
+        latestRun: latestAdapterTrainingRun?.status || "not run",
+        readiness: latestAdapterReadiness?.status || "not checked"
       },
       receipts: [
         libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
         libraryReceipt("Training config", latestAdapterBuild.files?.trainingConfigJson, "artifact"),
         libraryReceipt("Runner script", latestAdapterBuild.files?.runnerScript, "artifact"),
         libraryReceipt("Runner recipe", latestAdapterBuild.files?.runnerRecipeJson, "artifact"),
+        libraryReceipt("Readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
         libraryReceipt("Training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
         libraryReceipt("Promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
         libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
@@ -9249,6 +9883,7 @@ async function getProjectPayload() {
     latestBuilderAiCreateReceipt,
     latestTrainingRoutePlan,
     latestAdapterBuild,
+    latestAdapterReadiness,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterTrainingRunHistory,
@@ -9272,6 +9907,7 @@ async function getProjectPayload() {
     getLatestBuilderAiCreateReceipt(),
     getLatestTrainingRoutePlan(),
     getLatestAdapterBuilderReceipt(),
+    getLatestAdapterTrainingReadiness(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getAdapterTrainingRunHistory(),
@@ -9314,6 +9950,7 @@ async function getProjectPayload() {
     latestBuilderAiCreateReceipt,
     latestTrainingRoutePlan,
     latestAdapterBuild,
+    latestAdapterReadiness,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterTrainingRunHistory,
@@ -9684,6 +10321,25 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/builder/adapter/build") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await buildBuilderAdapter(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/readiness/check") {
+      const body = await readJsonBody(request);
+      const readiness = await buildAdapterTrainingReadiness(body, { write: true });
+      sendJson(response, 200, { ok: readiness.ok, readiness, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/readiness/install") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await installAdapterTrainingDependencies(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/readiness/apply-base-model") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await applyRecommendedAdapterBaseModel(body));
       return;
     }
 

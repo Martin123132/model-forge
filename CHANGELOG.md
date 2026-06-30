@@ -31,6 +31,10 @@ forge cockpit.
   training dataset, writes a LoRA/QLoRA config, prepares a runner recipe,
   creates checkpoint/adapter folders, writes a receipt, and registers the
   adapter pack in Your AIs.
+- Added Adapter Training Readiness receipts and controls so Setup/Builder can
+  check Python, CUDA, required packages, D-drive cache roots, compatible
+  Transformers base model selection, and dependency install commands before
+  real LoRA/QLoRA training is unlocked.
 - Added Adapter Training Run receipts so Run Trainer executes the local runner,
   streams progress/log tails, supports cancellation, detects dry-run versus real
   checkpoints, and updates the adapter status.

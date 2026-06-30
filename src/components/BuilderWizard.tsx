@@ -6,6 +6,7 @@ import {
   Clock3,
   Cpu,
   Database,
+  Download,
   FileText,
   Gauge,
   HardDrive,
@@ -25,6 +26,7 @@ import { useMemo, useState } from "react";
 import type {
   AdapterBuilderReceipt,
   AdapterPromotionReceipt,
+  AdapterTrainingReadiness,
   AdapterTrainingRun,
   BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
@@ -56,6 +58,7 @@ type BuilderWizardProps = {
   guidedBuilderTest?: BuilderGuidedTestReceipt | null;
   builderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   adapterBuild?: AdapterBuilderReceipt | null;
+  adapterReadiness?: AdapterTrainingReadiness | null;
   adapterTrainingRun?: AdapterTrainingRun | null;
   adapterPromotion?: AdapterPromotionReceipt | null;
   builderRun?: BuilderRun | null;
@@ -65,6 +68,9 @@ type BuilderWizardProps = {
   applyRecipeBusy: boolean;
   createAiBusy: boolean;
   adapterBusy: boolean;
+  adapterReadinessBusy: boolean;
+  adapterDepsBusy: boolean;
+  adapterBaseModelBusy: boolean;
   adapterTrainingBusy: boolean;
   adapterPromoteBusy: boolean;
   chatBusy: boolean;
@@ -75,6 +81,9 @@ type BuilderWizardProps = {
   onApplyHardwareRecipe: () => void;
   onCreateOrUpdateAi: () => void;
   onBuildAdapter: () => void;
+  onCheckAdapterReadiness: () => void;
+  onInstallAdapterDeps: () => void;
+  onApplyRecommendedAdapterBaseModel: () => void;
   onRunAdapterTraining: () => void;
   onCancelAdapterTraining: (runId: string) => void;
   onPromoteAdapter: () => void;
@@ -512,6 +521,13 @@ function adapterRunTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
   if (status === "pass") return "pass";
   if (status === "running") return "warn";
   if (status === "fail" || status === "canceled") return "fail";
+  return "neutral";
+}
+
+function adapterReadinessTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "ready") return "pass";
+  if (status === "blocked") return "fail";
+  if (status) return "warn";
   return "neutral";
 }
 
@@ -975,6 +991,7 @@ export function BuilderWizard({
   guidedBuilderTest,
   builderAiCreateReceipt,
   adapterBuild,
+  adapterReadiness,
   adapterTrainingRun,
   adapterPromotion,
   builderRun,
@@ -984,6 +1001,9 @@ export function BuilderWizard({
   applyRecipeBusy,
   createAiBusy,
   adapterBusy,
+  adapterReadinessBusy,
+  adapterDepsBusy,
+  adapterBaseModelBusy,
   adapterTrainingBusy,
   adapterPromoteBusy,
   chatBusy,
@@ -994,6 +1014,9 @@ export function BuilderWizard({
   onApplyHardwareRecipe,
   onCreateOrUpdateAi,
   onBuildAdapter,
+  onCheckAdapterReadiness,
+  onInstallAdapterDeps,
+  onApplyRecommendedAdapterBaseModel,
   onRunAdapterTraining,
   onCancelAdapterTraining,
   onPromoteAdapter,
@@ -1145,6 +1168,8 @@ export function BuilderWizard({
   const adapterReceipt = adapterReceiptMatchesPlan ? adapterBuild : null;
   const adapterReceiptPath = adapterReceipt?.files.receiptJson || adapterReceipt?.files.historyReceiptJson || "";
   const adapterActionLabel = adapterBusy ? "Preparing" : adapterReceipt ? "Rebuild Adapter" : "Prepare Adapter";
+  const adapterReadinessMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterReadiness?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterReadiness = adapterReadinessMatchesReceipt ? adapterReadiness : adapterReceipt?.runner?.readiness || null;
   const adapterRunMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterTrainingRun?.adapterBuildId === adapterReceipt.adapterBuildId);
   const currentAdapterRun = adapterRunMatchesReceipt ? adapterTrainingRun : null;
   const adapterRunProgress = adapterRunPercent(currentAdapterRun);
@@ -1927,6 +1952,37 @@ export function BuilderWizard({
                 </div>
               ) : null}
               {adapterReceipt ? (
+                <div className={`adapter-readiness-mini ${currentAdapterReadiness?.status || "pending"}`}>
+                  <div className="adapter-runner-head">
+                    <div>
+                      <strong>Readiness</strong>
+                      <span>{currentAdapterReadiness?.summary || "Check the local training environment before attempting a real adapter run."}</span>
+                    </div>
+                    <StatusPill status={adapterReadinessTone(currentAdapterReadiness?.status)} label={currentAdapterReadiness?.status || "Not checked"} />
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Packages</strong>
+                      <em>{currentAdapterReadiness?.packageStatus.ok ? "ready" : currentAdapterReadiness?.packageStatus.missingRequired?.join(", ") || "not checked"}</em>
+                    </span>
+                    <span>
+                      <strong>CUDA</strong>
+                      <em>{currentAdapterReadiness?.cuda.available ? `${currentAdapterReadiness.cuda.deviceCount} device` : currentAdapterReadiness ? "not ready" : "not checked"}</em>
+                    </span>
+                    <span>
+                      <strong>Cache</strong>
+                      <em title={currentAdapterReadiness?.cachePlan.root || ""}>{compactPath(currentAdapterReadiness?.cachePlan.root || "")}</em>
+                    </span>
+                    <span>
+                      <strong>TF base</strong>
+                      <em title={currentAdapterReadiness?.recommendedBaseModel.modelId || ""}>
+                        {currentAdapterReadiness?.recommendedBaseModel.applied ? "applied" : currentAdapterReadiness?.recommendedBaseModel.label || "not applied"}
+                      </em>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+              {adapterReceipt ? (
                 <div className="adapter-runner-panel">
                   <div className="adapter-runner-head">
                     <div>
@@ -1963,6 +2019,24 @@ export function BuilderWizard({
                   {adapterBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Hammer size={15} />}
                   <span>{adapterActionLabel}</span>
                 </button>
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onCheckAdapterReadiness} disabled={adapterReadinessBusy}>
+                    {adapterReadinessBusy ? <LoaderCircle className="spin-icon" size={14} /> : <RefreshCw size={14} />}
+                    <span>{adapterReadinessBusy ? "Checking" : "Check"}</span>
+                  </button>
+                ) : null}
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onInstallAdapterDeps} disabled={adapterDepsBusy}>
+                    {adapterDepsBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Download size={14} />}
+                    <span>{adapterDepsBusy ? "Installing" : "Deps"}</span>
+                  </button>
+                ) : null}
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onApplyRecommendedAdapterBaseModel} disabled={adapterBaseModelBusy || currentAdapterReadiness?.recommendedBaseModel.applied}>
+                    {adapterBaseModelBusy ? <LoaderCircle className="spin-icon" size={14} /> : <PackageCheck size={14} />}
+                    <span>{adapterBaseModelBusy ? "Applying" : currentAdapterReadiness?.recommendedBaseModel.applied ? "Base set" : "Use base"}</span>
+                  </button>
+                ) : null}
                 {adapterReceipt ? (
                   currentAdapterRun?.status === "running" ? (
                     <button className="plain-button small" type="button" onClick={() => onCancelAdapterTraining(currentAdapterRun.runId)}>

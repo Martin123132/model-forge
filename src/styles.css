@@ -2427,6 +2427,28 @@ h2 {
   background: rgba(239, 246, 255, 0.72);
 }
 
+.adapter-readiness-mini {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 7px;
+  background: rgba(240, 253, 250, 0.76);
+}
+
+.adapter-readiness-mini.needs-deps,
+.adapter-readiness-mini.needs-base-model,
+.adapter-readiness-mini.dry-run-only {
+  border-color: rgba(202, 138, 4, 0.25);
+  background: rgba(254, 252, 232, 0.82);
+}
+
+.adapter-readiness-mini.blocked {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(254, 242, 242, 0.82);
+}
+
 .adapter-runner-head {
   display: flex;
   align-items: start;
@@ -3533,6 +3555,90 @@ h2 {
 .setup-doctor-check.fail svg,
 .setup-doctor-check.fail strong {
   color: var(--red);
+}
+
+.adapter-readiness-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d8e6f3;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.adapter-readiness-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.adapter-readiness-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.adapter-readiness-heading span,
+.adapter-readiness-facts strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.adapter-readiness-heading h3 {
+  margin: 0;
+  color: #172236;
+  font-size: 17px;
+  line-height: 1.15;
+}
+
+.adapter-readiness-heading p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: #44546c;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.adapter-readiness-facts {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.adapter-readiness-facts span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.adapter-readiness-facts em {
+  overflow: hidden;
+  min-width: 0;
+  color: #172236;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-readiness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .project-manager {
@@ -7100,6 +7206,7 @@ h2 {
   }
 
   .setup-doctor-facts,
+  .adapter-readiness-facts,
   .setup-doctor-checks {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7407,6 +7514,7 @@ h2 {
   .training-route-grid,
   .training-route-detail,
   .adapter-builder-facts,
+  .adapter-readiness-facts,
   .hardware-apply-facts,
   .hardware-apply-actions,
   .hardware-test-facts,
@@ -7973,6 +8081,7 @@ h2 {
 
   .setup-summary-strip,
   .setup-doctor-facts,
+  .adapter-readiness-facts,
   .setup-doctor-checks,
   .setup-form,
   .setup-check-grid {
@@ -7981,6 +8090,7 @@ h2 {
 
   .setup-body,
   .setup-doctor,
+  .adapter-readiness-card,
   .setup-summary-strip,
   .setup-check-grid {
     padding-right: 0;

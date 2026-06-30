@@ -60,6 +60,10 @@ artifacts from code and project folders.
   source-scope training dataset, writes a LoRA/QLoRA config, prepares a runner
   recipe, creates checkpoint/adapter folders, writes an adapter build receipt,
   and registers the adapter pack in **Your AIs**.
+- Writes an **Adapter Training Readiness** receipt before real training:
+  checks Python, CUDA, required packages, QLoRA bitsandbytes needs, D-drive
+  cache roots for pip/Hugging Face/Torch, dataset examples, and the compatible
+  Transformers base model.
 - Runs that adapter runner with live progress, cancellation, checkpoint
   detection, and receipts. ModelForge dry-runs when hardware, dependencies, or
   the base-model config are not ready, and only enables promotion after real
@@ -190,6 +194,11 @@ The plan records:
   training JSONL, creates the LoRA/QLoRA training config, prepares the runner
   recipe, writes checkpoint placeholders or trained-output locations, and stores
   the adapter manifest.
+- An **Adapter Training Readiness** receipt that powers Setup and Builder
+  controls for Check trainer, Install deps, and Use recommended base. The
+  receipt records D-drive cache locations, package/CUDA state, recommended
+  Hugging Face/Transformers model id, blockers, warnings, and whether real
+  training is unlocked.
 - An **Adapter Training Run** receipt after Run Trainer executes the local
   runner, captures stdout/stderr tails, records dry-run or train mode, scans for
   checkpoint files, and updates the adapter status.
@@ -238,8 +247,8 @@ The library shows:
 - Which models are runnable in Ollama.
 - Which forged target was built from the current recipe/profile.
 - Which adapter pack was prepared, including dry-run/trained status, dataset
-  size, training config, runner script, runner recipe, latest training run,
-  promotion receipt, and adapter manifest.
+  size, training config, runner script, runner recipe, readiness receipt, latest
+  training run, promotion receipt, and adapter manifest.
 - Dataset rows, token estimates, source-file counts, proof freshness, and eval
   freshness.
 - Receipts behind the build, including Modelfiles, model profiles, Dataset

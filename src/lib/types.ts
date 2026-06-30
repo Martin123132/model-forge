@@ -485,11 +485,156 @@ export type AdapterPackageStatus = {
   pythonCommand: string;
   python: string;
   commandOk: boolean;
-  packages: Record<string, { ok: boolean; required: boolean }>;
+  packages: Record<string, { ok: boolean; required: boolean; version?: string }>;
   required: string[];
   optional: string[];
   missingRequired: string[];
   summary: string;
+};
+
+export type AdapterTrainingCuda = {
+  checked: boolean;
+  available: boolean;
+  torchCudaVersion: string;
+  deviceCount: number;
+  devices: Array<{
+    index: number;
+    name: string;
+    totalMemoryBytes: number;
+  }>;
+  summary: string;
+};
+
+export type AdapterTrainingCachePlan = {
+  schema: string;
+  root: string;
+  preferredDrive: string;
+  onPreferredDrive: boolean;
+  dirs: Record<string, string>;
+  env: Record<string, string>;
+  summary: string;
+};
+
+export type AdapterTrainingReadiness = {
+  schema: string;
+  receiptId: string;
+  createdAt: string;
+  ok: boolean;
+  status: "ready" | "needs-deps" | "needs-base-model" | "dry-run-only" | "blocked" | string;
+  adapterBuildId: string;
+  planId: string;
+  adapterName: string;
+  method: string;
+  summary: string;
+  python: {
+    schema: string;
+    ok: boolean;
+    commandOk: boolean;
+    pythonCommand: string;
+    executable: string;
+    version: string;
+    versionInfo: number[];
+    versionOk: boolean;
+    implementation: string;
+    platform: string;
+    packages: Record<string, { ok: boolean; required: boolean; version?: string }>;
+    cuda: AdapterTrainingCuda;
+    stdoutTail: string;
+    stderrTail: string;
+    summary: string;
+  };
+  cuda: AdapterTrainingCuda;
+  packageStatus: AdapterPackageStatus;
+  cachePlan: AdapterTrainingCachePlan;
+  hardware: Record<string, unknown>;
+  dataset: {
+    examples: number;
+    jsonl: string;
+    sourceScope?: SourceScopeOption | null;
+  };
+  recommendedBaseModel: {
+    schema: string;
+    modelId: string;
+    label: string;
+    family: string;
+    minVramGb: number;
+    estimatedDownloadGb: number;
+    contextWindowTokens: number;
+    reason: string;
+    configuredModelId: string;
+    applied: boolean;
+    targetModules: string[];
+    trustRemoteCode: boolean;
+    cacheRoot: string;
+    summary: string;
+  };
+  installPlan: {
+    schema: string;
+    createdAt: string;
+    pythonCommand: string;
+    missingRequired: string[];
+    cachePlan: AdapterTrainingCachePlan;
+    commands: Array<{
+      id: string;
+      label: string;
+      required: boolean;
+      command: string[];
+      summary: string;
+    }>;
+    summary: string;
+  };
+  blockers: string[];
+  warnings: string[];
+  unlock: {
+    realTraining: boolean;
+    dryRun: boolean;
+    reason: string;
+  };
+  nextActions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    workspace: string;
+  }>;
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
+};
+
+export type AdapterDependencyInstallReceipt = {
+  schema: string;
+  receiptId: string;
+  adapterBuildId: string;
+  createdAt: string;
+  endedAt: string;
+  dryRun: boolean;
+  ok: boolean;
+  status: string;
+  summary: string;
+  cachePlan: AdapterTrainingCachePlan;
+  before: AdapterTrainingReadiness;
+  after: AdapterTrainingReadiness;
+  commands: Array<{
+    id: string;
+    label: string;
+    required: boolean;
+    command: string[];
+    summary: string;
+    status: string;
+    ok: boolean;
+    stdoutTail: string;
+    stderrTail: string;
+    error: string;
+  }>;
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
 };
 
 export type AdapterBuilderReceipt = {
@@ -511,6 +656,7 @@ export type AdapterBuilderReceipt = {
   adapter: {
     name: string;
     baseModel: string;
+    transformersModelId?: string;
     method: string;
     trained: boolean;
     dryRun: boolean;
@@ -546,6 +692,9 @@ export type AdapterBuilderReceipt = {
       targetModules: string[];
     };
     trainer: {
+      transformersModelId?: string;
+      recommendedTransformersModelId?: string;
+      transformersModelSource?: string;
       maxSteps: number;
       epochs: number;
       learningRate: number;
@@ -567,6 +716,7 @@ export type AdapterBuilderReceipt = {
     packageStatus: AdapterPackageStatus;
     blockedReasons: string[];
     recipe: Record<string, unknown>;
+    readiness?: AdapterTrainingReadiness;
     latestRunId?: string;
     latestRunStatus?: string;
     latestRunSummary?: string;
@@ -612,6 +762,8 @@ export type AdapterBuilderReceipt = {
     latestTrainingRunMarkdown?: string;
     latestTrainingRunLog?: string;
     latestTrainingCheckpointDir?: string;
+    latestReadinessJson?: string;
+    latestReadinessMarkdown?: string;
     latestPromotionReceiptJson?: string;
     latestPromotionReceiptMarkdown?: string;
     promotedModelfile?: string;
@@ -662,6 +814,7 @@ export type AdapterTrainingRun = {
   };
   checkpointDir: string;
   checkpoint: AdapterCheckpointDetection;
+  readiness?: AdapterTrainingReadiness | null;
   receipt: {
     name: string;
     ok: boolean;
@@ -1626,6 +1779,7 @@ export type ProjectPayload = {
   latestBuilderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   latestTrainingRoutePlan?: TrainingRoutePlan | null;
   latestAdapterBuild?: AdapterBuilderReceipt | null;
+  latestAdapterReadiness?: AdapterTrainingReadiness | null;
   latestAdapterTrainingRun?: AdapterTrainingRun | null;
   latestAdapterPromotion?: AdapterPromotionReceipt | null;
   adapterTrainingRunHistory?: AdapterTrainingRun[];

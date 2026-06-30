@@ -1,6 +1,8 @@
 import type {
   AdapterBuilderReceipt,
+  AdapterDependencyInstallReceipt,
   AdapterPromotionReceipt,
+  AdapterTrainingReadiness,
   AdapterTrainingRun,
   BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
@@ -146,6 +148,41 @@ export function buildBuilderAdapter(planId?: string, runTraining = false) {
   }>("/api/builder/adapter/build", {
     method: "POST",
     body: JSON.stringify({ planId, runTraining, allowLongRun: false })
+  });
+}
+
+export function checkAdapterTrainingReadiness(adapterBuildId?: string) {
+  return requestJson<{
+    ok: boolean;
+    readiness: AdapterTrainingReadiness;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/readiness/check", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId })
+  });
+}
+
+export function installAdapterTrainingDependencies(adapterBuildId?: string, dryRun = false) {
+  return requestJson<{
+    ok: boolean;
+    receipt: AdapterDependencyInstallReceipt;
+    readiness: AdapterTrainingReadiness;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/readiness/install", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, dryRun })
+  });
+}
+
+export function applyRecommendedAdapterBaseModel(adapterBuildId?: string, modelId?: string) {
+  return requestJson<{
+    ok: boolean;
+    receipt: AdapterBuilderReceipt;
+    readiness: AdapterTrainingReadiness;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/readiness/apply-base-model", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, modelId })
   });
 }
 

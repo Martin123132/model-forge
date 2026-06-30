@@ -77,7 +77,9 @@ async function main() {
   const latestBuilderAiCreateReceipt = project.latestBuilderAiCreateReceipt || null;
   const trainingRoutePlan = project.latestBuildPlan?.trainingRoutePlan || project.latestTrainingRoutePlan || null;
   let latestAdapterBuild = project.latestAdapterBuild || null;
+  let latestAdapterReadiness = project.latestAdapterReadiness || null;
   let latestAdapterTrainingRun = project.latestAdapterTrainingRun || null;
+  let adapterDepsDryRun = null;
   const builderStages = latestBuilderRun?.stages || [];
   const planScope = project.latestBuildPlan?.request?.sourceScope || "";
   const scopePreviewOptions = project.latestBuildPlan?.sourceScopePreview?.options || [];
@@ -97,6 +99,14 @@ async function main() {
   );
   const evalFresh = Boolean(evalReport && project.latestProof?.path && evalReport.proofPath === project.latestProof.path && proofFresh);
   if (latestAdapterBuild?.adapterBuildId) {
+    const readinessResponse = await postJson("/api/builder/adapter/readiness/check", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId
+    });
+    latestAdapterReadiness = readinessResponse.readiness || latestAdapterReadiness;
+    adapterDepsDryRun = await postJson("/api/builder/adapter/readiness/install", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      dryRun: true
+    });
     const started = await postJson("/api/builder/adapter/training/run", {
       adapterBuildId: latestAdapterBuild.adapterBuildId,
       runTraining: false,
@@ -111,6 +121,7 @@ async function main() {
     const [refreshedProject, refreshedModelLibraryResponse] = await Promise.all([getJson("/api/project"), getJson("/api/models/library")]);
     project = refreshedProject;
     latestAdapterBuild = project.latestAdapterBuild || latestAdapterBuild;
+    latestAdapterReadiness = project.latestAdapterReadiness || latestAdapterReadiness;
     latestAdapterTrainingRun = project.latestAdapterTrainingRun || latestAdapterTrainingRun;
     modelLibrary = refreshedModelLibraryResponse.library || modelLibrary;
   }
@@ -309,6 +320,37 @@ async function main() {
         : "no Adapter Builder receipt"
     ),
     check(
+      "Adapter training readiness receipt",
+      Boolean(
+        latestAdapterReadiness?.schema === "modelforge.adapter_training_readiness.v1" &&
+          latestAdapterReadiness.adapterBuildId === latestAdapterBuild?.adapterBuildId &&
+          latestAdapterReadiness.packageStatus?.schema === "modelforge.adapter_package_status.v1" &&
+          latestAdapterReadiness.cachePlan?.root &&
+          (process.platform !== "win32" || !existsSync("D:\\") || latestAdapterReadiness.cachePlan.onPreferredDrive === true) &&
+          latestAdapterReadiness.recommendedBaseModel?.modelId?.includes("/") &&
+          typeof latestAdapterReadiness.unlock?.realTraining === "boolean" &&
+          latestAdapterReadiness.files?.latestJson &&
+          existsSync(latestAdapterReadiness.files.latestJson)
+      ),
+      latestAdapterReadiness
+        ? `${latestAdapterReadiness.status}: base=${latestAdapterReadiness.recommendedBaseModel?.modelId || "none"}; cache=${latestAdapterReadiness.cachePlan?.root || "none"}; real=${latestAdapterReadiness.unlock?.realTraining}`
+        : "no Adapter Training Readiness receipt"
+    ),
+    check(
+      "Adapter dependency installer dry-run",
+      Boolean(
+        adapterDepsDryRun?.receipt?.schema === "modelforge.adapter_dependency_install_receipt.v1" &&
+          adapterDepsDryRun.receipt.dryRun === true &&
+          adapterDepsDryRun.receipt.commands?.some((item) => item.id === "torch" && item.status === "dry-run") &&
+          adapterDepsDryRun.receipt.commands?.some((item) => item.id === "adapter-core" && item.command?.join(" ").includes("transformers")) &&
+          adapterDepsDryRun.receipt.files?.latestJson &&
+          existsSync(adapterDepsDryRun.receipt.files.latestJson)
+      ),
+      adapterDepsDryRun?.receipt
+        ? `${adapterDepsDryRun.receipt.status}: ${adapterDepsDryRun.receipt.commands?.length || 0} commands; cache=${adapterDepsDryRun.receipt.cachePlan?.root || "none"}`
+        : "no dependency installer dry-run receipt"
+    ),
+    check(
       "Adapter Training Run receipt",
       Boolean(
         latestAdapterTrainingRun?.schema === "modelforge.adapter_training_run.v1" &&
@@ -319,6 +361,7 @@ async function main() {
           existsSync(latestAdapterTrainingRun.files.latestJson) &&
           latestAdapterTrainingRun.files?.trainingReceiptJson &&
           existsSync(latestAdapterTrainingRun.files.trainingReceiptJson) &&
+          latestAdapterTrainingRun.readiness?.schema === "modelforge.adapter_training_readiness.v1" &&
           latestAdapterTrainingRun.checkpoint?.dryRun === true &&
           latestAdapterTrainingRun.checkpoint?.trained === false
       ),
@@ -400,8 +443,9 @@ async function main() {
     check(
       "Your AIs adapter item",
       Boolean(
-        adapterLibraryItem?.kind === "adapter" &&
+          adapterLibraryItem?.kind === "adapter" &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Adapter receipt" && receipt.exists) &&
+          adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Readiness receipt" && receipt.exists) &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-run-adapter-training" && action.kind === "builder-adapter-run") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-promote-adapter" && action.kind === "builder-adapter-promote")

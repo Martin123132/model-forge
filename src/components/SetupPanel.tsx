@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Archive, CheckCircle2, Database, Download, FolderCog, FolderPlus, HardDrive, LoaderCircle, Play, RefreshCw, RotateCcw, Save, TerminalSquare, Trash2, Wrench } from "lucide-react";
-import type { OllamaStatus, ProjectPayload, ProjectRegistry, ProjectRegistryEntry, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
+import type { AdapterTrainingReadiness, OllamaStatus, ProjectPayload, ProjectRegistry, ProjectRegistryEntry, SetupCheck, SetupConfig, SetupDoctorAction, SetupDoctorCheck, SetupState } from "../lib/types";
 import { diagnosticsDownloadUrl } from "../lib/api";
 import { StatusPill } from "./StatusPill";
 
@@ -13,10 +13,15 @@ type SetupPanelProps = {
   running: boolean;
   doctorActionBusy: string;
   projectBusy: boolean;
+  adapterReadiness?: AdapterTrainingReadiness | null;
+  adapterReadinessBusy: boolean;
+  adapterDepsBusy: boolean;
   onRefresh: () => void;
   onSave: (config: SetupConfig) => void;
   onRun: (config: SetupConfig, createModel: boolean) => void;
   onDoctorAction: (action: SetupDoctorAction) => void;
+  onCheckAdapterReadiness: () => void;
+  onInstallAdapterDeps: () => void;
   onCreateProject: (request: { name: string; sourceRoot: string; dataRoot?: string; targetModel?: string; baseModel?: string; ollamaModels?: string; pythonCommand?: string; sourceIncludes?: string; sourceExcludes?: string }) => void;
   onSelectProject: (projectId: string) => void;
   onArchiveProject: (projectId: string) => void;
@@ -51,6 +56,13 @@ function doctorStatusTone(status = "") {
   if (status === "ready") return "pass";
   if (status === "blocked") return "fail";
   return "warn";
+}
+
+function adapterReadinessTone(status = "") {
+  if (status === "ready") return "pass";
+  if (status === "blocked") return "fail";
+  if (status) return "warn";
+  return "neutral";
 }
 
 function DoctorCheckRow({ check }: { check: SetupDoctorCheck }) {
@@ -100,10 +112,15 @@ export function SetupPanel({
   running,
   doctorActionBusy,
   projectBusy,
+  adapterReadiness,
+  adapterReadinessBusy,
+  adapterDepsBusy,
   onRefresh,
   onSave,
   onRun,
   onDoctorAction,
+  onCheckAdapterReadiness,
+  onInstallAdapterDeps,
   onCreateProject,
   onSelectProject,
   onArchiveProject,
@@ -139,6 +156,7 @@ export function SetupPanel({
   const evalFresh = setup?.summary.evalFresh;
   const recipeReady = setup?.summary.recipeReady;
   const doctor = setup?.doctor;
+  const trainerReadiness = adapterReadiness || project?.latestAdapterReadiness || null;
   const activeProject = useMemo(() => projects.find((item) => item.active) || projects.find((item) => item.id === projectRegistry?.activeProjectId) || null, [projectRegistry?.activeProjectId, projects]);
 
   function updateConfig(key: keyof SetupConfig, value: string) {
@@ -287,6 +305,53 @@ export function SetupPanel({
           </div>
         </section>
       ) : null}
+
+      <section className="adapter-readiness-card" aria-labelledby="adapter-readiness-title">
+        <div className="adapter-readiness-heading">
+          <div>
+            <span>Adapter trainer</span>
+            <h3 id="adapter-readiness-title">Training readiness</h3>
+            <p>{trainerReadiness?.summary || "Check Python, CUDA, package imports, D-drive caches, and the recommended Transformers base model before real LoRA/QLoRA runs."}</p>
+          </div>
+          <StatusPill status={adapterReadinessTone(trainerReadiness?.status)} label={trainerReadiness?.status || "Not checked"} />
+        </div>
+        <div className="adapter-readiness-facts">
+          <span>
+            <strong>Python</strong>
+            <em>{trainerReadiness?.python.version || setup?.config.pythonCommand || "Not checked"}</em>
+          </span>
+          <span>
+            <strong>Packages</strong>
+            <em>{trainerReadiness?.packageStatus.ok ? "ready" : trainerReadiness?.packageStatus.missingRequired?.join(", ") || "not checked"}</em>
+          </span>
+          <span>
+            <strong>CUDA</strong>
+            <em>{trainerReadiness?.cuda.available ? `${trainerReadiness.cuda.deviceCount} device` : trainerReadiness ? "not ready" : "not checked"}</em>
+          </span>
+          <span>
+            <strong>Cache</strong>
+            <em title={trainerReadiness?.cachePlan.root || ""}>{compactPath(trainerReadiness?.cachePlan.root || "")}</em>
+          </span>
+          <span>
+            <strong>Base</strong>
+            <em title={trainerReadiness?.recommendedBaseModel.modelId || ""}>{trainerReadiness?.recommendedBaseModel.applied ? "applied" : trainerReadiness?.recommendedBaseModel.label || "not chosen"}</em>
+          </span>
+          <span>
+            <strong>Real train</strong>
+            <em>{trainerReadiness?.unlock.realTraining ? "unlocked" : "locked"}</em>
+          </span>
+        </div>
+        <div className="adapter-readiness-actions">
+          <button className="plain-button small" type="button" disabled={adapterReadinessBusy} onClick={onCheckAdapterReadiness}>
+            {adapterReadinessBusy ? <LoaderCircle className="spin-icon" size={14} /> : <RefreshCw size={14} />}
+            <span>{adapterReadinessBusy ? "Checking" : "Check trainer"}</span>
+          </button>
+          <button className="plain-button small" type="button" disabled={adapterDepsBusy} onClick={onInstallAdapterDeps}>
+            {adapterDepsBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Download size={14} />}
+            <span>{adapterDepsBusy ? "Installing" : "Install deps"}</span>
+          </button>
+        </div>
+      </section>
 
       <section className="project-manager" aria-labelledby="project-manager-title">
         <div className="project-manager-heading">
