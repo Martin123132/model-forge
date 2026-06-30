@@ -2230,6 +2230,193 @@ h2 {
   -webkit-line-clamp: 6;
 }
 
+.training-route-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid #d6e3f3;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.training-route-card > p {
+  margin: 0;
+  color: #3d4e66;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.training-route-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.training-route-option {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  min-height: 86px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.training-route-option.is-selected {
+  border-color: #9fc5ff;
+  background: #f5f9ff;
+}
+
+.training-route-option > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+}
+
+.training-route-option strong,
+.training-route-option span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.training-route-option strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 840;
+  white-space: nowrap;
+}
+
+.training-route-option span {
+  display: -webkit-box;
+  color: #52647c;
+  font-size: 10px;
+  font-weight: 620;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.training-route-detail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.training-route-detail div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.training-route-detail strong {
+  color: #172236;
+  font-size: 10px;
+  font-weight: 840;
+  text-transform: uppercase;
+}
+
+.training-route-detail span {
+  overflow: hidden;
+  color: #4b5b73;
+  font-size: 10px;
+  font-weight: 630;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-builder-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.adapter-builder-card.dry-run {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.adapter-builder-card.trained,
+.adapter-builder-card.ready {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.adapter-builder-card > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.adapter-builder-card > div:first-child strong {
+  overflow: hidden;
+  color: #172236;
+  font-size: 12px;
+  font-weight: 840;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-builder-card > div:first-child span {
+  color: #3d4e66;
+  font-size: 11px;
+  font-weight: 630;
+  line-height: 1.4;
+}
+
+.adapter-builder-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.adapter-builder-facts span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.adapter-builder-facts strong,
+.adapter-builder-facts em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-builder-facts strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.adapter-builder-facts em {
+  color: #172236;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+}
+
 .fit-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7134,6 +7321,9 @@ h2 {
   .blueprint-capability-grid,
   .builder-identity-card,
   .hardware-recipe-grid,
+  .training-route-grid,
+  .training-route-detail,
+  .adapter-builder-facts,
   .hardware-apply-facts,
   .hardware-apply-actions,
   .hardware-test-facts,
@@ -7199,6 +7389,12 @@ h2 {
   .hardware-test-facts strong,
   .hardware-test-facts em,
   .hardware-test-checks em,
+  .training-route-option strong,
+  .training-route-option span,
+  .training-route-detail span,
+  .adapter-builder-card > div:first-child strong,
+  .adapter-builder-facts strong,
+  .adapter-builder-facts em,
   .builder-run-stage strong,
   .builder-run-stage em,
   .builder-run-output em,

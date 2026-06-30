@@ -37,7 +37,7 @@ async function main() {
     check("Changelog v1", changelog.includes("## 1.0.0"), "CHANGELOG.md"),
     check("Getting started guide", /Start-ModelForge\.cmd/.test(gettingStarted) && /5 minutes/i.test(gettingStarted), "docs/GETTING_STARTED_5_MINUTES.md"),
     check("Privacy statement", /local-first/i.test(privacy) && /diagnostics/i.test(privacy) && /exports/i.test(privacy), "docs/PRIVACY_LOCAL_FIRST.md"),
-    check("Known limitations", /LoRA\/QLoRA/i.test(limitations) && /not a foundation\s+model/i.test(limitations), "docs/KNOWN_LIMITATIONS.md"),
+    check("Known limitations", /LoRA\/QLoRA/i.test(limitations) && /not a foundation\s+model/i.test(limitations) && /tiny from-scratch/i.test(limitations), "docs/KNOWN_LIMITATIONS.md"),
     check("README release links", readme.includes("docs/GETTING_STARTED_5_MINUTES.md") && readme.includes("npm.cmd run release:zip"), "README.md"),
     check("README first-run QA", readme.includes("npm.cmd run qa:first-run"), "README.md"),
     check("README AI build contract", /AI build contract/i.test(readme) && /what counts as done/i.test(readme), "README.md"),
@@ -45,7 +45,9 @@ async function main() {
     check("README hardware recipe", /hardware fit recipe/i.test(readme) && /quantization/i.test(readme) && /context window/i.test(readme), "README.md"),
     check("README apply recipe", /Apply Hardware Recipe/i.test(readme) && /guided source-backed test prompt/i.test(readme), "README.md"),
     check("README guided test receipt", /Guided Builder Test Receipt/i.test(readme) && /pass\/warn\/fail/i.test(readme), "README.md"),
-    check("README create/update AI", /Create\/Update AI/i.test(readme) && /Your AIs/i.test(readme) && /Rebuild AI/i.test(readme), "README.md")
+    check("README create/update AI", /Create\/Update AI/i.test(readme) && /Your AIs/i.test(readme) && /Rebuild AI/i.test(readme), "README.md"),
+    check("README training route planner", /Training Route Planner/i.test(readme) && /continued pretraining/i.test(readme) && /tiny from-scratch/i.test(readme), "README.md"),
+    check("README adapter builder", /Adapter Builder/i.test(readme) && /LoRA\/QLoRA config/i.test(readme) && /Prepare Adapter/i.test(readme), "README.md")
   ];
 
   const latestPath = join(releaseRoot, "latest.json");

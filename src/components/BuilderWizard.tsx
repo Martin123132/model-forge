@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
+  AdapterBuilderReceipt,
   BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
@@ -52,12 +53,14 @@ type BuilderWizardProps = {
   appliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
   guidedBuilderTest?: BuilderGuidedTestReceipt | null;
   builderAiCreateReceipt?: BuilderAiCreateReceipt | null;
+  adapterBuild?: AdapterBuilderReceipt | null;
   builderRun?: BuilderRun | null;
   builderRunHistory?: BuilderRun[];
   busy: boolean;
   builderRunBusy: boolean;
   applyRecipeBusy: boolean;
   createAiBusy: boolean;
+  adapterBusy: boolean;
   chatBusy: boolean;
   hardwareBusy: boolean;
   datasetBusy: boolean;
@@ -65,6 +68,7 @@ type BuilderWizardProps = {
   onBuildPlan: (request: BuilderPlanRequest) => void;
   onApplyHardwareRecipe: () => void;
   onCreateOrUpdateAi: () => void;
+  onBuildAdapter: () => void;
   onRunGuidedTest: (prompt: string, modelName: string) => void;
   onStartBuild: () => void;
   onCancelBuild: (runId: string) => void;
@@ -469,6 +473,29 @@ function createReceiptTone(status?: string): "pass" | "warn" | "fail" | "neutral
   if (status === "created" || status === "updated" || status === "ready") return "pass";
   if (status === "blocked" || status === "failed") return "fail";
   if (status === "review") return "warn";
+  return "neutral";
+}
+
+function trainingRouteTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "recommended" || status === "possible") return "pass";
+  if (status === "stretch") return "warn";
+  if (status === "blocked" || status === "avoid") return "fail";
+  return "neutral";
+}
+
+function trainingRouteLabel(status?: string) {
+  if (status === "recommended") return "Recommended";
+  if (status === "possible") return "Possible";
+  if (status === "stretch") return "Stretch";
+  if (status === "blocked") return "Blocked";
+  if (status === "avoid") return "Avoid";
+  return status || "Draft";
+}
+
+function adapterReceiptTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "trained" || status === "ready") return "pass";
+  if (status === "dry-run") return "warn";
+  if (status === "blocked" || status === "failed") return "fail";
   return "neutral";
 }
 
@@ -915,12 +942,14 @@ export function BuilderWizard({
   appliedHardwareRecipe,
   guidedBuilderTest,
   builderAiCreateReceipt,
+  adapterBuild,
   builderRun,
   builderRunHistory = [],
   busy,
   builderRunBusy,
   applyRecipeBusy,
   createAiBusy,
+  adapterBusy,
   chatBusy,
   hardwareBusy,
   datasetBusy,
@@ -928,6 +957,7 @@ export function BuilderWizard({
   onBuildPlan,
   onApplyHardwareRecipe,
   onCreateOrUpdateAi,
+  onBuildAdapter,
   onRunGuidedTest,
   onStartBuild,
   onCancelBuild,
@@ -1066,6 +1096,16 @@ export function BuilderWizard({
   const createReceiptStatus = createReceipt?.ok && createReceipt.readiness?.installed ? "Ready" : createReceipt ? createReceipt.readiness?.label || createReceipt.status : "Not installed";
   const createReceiptSummary = createReceipt?.summary || "Create the Ollama target from the applied hardware recipe.";
   const createActionLabel = createAiBusy ? "Creating" : createReceipt?.ok ? "Update AI" : "Create AI";
+  const trainingRoutePlan = planMatchesForm ? plan?.trainingRoutePlan || null : null;
+  const trainingRouteOptions = trainingRoutePlan?.routes || [];
+  const selectedTrainingRoute =
+    trainingRouteOptions.find((route) => route.id === trainingRoutePlan?.selectedRouteId) ||
+    trainingRouteOptions[0] ||
+    null;
+  const adapterReceiptMatchesPlan = Boolean(planMatchesForm && plan?.planId && adapterBuild?.planId === plan.planId);
+  const adapterReceipt = adapterReceiptMatchesPlan ? adapterBuild : null;
+  const adapterReceiptPath = adapterReceipt?.files.receiptJson || adapterReceipt?.files.historyReceiptJson || "";
+  const adapterActionLabel = adapterBusy ? "Preparing" : adapterReceipt ? "Rebuild Adapter" : "Prepare Adapter";
   const aiProfile = useMemo(
     () =>
       (planMatchesForm && plan?.aiProfile) ||
@@ -1757,6 +1797,93 @@ export function BuilderWizard({
                   <blockquote>{guidedReceipt.answer.content || "No model answer was captured."}</blockquote>
                 </div>
               ) : null}
+            </div>
+          </div>
+
+          <div className="training-route-card" aria-label="Training route planner">
+            <div className="builder-route-heading">
+              <div>
+                <span>{trainingRoutePlan ? formatStamp(trainingRoutePlan.createdAt) : "Draft"}</span>
+                <h2>Training route planner</h2>
+              </div>
+              <StatusPill status={trainingRouteTone(selectedTrainingRoute?.status)} label={trainingRouteLabel(selectedTrainingRoute?.status)} />
+            </div>
+            <p>
+              {selectedTrainingRoute
+                ? trainingRoutePlan?.summary || selectedTrainingRoute.fit
+                : "Create a build plan to classify the request into Profile, RAG, adapter, continued pretraining, or tiny from-scratch routes."}
+            </p>
+            {trainingRouteOptions.length ? (
+              <div className="training-route-grid">
+                {trainingRouteOptions.map((route) => (
+                  <div className={`training-route-option ${route.id === selectedTrainingRoute?.id ? "is-selected" : ""}`} key={route.id}>
+                    <div>
+                      <strong>{route.label}</strong>
+                      <StatusPill status={trainingRouteTone(route.status)} label={trainingRouteLabel(route.status)} />
+                    </div>
+                    <span>{route.fit}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {selectedTrainingRoute ? (
+              <div className="training-route-detail">
+                <div>
+                  <strong>Requirements</strong>
+                  {selectedTrainingRoute.requirements.slice(0, 4).map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+                <div>
+                  <strong>Risks</strong>
+                  {selectedTrainingRoute.risks.slice(0, 4).map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+                <div>
+                  <strong>Outputs</strong>
+                  {selectedTrainingRoute.expectedOutputs.slice(0, 4).map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className={`adapter-builder-card ${adapterReceipt?.status || "pending"}`}>
+              <div>
+                <strong>{adapterReceipt ? adapterReceipt.adapter.name : "Adapter Builder"}</strong>
+                <span>
+                  {adapterReceipt
+                    ? adapterReceipt.summary
+                    : selectedTrainingRoute?.id === "lora-qlora-adapter"
+                      ? "Generate the LoRA/QLoRA dataset copy, config, runner recipe, checkpoint folder, and receipt."
+                      : "Adapter prep is available when you want to test the fine-tune route without overclaiming training."}
+                </span>
+              </div>
+              <StatusPill status={adapterReceiptTone(adapterReceipt?.status)} label={adapterReceipt?.status || "Not built"} />
+              {adapterReceipt ? (
+                <div className="adapter-builder-facts">
+                  <span>
+                    <strong>Examples</strong>
+                    <em>{adapterReceipt.dataset.examples.toLocaleString()}</em>
+                  </span>
+                  <span>
+                    <strong>Method</strong>
+                    <em>{adapterReceipt.adapter.method.toUpperCase()}</em>
+                  </span>
+                  <span>
+                    <strong>Mode</strong>
+                    <em>{adapterReceipt.runner.executionMode}</em>
+                  </span>
+                  <span>
+                    <strong>Receipt</strong>
+                    <em title={adapterReceiptPath}>{compactPath(adapterReceiptPath)}</em>
+                  </span>
+                </div>
+              ) : null}
+              <button className="primary-action compact" type="button" onClick={onBuildAdapter} disabled={!planMatchesForm || !plan || adapterBusy}>
+                {adapterBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Hammer size={15} />}
+                <span>{adapterActionLabel}</span>
+              </button>
             </div>
           </div>
 

@@ -71,6 +71,8 @@ async function main() {
   const latestPackRun = project.latestRecipeRun || null;
   const latestBuilderRun = project.latestBuilderRun || null;
   const latestBuilderAiCreateReceipt = project.latestBuilderAiCreateReceipt || null;
+  const trainingRoutePlan = project.latestBuildPlan?.trainingRoutePlan || project.latestTrainingRoutePlan || null;
+  const latestAdapterBuild = project.latestAdapterBuild || null;
   const builderStages = latestBuilderRun?.stages || [];
   const planScope = project.latestBuildPlan?.request?.sourceScope || "";
   const scopePreviewOptions = project.latestBuildPlan?.sourceScopePreview?.options || [];
@@ -90,6 +92,7 @@ async function main() {
   );
   const evalFresh = Boolean(evalReport && project.latestProof?.path && evalReport.proofPath === project.latestProof.path && proofFresh);
   const forgedLibraryItem = modelLibrary?.items?.find((item) => item.kind === "forged") || null;
+  const adapterLibraryItem = modelLibrary?.items?.find((item) => item.kind === "adapter") || null;
 
   const checks = [
     check("Project API", project.name && project.status, `${project.name || "unknown"} / ${project.status || "unknown"}`),
@@ -187,6 +190,21 @@ async function main() {
         : "no hardware recipe"
     ),
     check(
+      "Training route planner",
+      Boolean(
+        trainingRoutePlan?.schema === "modelforge.training_route_plan.v1" &&
+          trainingRoutePlan.selectedRouteId &&
+          trainingRoutePlan.routes?.length === 5 &&
+          ["profile", "rag", "lora-qlora-adapter", "continued-pretraining", "tiny-from-scratch"].every((id) => trainingRoutePlan.routes.some((route) => route.id === id)) &&
+          trainingRoutePlan.routes.every((route) => route.requirements?.length && route.risks?.length && route.expectedOutputs?.length && route.nextReceipts?.length) &&
+          project.latestBuildPlan?.files?.trainingRouteJson &&
+          existsSync(project.latestBuildPlan.files.trainingRouteJson)
+      ),
+      trainingRoutePlan
+        ? `${trainingRoutePlan.selectedRouteLabel}: ${trainingRoutePlan.selectedStatus}; ${trainingRoutePlan.routes?.length || 0} routes`
+        : "no training route plan"
+    ),
+    check(
       "Applied hardware recipe",
       Boolean(
         project.latestAppliedHardwareRecipe?.schema === "modelforge.applied_hardware_recipe.v1" &&
@@ -241,6 +259,28 @@ async function main() {
       latestBuilderAiCreateReceipt
         ? `${latestBuilderAiCreateReceipt.status}: ${latestBuilderAiCreateReceipt.modelName}; installed=${latestBuilderAiCreateReceipt.model?.installedAfter ? "yes" : "no"}`
         : "no Builder create/update receipt"
+    ),
+    check(
+      "Adapter Builder receipt",
+      Boolean(
+        latestAdapterBuild?.schema === "modelforge.adapter_builder_receipt.v1" &&
+          ["dry-run", "ready", "trained"].includes(String(latestAdapterBuild.status || "").toLowerCase()) &&
+          latestAdapterBuild.planId === project.latestBuildPlan?.planId &&
+          latestAdapterBuild.dataset?.examples > 0 &&
+          latestAdapterBuild.files?.trainingDatasetJsonl &&
+          existsSync(latestAdapterBuild.files.trainingDatasetJsonl) &&
+          latestAdapterBuild.files?.trainingConfigJson &&
+          existsSync(latestAdapterBuild.files.trainingConfigJson) &&
+          latestAdapterBuild.files?.runnerRecipeJson &&
+          existsSync(latestAdapterBuild.files.runnerRecipeJson) &&
+          latestAdapterBuild.files?.receiptJson &&
+          existsSync(latestAdapterBuild.files.receiptJson) &&
+          latestAdapterBuild.adapter?.manifestPath &&
+          existsSync(latestAdapterBuild.adapter.manifestPath)
+      ),
+      latestAdapterBuild
+        ? `${latestAdapterBuild.status}: ${latestAdapterBuild.adapter?.name || "adapter"}; examples=${latestAdapterBuild.dataset?.examples || 0}; mode=${latestAdapterBuild.runner?.executionMode || "unknown"}`
+        : "no Adapter Builder receipt"
     ),
     check(
       "Builder blueprint",
@@ -312,6 +352,17 @@ async function main() {
       forgedLibraryItem
         ? `${forgedLibraryItem.name}: ${(forgedLibraryItem.actions || []).map((action) => action.id).join(", ") || "no actions"}`
         : "no forged library item"
+    ),
+    check(
+      "Your AIs adapter item",
+      Boolean(
+        adapterLibraryItem?.kind === "adapter" &&
+          adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Adapter receipt" && receipt.exists) &&
+          adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter")
+      ),
+      adapterLibraryItem
+        ? `${adapterLibraryItem.name}: ${adapterLibraryItem.statusLabel}; ${(adapterLibraryItem.actions || []).map((action) => action.id).join(", ") || "no actions"}`
+        : "no adapter library item"
     ),
     check(
       "Compare playground contract",

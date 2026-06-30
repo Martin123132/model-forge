@@ -1,5 +1,6 @@
 import type {
   BuilderAiCreateReceipt,
+  AdapterBuilderReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
   BuilderPlan,
@@ -130,6 +131,19 @@ export function createOrUpdateBuilderAi(planId?: string, modelName?: string) {
   }>("/api/builder/ai/create-update", {
     method: "POST",
     body: JSON.stringify({ planId, modelName })
+  });
+}
+
+export function buildBuilderAdapter(planId?: string, runTraining = false) {
+  return requestJson<{
+    ok: boolean;
+    receipt: AdapterBuilderReceipt;
+    dataset: DatasetForge;
+    plan: BuilderPlan;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/build", {
+    method: "POST",
+    body: JSON.stringify({ planId, runTraining, allowLongRun: false })
   });
 }
 

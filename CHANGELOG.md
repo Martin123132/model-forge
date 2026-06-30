@@ -24,6 +24,13 @@ forge cockpit.
 - Added Builder Create/Update AI receipts so the applied hardware recipe can
   create or refresh the Ollama target, mark it installed/ready in Builder, and
   register it in Your AIs with Rebuild AI and Retest AI actions.
+- Added the Training Route Planner so Builder classifies requests into Profile,
+  RAG/source-backed, LoRA/QLoRA adapter, continued pretraining, or tiny
+  from-scratch routes with requirements, risks, outputs, and next receipts.
+- Added the first Adapter Builder flow so Builder generates a source-scoped
+  training dataset, writes a LoRA/QLoRA config, prepares a runner recipe,
+  creates checkpoint/adapter folders, writes a receipt, and registers the
+  adapter pack in Your AIs.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,

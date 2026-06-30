@@ -9,8 +9,11 @@ model trainer.
 - ModelForge does not train a new foundation model from scratch.
 - Ollama profile creation and export-pack recreation are the supported local
   execution path.
-- LoRA/QLoRA is marked as an experimental runner route until a full local
-  adapter-training runner is wired, tested, and documented.
+- The Training Route Planner may classify tiny from-scratch experiments, but
+  those are educational lab routes, not general foundation-model claims.
+- Adapter Builder prepares LoRA/QLoRA datasets, configs, runner recipes,
+  checkpoint folders, manifests, and receipts. It dry-runs by default unless
+  hardware, Python ML dependencies, and explicit long-run approval are present.
 - Hardware fit estimates are guidance, not a promise that every base model,
   context length, quantization, or adapter setting will fit.
 

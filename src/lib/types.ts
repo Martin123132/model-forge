@@ -331,6 +331,57 @@ export type BuilderHardwareRecipe = {
   nextSteps: string[];
 };
 
+export type TrainingRouteStatus = "recommended" | "possible" | "stretch" | "blocked" | "avoid" | string;
+
+export type TrainingRouteOption = {
+  id: string;
+  label: string;
+  status: TrainingRouteStatus;
+  statusLabel: string;
+  fit: string;
+  why: string;
+  localExecution: string;
+  estimatedTime: string;
+  estimatedDisk: string;
+  runner: string;
+  requirements: string[];
+  risks: string[];
+  expectedOutputs: string[];
+  nextReceipts: string[];
+  blockedReasons?: string[];
+};
+
+export type TrainingRoutePlan = {
+  schema: string;
+  routePlanId: string;
+  createdAt: string;
+  selectedRouteId: string;
+  selectedRouteLabel: string;
+  selectedStatus: TrainingRouteStatus;
+  summary: string;
+  recommendation: string;
+  hardwareSignals: {
+    summary: string;
+    tier: string;
+    canTrainAdapter: boolean;
+    canRunQuantized: boolean;
+    memoryGb: number;
+    vramGb: number;
+    ollamaReady: boolean;
+  };
+  dataSignals: {
+    sourceScope: SourceScopeOption;
+    sourceFiles: number;
+    datasetCandidates: number;
+    datasetReady: boolean;
+    knowledgePackReady: boolean;
+    summary: string;
+  };
+  intentSignals: Record<string, boolean>;
+  baseModel: string;
+  routes: TrainingRouteOption[];
+};
+
 export type BuilderAppliedHardwareRecipe = {
   schema: string;
   receiptId: string;
@@ -428,6 +479,130 @@ export type BuilderGuidedTestReceipt = {
   };
 };
 
+export type AdapterPackageStatus = {
+  schema: string;
+  ok: boolean;
+  pythonCommand: string;
+  python: string;
+  commandOk: boolean;
+  packages: Record<string, { ok: boolean; required: boolean }>;
+  required: string[];
+  optional: string[];
+  missingRequired: string[];
+  summary: string;
+};
+
+export type AdapterBuilderReceipt = {
+  schema: string;
+  adapterBuildId: string;
+  createdAt: string;
+  planId: string;
+  routePlanId: string;
+  ok: boolean;
+  status: "dry-run" | "ready" | "trained" | "blocked" | string;
+  summary: string;
+  aiName: string;
+  trainingRoute?: {
+    id: string;
+    label: string;
+    status: string;
+    fit: string;
+  } | null;
+  adapter: {
+    name: string;
+    baseModel: string;
+    method: string;
+    trained: boolean;
+    dryRun: boolean;
+    checkpointDir: string;
+    manifestPath: string;
+    outputDir: string;
+  };
+  dataset: {
+    datasetId: string;
+    examples: number;
+    estimatedTokens: number;
+    sourceJsonl: string;
+    adapterJsonl: string;
+    manifest: string;
+    sourceScope?: SourceScopeOption | null;
+    splits: {
+      train: number;
+      validation: number;
+    };
+  };
+  config: {
+    schema: string;
+    method: string;
+    adapterName: string;
+    baseModel: string;
+    outputDir: string;
+    checkpointDir: string;
+    dataset: Record<string, unknown>;
+    lora: {
+      r: number;
+      alpha: number;
+      dropout: number;
+      targetModules: string[];
+    };
+    trainer: {
+      maxSteps: number;
+      epochs: number;
+      learningRate: number;
+      microBatchSize: number;
+      gradientAccumulation: number;
+      cutoffLen: number;
+      warmupRatio: number;
+      precision: string;
+      saveSteps: number;
+      evalSteps: number;
+    };
+    hardware: Record<string, unknown>;
+    guardrails: string[];
+    files?: Record<string, string>;
+  };
+  runner: {
+    executionMode: string;
+    canTrainNow: boolean;
+    packageStatus: AdapterPackageStatus;
+    blockedReasons: string[];
+    recipe: Record<string, unknown>;
+  };
+  outputs: Array<{
+    label: string;
+    detail: string;
+    path: string;
+  }>;
+  nextActions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    workspace: string;
+  }>;
+  files: {
+    latestDir: string;
+    historyDir: string;
+    trainingDatasetJsonl: string;
+    trainingDatasetManifest: string;
+    trainingConfigJson: string;
+    runnerRecipeJson: string;
+    runnerRecipeMarkdown: string;
+    adapterManifestJson: string;
+    receiptJson: string;
+    receiptMarkdown: string;
+    checkpointDir: string;
+    historyTrainingDatasetJsonl: string;
+    historyTrainingDatasetManifest: string;
+    historyTrainingConfigJson: string;
+    historyRunnerRecipeJson: string;
+    historyRunnerRecipeMarkdown: string;
+    historyAdapterManifestJson: string;
+    historyReceiptJson: string;
+    historyReceiptMarkdown: string;
+    historyCheckpointDir: string;
+  };
+};
+
 export type BuilderAiCreateReceipt = {
   schema: string;
   receiptId: string;
@@ -503,6 +678,7 @@ export type BuilderPlan = {
   aiProfile?: BuilderAiProfile;
   starterModelCard?: BuilderStarterModelCard;
   hardwareRecipe?: BuilderHardwareRecipe;
+  trainingRoutePlan?: TrainingRoutePlan;
   blueprint?: {
     schema: string;
     title: string;
@@ -553,11 +729,15 @@ export type BuilderPlan = {
     dir: string;
     json: string;
     markdown: string;
+    trainingRouteJson?: string;
+    trainingRouteMarkdown?: string;
     starterModelCardJson?: string;
     starterModelCardMarkdown?: string;
     versionDir: string;
     versionJson: string;
     versionMarkdown: string;
+    versionTrainingRouteJson?: string;
+    versionTrainingRouteMarkdown?: string;
     versionStarterModelCardJson?: string;
     versionStarterModelCardMarkdown?: string;
   };
@@ -1329,6 +1509,8 @@ export type ProjectPayload = {
   latestAppliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
   latestGuidedBuilderTest?: BuilderGuidedTestReceipt | null;
   latestBuilderAiCreateReceipt?: BuilderAiCreateReceipt | null;
+  latestTrainingRoutePlan?: TrainingRoutePlan | null;
+  latestAdapterBuild?: AdapterBuilderReceipt | null;
   builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];
   sources: SourceSummary;

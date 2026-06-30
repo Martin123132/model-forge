@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Bot, Database, HardDrive, LoaderCircle, RefreshCw } from "lucide-react";
 import {
   buildAiBuildPlan,
+  buildBuilderAdapter,
   buildDatasetForge,
   buildForgeRecipe,
   buildProofBundle,
@@ -40,6 +41,7 @@ import {
   startBuilderRun
 } from "./lib/api";
 import type {
+  AdapterBuilderReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
   BuilderPlan,
@@ -190,6 +192,7 @@ function App() {
   const [appliedHardwareRecipe, setAppliedHardwareRecipe] = useState<BuilderAppliedHardwareRecipe | null>(null);
   const [guidedBuilderTest, setGuidedBuilderTest] = useState<BuilderGuidedTestReceipt | null>(null);
   const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
+  const [adapterBuild, setAdapterBuild] = useState<AdapterBuilderReceipt | null>(null);
   const [builderRunHistory, setBuilderRunHistory] = useState<BuilderRun[]>([]);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
@@ -228,6 +231,7 @@ function App() {
   const [builderRunBusy, setBuilderRunBusy] = useState(false);
   const [applyRecipeBusy, setApplyRecipeBusy] = useState(false);
   const [builderTestBusy, setBuilderTestBusy] = useState(false);
+  const [adapterBusy, setAdapterBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -765,6 +769,38 @@ function App() {
       setDatasetBusy(false);
     }
   }, [buildPlan?.request, refreshModelLibrary]);
+
+  const handleBuildAdapter = useCallback(async () => {
+    if (!buildPlan) return;
+    setAdapterBusy(true);
+    setError("");
+    try {
+      const result = await buildBuilderAdapter(buildPlan.planId, false);
+      setAdapterBuild(result.receipt);
+      setBuildPlan(result.plan);
+      setDatasetForge(result.dataset || result.project.latestDataset || null);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setModelExport(result.project.latestModelExport || null);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
+      setActiveWorkspace("builder");
+      await refreshModelLibrary();
+    } catch (adapterError) {
+      setError(adapterError instanceof Error ? adapterError.message : String(adapterError));
+    } finally {
+      setAdapterBusy(false);
+    }
+  }, [buildPlan, refreshModelLibrary]);
 
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
@@ -1491,12 +1527,14 @@ function App() {
                     appliedHardwareRecipe={appliedHardwareRecipe}
                     guidedBuilderTest={guidedBuilderTest}
                     builderAiCreateReceipt={project?.latestBuilderAiCreateReceipt || null}
+                    adapterBuild={project?.latestAdapterBuild || adapterBuild}
                     builderRun={builderRun}
                     builderRunHistory={builderRunHistory}
                     busy={builderBusy}
                     builderRunBusy={builderRunBusy || builderRun?.status === "running"}
                     applyRecipeBusy={applyRecipeBusy}
                     createAiBusy={createBusy}
+                    adapterBusy={adapterBusy}
                     chatBusy={chatBusy || builderTestBusy}
                     hardwareBusy={hardwareBusy}
                     datasetBusy={datasetBusy}
@@ -1504,6 +1542,7 @@ function App() {
                     onBuildPlan={handleBuildPlan}
                     onApplyHardwareRecipe={handleApplyHardwareRecipe}
                     onCreateOrUpdateAi={handleCreateOrUpdateBuilderAi}
+                    onBuildAdapter={handleBuildAdapter}
                     onRunGuidedTest={handleRunGuidedBuilderTest}
                     onStartBuild={handleStartBuilderRun}
                     onCancelBuild={handleCancelBuilderRun}
@@ -1578,6 +1617,7 @@ function App() {
                     onCancelPack={handleCancelRecipePack}
                     onCreate={handleCreateModel}
                     onRebuildBuilderAi={handleCreateOrUpdateBuilderAi}
+                    onBuildAdapter={handleBuildAdapter}
                     onRetestBuilderAi={handleRetestBuilderAi}
                     onSend={handleSendChat}
                     onCompare={handleCompareModels}

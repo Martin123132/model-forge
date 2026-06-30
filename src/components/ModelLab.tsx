@@ -30,6 +30,7 @@ type ModelLabProps = {
   onCancelPack: (runId: string) => void;
   onCreate: (modelName: string) => void;
   onRebuildBuilderAi: () => void;
+  onBuildAdapter: () => void;
   onRetestBuilderAi: () => void;
   onSend: (prompt: string, modelName: string) => void;
   onCompare: (prompt: string, baseModel?: string, forgedModel?: string) => void;
@@ -113,7 +114,7 @@ function libraryTone(item?: ModelLibraryItem | null): "pass" | "warn" | "neutral
   if (!item) return "neutral";
   const status = String(item.status || "").toLowerCase();
   if (["created", "runnable", "ready", "pass"].includes(status)) return "pass";
-  if (["missing", "stale", "fail"].includes(status)) return "warn";
+  if (["missing", "stale", "fail", "dry-run"].includes(status)) return "warn";
   return "neutral";
 }
 
@@ -121,6 +122,7 @@ function libraryKindLabel(kind?: string) {
   if (kind === "forged") return "Forged AI";
   if (kind === "base") return "Base";
   if (kind === "recipe") return "Recipe";
+  if (kind === "adapter") return "Adapter";
   if (kind === "ollama") return "Ollama";
   return "AI";
 }
@@ -162,6 +164,7 @@ export function ModelLab({
   onCancelPack,
   onCreate,
   onRebuildBuilderAi,
+  onBuildAdapter,
   onRetestBuilderAi,
   onSend,
   onCompare
@@ -362,19 +365,20 @@ export function ModelLab({
                   <div className="model-library-actions">
                     {item.actions.slice(0, 2).map((action) => {
                       const isRebuild = action.id === "builder-rebuild-ai";
+                      const isAdapter = action.id === "builder-build-adapter";
                       const disabled = isRebuild ? createBusy : action.id === "builder-retest-ai" ? chatBusy : false;
-                      const Icon = isRebuild ? RefreshCw : MessageSquare;
+                      const Icon = isRebuild ? RefreshCw : isAdapter ? Hammer : MessageSquare;
                       return (
                         <button
-                          className={isRebuild ? "primary-action compact" : "plain-button small"}
+                          className={isRebuild || isAdapter ? "primary-action compact" : "plain-button small"}
                           disabled={disabled}
                           key={`${item.id}-${action.id}`}
-                          onClick={isRebuild ? onRebuildBuilderAi : onRetestBuilderAi}
+                          onClick={isRebuild ? onRebuildBuilderAi : isAdapter ? onBuildAdapter : onRetestBuilderAi}
                           title={action.detail}
                           type="button"
                         >
                           <Icon className={disabled ? "spin-icon" : ""} size={14} />
-                          <span>{disabled ? (isRebuild ? "Rebuilding" : "Testing") : action.label}</span>
+                          <span>{disabled ? (isRebuild ? "Rebuilding" : isAdapter ? "Preparing" : "Testing") : action.label}</span>
                         </button>
                       );
                     })}

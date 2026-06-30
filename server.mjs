@@ -101,6 +101,8 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "builder"), { recursive: true });
   await mkdir(join(root, "builder", "history"), { recursive: true });
   await mkdir(join(root, "builder", "runs"), { recursive: true });
+  await mkdir(join(root, "adapters"), { recursive: true });
+  await mkdir(join(root, "adapters", "history"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
 }
 
@@ -2757,6 +2759,15 @@ function buildMethodForRoute(route, artifacts) {
       ? "Package the existing scoped dataset into an adapter-ready recipe and runner contract."
       : "Build a scoped Dataset Forge pack first, then prepare an adapter-ready recipe and runner contract.";
   }
+  if (route.id === "continued-pretraining-prep") {
+    return "Prepare a continued-pretraining requirements and risk plan, then keep execution gated behind stronger data, evals, and hardware.";
+  }
+  if (route.id === "tiny-from-scratch-lab") {
+    return "Scope a tiny educational scratch-training lab with explicit limitations instead of claiming a new foundation model.";
+  }
+  if (route.id === "profile-model") {
+    return "Create the Ollama profile, source-bounded system prompt, hardware recipe, and guided test before heavier data work.";
+  }
   if (route.id === "export-runner" || route.id === "recipe-export") {
     return "Use the scoped dataset, local knowledge pack, Ollama profile, proof gates, and recipe export pack as the rebuildable AI package.";
   }
@@ -3100,7 +3111,290 @@ function buildHardwareRecipe({ request, hardware, route, baseModel, estimatedDis
   };
 }
 
-function chooseBuilderRoute(request, hardware, artifacts) {
+function trainingRoutePlanId() {
+  return `training-route-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function normalizeRouteStatus(status = "") {
+  if (["recommended", "possible", "stretch", "blocked", "avoid"].includes(status)) return status;
+  return "possible";
+}
+
+function trainingRouteStatusLabel(status = "") {
+  const normalized = normalizeRouteStatus(status);
+  if (normalized === "recommended") return "Recommended";
+  if (normalized === "possible") return "Possible";
+  if (normalized === "stretch") return "Stretch";
+  if (normalized === "blocked") return "Blocked";
+  return "Avoid";
+}
+
+function inferTrainingIntent(request = {}) {
+  const haystack = [
+    request.intent,
+    request.aiName,
+    request.aiType,
+    request.buildMode,
+    request.qualitySpeed,
+    request.knowledgeSource,
+    request.boundaryMode,
+    request.targetDevice,
+    ...(request.dataTypes || [])
+  ]
+    .join(" ")
+    .toLowerCase();
+  return {
+    wantsProfile: request.buildMode === "profile" || /\b(profile|modelfile|system prompt|quick local|fast)\b/.test(haystack),
+    wantsRag: request.boundaryMode === "strict-citations" || /\b(rag|retrieval|citation|source-backed|source backed|knowledge base|docs|support)\b/.test(haystack),
+    wantsAdapter:
+      request.buildMode === "adapter" ||
+      ["quality", "maximum"].includes(request.qualitySpeed) ||
+      /\b(lora|qlora|adapter|fine[- ]?tune|finetune|tune|train an adapter)\b/.test(haystack),
+    wantsPretraining: /\b(continued pretrain|continual pretrain|continue pretrain|domain adapt|domain-adapt|pretraining|pre-train|corpus train)\b/.test(haystack),
+    wantsScratch: /\b(from scratch|train from zero|train it from zero|foundation model|base model from scratch|new model from scratch|make a model from scratch)\b/.test(haystack),
+    wantsPortable: request.buildMode === "portable" || /\b(portable|another machine|export|shareable runner)\b/.test(haystack)
+  };
+}
+
+function formatHardwareNumber(value, unit = "GB") {
+  return `${Math.round(value * 10) / 10} ${unit}`;
+}
+
+function buildTrainingRouteOption({
+  id,
+  label,
+  status,
+  fit,
+  why,
+  localExecution,
+  estimatedTime,
+  estimatedDisk,
+  runner,
+  requirements,
+  risks,
+  expectedOutputs,
+  nextReceipts,
+  blockedReasons = []
+}) {
+  return {
+    id,
+    label,
+    status: normalizeRouteStatus(status),
+    statusLabel: trainingRouteStatusLabel(status),
+    fit,
+    why,
+    localExecution,
+    estimatedTime,
+    estimatedDisk,
+    runner,
+    requirements,
+    risks,
+    expectedOutputs,
+    nextReceipts,
+    blockedReasons
+  };
+}
+
+function selectTrainingRoute({ request, artifacts, intent, routes }) {
+  if (!artifacts.sourceReady) return "profile";
+  if (intent.wantsScratch) return "tiny-from-scratch";
+  if (intent.wantsPretraining) return "continued-pretraining";
+  if (intent.wantsAdapter) return "lora-qlora-adapter";
+  if (intent.wantsRag || intent.wantsPortable || request.buildMode === "dataset") return "rag";
+  if (intent.wantsProfile || request.buildMode === "profile" || request.qualitySpeed === "fast") return "profile";
+  const adapter = routes.find((route) => route.id === "lora-qlora-adapter");
+  if (adapter && ["recommended", "possible"].includes(adapter.status) && artifacts.datasetReady) return adapter.id;
+  return "rag";
+}
+
+function buildTrainingRoutePlanner({ request, hardware, artifacts, sources, sourceScope, baseModel }) {
+  const createdAt = new Date().toISOString();
+  const routePlanId = trainingRoutePlanId();
+  const intent = inferTrainingIntent(request);
+  const memoryGb = (hardware.memory?.totalBytes || 0) / 1024 / 1024 / 1024;
+  const vramGb = (hardware.gpu?.totalVramMb || 0) / 1024;
+  const sourceFiles = sourceScope?.includedFiles || sources?.totalFiles || 0;
+  const datasetCandidates = sourceScope?.datasetCandidateFiles || 0;
+  const hasDataset = Boolean(artifacts.datasetReady);
+  const hasRagData = Boolean(sourceFiles && datasetCandidates);
+  const adapterCapable = Boolean(hardware.tier?.canTrainAdapter);
+  const canRunQuantized = Boolean(hardware.tier?.canRunQuantized || memoryGb >= 12);
+  const canToyScratch = Boolean(hasRagData && (memoryGb >= 16 || vramGb >= 6));
+  const canPretrainLocally = Boolean(hasRagData && vramGb >= 24 && memoryGb >= 48);
+  const datasetSizeLabel = hasDataset ? "Dataset Forge examples already exist." : hasRagData ? "Dataset can be generated from the selected source scope." : "No safe text dataset is ready.";
+  const hardwareLabel = `${formatHardwareNumber(memoryGb)} RAM, ${hardware.gpu?.detected ? formatHardwareNumber(vramGb, "GB VRAM") : "no detected GPU VRAM"}`;
+
+  const routes = [
+    buildTrainingRouteOption({
+      id: "profile",
+      label: "Profile model",
+      status: !artifacts.sourceReady ? "recommended" : request.buildMode === "profile" || request.qualitySpeed === "fast" ? "recommended" : "possible",
+      fit: canRunQuantized ? "Best first step for a useful local AI target." : "Useful as an export/profile, but local chat depends on installing a small base model.",
+      why: "Creates an Ollama Modelfile, system prompt, hardware settings, model card, and test prompt without claiming new training happened.",
+      localExecution: hardware.ollama?.ok ? "Can create/update a local Ollama target." : "Profile can be written now; Ollama must be available before chat.",
+      estimatedTime: "2-10 minutes",
+      estimatedDisk: "Small profile files plus any pulled base model.",
+      runner: hardware.ollama?.ok ? "Ollama local runner" : "Ollama install/start required",
+      requirements: ["Readable source boundary", "A suitable base model", "Saved hardware recipe"],
+      risks: ["It changes behavior through prompting and context, not model weights.", "It will not memorize private files without retrieval or training data."],
+      expectedOutputs: ["Modelfile", "system prompt", "starter model card", "create/update AI receipt"],
+      nextReceipts: ["build-plan.json", "starter-model-card.json", "applied-hardware-recipe.json", "created-ai-receipt.json"]
+    }),
+    buildTrainingRouteOption({
+      id: "rag",
+      label: "RAG/source-backed AI",
+      status: hasRagData ? (intent.wantsRag || request.buildMode === "dataset" || request.buildMode === "portable" ? "recommended" : "possible") : "blocked",
+      fit: hasRagData ? "Strong route for non-developers who need reliable answers from selected files." : "Needs readable scoped source files before retrieval can help.",
+      why: "Keeps knowledge external and auditable, so answers can cite files instead of pretending the base model absorbed everything.",
+      localExecution: hasDataset ? "Dataset and knowledge pack can be reused." : hasRagData ? "Dataset Forge can build retrieval snippets next." : "Blocked until sources are available.",
+      estimatedTime: hasDataset ? "5-15 minutes to refresh recipe/export" : "10-30 minutes for first dataset and knowledge pack",
+      estimatedDisk: "500 MB-3 GB for datasets, snippets, proof, and export packs",
+      runner: "Dataset Forge + local knowledge pack + Ollama profile",
+      requirements: ["Selected source scope", "Dataset Forge examples", "Knowledge pack snippets", "Guided citation test"],
+      risks: ["Answers are limited by retrieval coverage.", "Citations need verification when source scope changes.", "Large files may be skipped until chunking improves."],
+      expectedOutputs: ["dataset.jsonl", "knowledge-pack.jsonl", "source-scope receipt", "guided test receipt", "export recipe"],
+      nextReceipts: ["dataset-manifest.json", "knowledge-manifest.json", "guided-test-receipt.json", "forge-recipe.json"]
+    }),
+    buildTrainingRouteOption({
+      id: "lora-qlora-adapter",
+      label: "LoRA/QLoRA adapter",
+      status: hasRagData ? (intent.wantsAdapter ? "recommended" : adapterCapable || hasDataset ? "possible" : "stretch") : "blocked",
+      fit: adapterCapable ? "Hardware looks plausible for compact adapter work." : "Adapter pack can be prepared, but local training should dry-run or move to stronger hardware.",
+      why: "Fine-tunes a small adapter on source-grounded examples while keeping the base model and receipts explicit.",
+      localExecution: adapterCapable ? "Can prepare a local training runner; execution still depends on Python ML packages and model size." : "Dry-run runner recipe by default on this hardware.",
+      estimatedTime: adapterCapable ? "30-180 minutes for a compact run after dependencies are ready" : "5-15 minutes to prepare the adapter pack and dry-run",
+      estimatedDisk: adapterCapable ? "8-30 GB depending on base model and checkpoints" : "1-6 GB for dataset, config, and dry-run artifacts",
+      runner: adapterCapable ? "LoRA/QLoRA trainer recipe" : "Adapter dry-run / external runner handoff",
+      requirements: ["Dataset JSONL", "Base model family", "torch", "transformers", "peft", "accelerate", "enough RAM/VRAM for target model"],
+      risks: ["Can overfit small datasets.", "Quality claims require evals against held-out prompts.", "Adapters are not the same as training a new base model."],
+      expectedOutputs: ["training dataset copy", "LoRA/QLoRA config", "runner recipe", "checkpoint/adapters folder", "adapter build receipt"],
+      nextReceipts: ["adapter-training-config.json", "adapter-runner-recipe.json", "adapter-builder-receipt.json"]
+    }),
+    buildTrainingRouteOption({
+      id: "continued-pretraining",
+      label: "Continued pretraining",
+      status: hasRagData ? (intent.wantsPretraining ? (canPretrainLocally ? "stretch" : "avoid") : "stretch") : "blocked",
+      fit: canPretrainLocally ? "Possible only with careful small-domain experiments." : "Not a good unattended local route on this machine.",
+      why: "Continues base-model learning on a domain corpus, which needs far more data, evals, and compute discipline than a prompt profile or adapter.",
+      localExecution: canPretrainLocally ? "Prepare-only unless a reviewed long-run command is explicitly launched." : "Planning and export only; use stronger hardware for execution.",
+      estimatedTime: canPretrainLocally ? "Hours to days for a small domain run" : "Planner only",
+      estimatedDisk: "Tens to hundreds of GB for real runs",
+      runner: "External/advanced trainer recipe",
+      requirements: ["Large cleaned corpus", "deduplication", "tokenizer compatibility", "checkpoints", "regression evals", "license review"],
+      risks: ["Expensive and easy to degrade a base model.", "Unsafe to run from mixed source without stronger data review.", "Not appropriate for a general foundation-model claim."],
+      expectedOutputs: ["requirements estimate", "risk receipt", "external runner contract", "eval plan"],
+      nextReceipts: ["training-route-plan.json", "dataset-manifest.json", "forge-recipe.json"],
+      blockedReasons: canPretrainLocally ? [] : ["Local hardware and source volume are below a realistic continued-pretraining target."]
+    }),
+    buildTrainingRouteOption({
+      id: "tiny-from-scratch",
+      label: "Tiny from-scratch model",
+      status: hasRagData ? (intent.wantsScratch ? (canToyScratch ? "stretch" : "avoid") : "avoid") : "blocked",
+      fit: canToyScratch ? "Useful for education or a narrow toy model, not a capable general assistant." : "Not enough local fit for honest scratch training.",
+      why: "Training from scratch is known, but a useful general model needs huge data, compute, tokenizer work, pretraining, alignment, and evaluations. ModelForge can scope a tiny lab, not pretend otherwise.",
+      localExecution: canToyScratch ? "Prepare a tiny lab recipe; do not market it as a foundation model." : "Blocked or external only.",
+      estimatedTime: canToyScratch ? "1-8 hours for a tiny experiment" : "Planner only",
+      estimatedDisk: canToyScratch ? "2-20 GB for a toy run" : "Not recommended locally",
+      runner: "Tiny research runner recipe",
+      requirements: ["Tokenizer plan", "clean training corpus", "architecture choice", "long-running trainer", "held-out evaluation"],
+      risks: ["Very low capability compared with open base models.", "Easy to overclaim results.", "May learn formatting more than useful knowledge."],
+      expectedOutputs: ["tiny lab requirements", "scope warning", "dataset/token estimate", "future runner receipt"],
+      nextReceipts: ["training-route-plan.json", "dataset-manifest.json", "risk-review.md"],
+      blockedReasons: canToyScratch ? [] : ["Use RAG or an adapter first; scratch training would be misleading on this setup."]
+    })
+  ];
+
+  const selectedRouteId = selectTrainingRoute({ request, artifacts, intent, routes });
+  const selectedRoute = routes.find((route) => route.id === selectedRouteId) || routes[0];
+  return {
+    schema: "modelforge.training_route_plan.v1",
+    routePlanId,
+    createdAt,
+    selectedRouteId: selectedRoute.id,
+    selectedRouteLabel: selectedRoute.label,
+    selectedStatus: selectedRoute.status,
+    summary: `${selectedRoute.label} is the honest next route for this request: ${selectedRoute.fit}`,
+    recommendation: selectedRoute.why,
+    hardwareSignals: {
+      summary: hardwareLabel,
+      tier: hardware.tier?.label || "Unknown",
+      canTrainAdapter: adapterCapable,
+      canRunQuantized,
+      memoryGb: Math.round(memoryGb * 10) / 10,
+      vramGb: Math.round(vramGb * 10) / 10,
+      ollamaReady: Boolean(hardware.ollama?.ok)
+    },
+    dataSignals: {
+      sourceScope: publicSourceScopeResolution(sourceScope),
+      sourceFiles,
+      datasetCandidates,
+      datasetReady: hasDataset,
+      knowledgePackReady: Boolean(artifacts.knowledgePackReady),
+      summary: datasetSizeLabel
+    },
+    intentSignals: intent,
+    baseModel: baseModel?.model || "",
+    routes
+  };
+}
+
+function trainingRoutePlanMarkdown(plan) {
+  const selected = plan.routes.find((route) => route.id === plan.selectedRouteId) || plan.routes[0];
+  return [
+    "# ModelForge Training Route Plan",
+    "",
+    `Route plan: ${plan.routePlanId}`,
+    `Created: ${plan.createdAt}`,
+    `Selected route: ${plan.selectedRouteLabel}`,
+    `Status: ${plan.selectedStatus}`,
+    `Base model: ${plan.baseModel || "not selected"}`,
+    "",
+    "## Recommendation",
+    "",
+    plan.summary,
+    "",
+    plan.recommendation,
+    "",
+    "## Signals",
+    "",
+    `Hardware: ${plan.hardwareSignals.summary}`,
+    `Hardware tier: ${plan.hardwareSignals.tier}`,
+    `Source scope: ${plan.dataSignals.sourceScope.label}`,
+    `Source files: ${plan.dataSignals.sourceFiles}`,
+    `Dataset candidates: ${plan.dataSignals.datasetCandidates}`,
+    `Dataset ready: ${plan.dataSignals.datasetReady}`,
+    "",
+    "## Selected Route Requirements",
+    "",
+    ...selected.requirements.map((item) => `- ${item}`),
+    "",
+    "## Selected Route Risks",
+    "",
+    ...selected.risks.map((item) => `- ${item}`),
+    "",
+    "## Selected Route Outputs",
+    "",
+    ...selected.expectedOutputs.map((item) => `- ${item}`),
+    "",
+    "## Routes",
+    "",
+    ...plan.routes.flatMap((route) => [
+      `### ${route.label}`,
+      "",
+      `Status: ${route.status}`,
+      `Fit: ${route.fit}`,
+      `Local execution: ${route.localExecution}`,
+      `Time: ${route.estimatedTime}`,
+      `Disk: ${route.estimatedDisk}`,
+      "",
+      "Risks:",
+      ...route.risks.map((item) => `- ${item}`),
+      ""
+    ])
+  ].join("\n");
+}
+
+function chooseBuilderRoute(request, hardware, artifacts, trainingRoutePlan = null) {
   const wantsAdapter = request.buildMode === "adapter" || request.qualitySpeed === "quality" || request.qualitySpeed === "maximum";
   const wantsPortable = request.buildMode === "portable" || request.targetDevice.toLowerCase().includes("another");
   if (!artifacts.sourceReady) {
@@ -3108,6 +3402,62 @@ function chooseBuilderRoute(request, hardware, artifacts) {
       id: "source-onboarding",
       label: "Source setup first",
       reason: "ModelForge needs a readable source boundary before it can build datasets, recipes, or proof."
+    };
+  }
+  if (trainingRoutePlan?.selectedRouteId === "lora-qlora-adapter") {
+    if (artifacts.datasetReady) {
+      return {
+        id: "adapter-lora",
+        label: "LoRA/QLoRA adapter route",
+        reason: trainingRoutePlan.summary || "The route planner selected a LoRA/QLoRA adapter as the strongest next build."
+      };
+    }
+    return {
+      id: "dataset-then-adapter",
+      label: "Dataset pack, then adapter",
+      reason: "The route planner selected an adapter path, so ModelForge should generate the scoped dataset before training or dry-running."
+    };
+  }
+  if (trainingRoutePlan?.selectedRouteId === "continued-pretraining") {
+    return {
+      id: "continued-pretraining-prep",
+      label: "Continued pretraining prep",
+      reason: "ModelForge can honestly prepare data, risks, and runner requirements before any long continued-pretraining attempt."
+    };
+  }
+  if (trainingRoutePlan?.selectedRouteId === "tiny-from-scratch") {
+    return {
+      id: "tiny-from-scratch-lab",
+      label: "Tiny from-scratch lab",
+      reason: "The request asks for scratch training, so ModelForge scopes this as a tiny lab route rather than a foundation-model claim."
+    };
+  }
+  if (trainingRoutePlan?.selectedRouteId === "profile") {
+    return {
+      id: "profile-model",
+      label: "Local profile route",
+      reason: "The route planner selected a fast profile model first: create the Modelfile, prompts, receipts, and guided test."
+    };
+  }
+  if (trainingRoutePlan?.selectedRouteId === "rag") {
+    if (wantsPortable && artifacts.recipeReady) {
+      return {
+        id: "export-runner",
+        label: "Reusable export pack",
+        reason: "The route planner selected source-backed RAG, and a recipe exists for a portable proof-backed pack."
+      };
+    }
+    if (artifacts.datasetReady) {
+      return {
+        id: "recipe-export",
+        label: "Recipe and export route",
+        reason: "The route planner selected source-backed RAG; package the dataset, knowledge pack, proof, and model profile."
+      };
+    }
+    return {
+      id: "dataset-pack",
+      label: "Dataset pack now",
+      reason: "The route planner selected source-backed RAG, so the next honest move is a scoped dataset and knowledge pack."
     };
   }
   if (hardware.tier.canTrainAdapter && wantsAdapter && artifacts.datasetReady) {
@@ -3151,6 +3501,10 @@ function planStep(id, label, status, action, detail, workspace) {
 
 async function getLatestBuilderPlan() {
   return readJsonIfExists(join(dataRoot, "builder", "latest", "build-plan.json"));
+}
+
+async function getLatestTrainingRoutePlan() {
+  return readJsonIfExists(join(dataRoot, "builder", "latest", "training-route-plan.json"));
 }
 
 async function getBuilderPlanById(planId = "") {
@@ -3798,6 +4152,421 @@ async function createOrUpdateBuilderAi(body = {}) {
   };
 }
 
+function adapterBuildId() {
+  return `adapter-build-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+async function getLatestAdapterBuilderReceipt() {
+  return readJsonIfExists(join(dataRoot, "adapters", "latest", "adapter-builder-receipt.json"));
+}
+
+function adapterNameForPlan(plan) {
+  const raw = cleanSetting(plan?.aiProfile?.name || plan?.request?.aiName || "modelforge-adapter")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 54);
+  return `${raw || "modelforge"}-lora`;
+}
+
+async function checkAdapterPythonPackages() {
+  const required = ["torch", "transformers", "datasets", "peft", "accelerate"];
+  const optional = ["bitsandbytes", "trl", "sentencepiece"];
+  const script = [
+    "import importlib.util, json, sys",
+    `required=${JSON.stringify(required)}`,
+    `optional=${JSON.stringify(optional)}`,
+    "packages={name:{'ok': importlib.util.find_spec(name) is not None, 'required': name in required} for name in required+optional}",
+    "print(json.dumps({'python': sys.executable, 'packages': packages}))"
+  ].join("; ");
+  const result = await runCommand(pythonCommand, ["-c", script], { timeout: 10000, maxBuffer: 1024 * 1024 });
+  const parsed = parseJsonLoose(result.stdout);
+  const packages = parsed?.packages || Object.fromEntries([...required, ...optional].map((name) => [name, { ok: false, required: required.includes(name) }]));
+  const missingRequired = required.filter((name) => !packages[name]?.ok);
+  return {
+    schema: "modelforge.adapter_package_status.v1",
+    ok: Boolean(result.ok && !missingRequired.length),
+    pythonCommand,
+    python: parsed?.python || pythonCommand,
+    commandOk: Boolean(result.ok),
+    packages,
+    required,
+    optional,
+    missingRequired,
+    summary: missingRequired.length
+      ? `Missing required adapter packages: ${missingRequired.join(", ")}.`
+      : "Required adapter Python packages are importable."
+  };
+}
+
+function adapterTrainingConfigFor({ plan, dataset, hardware, adapterName, latestDir }) {
+  const sourceScope = dataset?.sourceScope || plan.trainingRoutePlan?.dataSignals?.sourceScope || null;
+  const exampleCount = dataset?.summary?.totalExamples || 0;
+  const vramGb = (hardware.gpu?.totalVramMb || 0) / 1024;
+  const memoryGb = (hardware.memory?.totalBytes || 0) / 1024 / 1024 / 1024;
+  const useQlora = vramGb < 16;
+  const microBatchSize = vramGb >= 16 ? 2 : 1;
+  const gradientAccumulation = vramGb >= 16 ? 8 : 16;
+  const maxSteps = Math.max(20, Math.min(300, Math.ceil(exampleCount * 2)));
+  return {
+    schema: "modelforge.adapter_training_config.v1",
+    createdAt: new Date().toISOString(),
+    method: useQlora ? "qlora" : "lora",
+    adapterName,
+    baseModel: plan.hardwareRecipe?.recommended?.baseModel || plan.baseModelRecommendation?.model || defaultStarterModelName(),
+    outputDir: join(latestDir, "adapters"),
+    checkpointDir: join(latestDir, "checkpoints"),
+    dataset: {
+      datasetId: dataset?.datasetId || "",
+      jsonl: join(latestDir, "training-dataset.jsonl"),
+      sourceJsonl: dataset?.files?.jsonl || "",
+      manifest: join(latestDir, "training-dataset-manifest.json"),
+      examples: exampleCount,
+      estimatedTokens: dataset?.summary?.estimatedTokens || 0,
+      trainRows: dataset?.splits?.train || Math.max(0, exampleCount - 1),
+      validationRows: dataset?.splits?.validation || (exampleCount ? 1 : 0),
+      sourceScope
+    },
+    lora: {
+      r: vramGb >= 12 ? 16 : 8,
+      alpha: vramGb >= 12 ? 32 : 16,
+      dropout: 0.05,
+      targetModules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    },
+    trainer: {
+      maxSteps,
+      epochs: 1,
+      learningRate: 0.0002,
+      microBatchSize,
+      gradientAccumulation,
+      cutoffLen: memoryGb >= 32 ? 4096 : 2048,
+      warmupRatio: 0.03,
+      precision: vramGb >= 8 ? "bf16-if-supported" : "fp16-or-cpu-fallback",
+      saveSteps: Math.max(10, Math.floor(maxSteps / 3)),
+      evalSteps: Math.max(10, Math.floor(maxSteps / 3))
+    },
+    hardware: {
+      tier: hardware.tier?.label || "",
+      canTrainAdapter: Boolean(hardware.tier?.canTrainAdapter),
+      ram: hardware.memory?.total || "",
+      vram: hardware.gpu?.detected ? hardware.gpu.totalVram : "No GPU VRAM",
+      cpuThreads: hardware.cpu?.threads || 1
+    },
+    guardrails: [
+      "Do not widen the source scope without rebuilding the dataset and receipts.",
+      "Keep adapter claims separate from base-model claims.",
+      "Run held-out source-backed tests before sharing an adapter."
+    ]
+  };
+}
+
+function adapterRunnerRecipeFor({ config, packageStatus, plan, executionMode, blockedReasons }) {
+  const command = [
+    pythonCommand,
+    "-m",
+    "accelerate.commands.launch",
+    "--num_processes",
+    "1",
+    "train_lora_qlora.py",
+    "--config",
+    config.files?.trainingConfig || "adapter-training-config.json"
+  ];
+  return {
+    schema: "modelforge.adapter_runner_recipe.v1",
+    createdAt: new Date().toISOString(),
+    executionMode,
+    method: config.method,
+    adapterName: config.adapterName,
+    baseModel: config.baseModel,
+    datasetJsonl: config.dataset.jsonl,
+    outputDir: config.outputDir,
+    command,
+    packageStatus,
+    blockedReasons,
+    runnerNotes: [
+      "This recipe is intentionally source-scoped and receipt-backed.",
+      "Dry-run mode writes config, dataset, manifest, and checkpoint placeholders without claiming weights were trained.",
+      "Real training should be launched only after reviewing the config, disk budget, and dependency status."
+    ],
+    expectedArtifacts: ["adapter_model.safetensors", "adapter_config.json", "training-receipt.json"],
+    sourceBoundary: plan.trainingRoutePlan?.dataSignals?.sourceScope || config.dataset.sourceScope || null
+  };
+}
+
+function adapterBuilderReceiptMarkdown(receipt) {
+  return [
+    `# ${receipt.adapter.name} Adapter Builder Receipt`,
+    "",
+    `Receipt: ${receipt.adapterBuildId}`,
+    `Created: ${receipt.createdAt}`,
+    `Plan: ${receipt.planId}`,
+    `Status: ${receipt.status}`,
+    `Route: ${receipt.trainingRoute?.label || "LoRA/QLoRA adapter"}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary,
+    "",
+    "## Dataset",
+    "",
+    `Dataset: ${receipt.dataset.datasetId}`,
+    `Examples: ${receipt.dataset.examples}`,
+    `Estimated tokens: ${receipt.dataset.estimatedTokens}`,
+    `Source JSONL: ${receipt.dataset.sourceJsonl}`,
+    `Adapter JSONL: ${receipt.dataset.adapterJsonl}`,
+    "",
+    "## Training Config",
+    "",
+    `Method: ${receipt.config.method}`,
+    `Base model: ${receipt.config.baseModel}`,
+    `LoRA rank: ${receipt.config.lora.r}`,
+    `Max steps: ${receipt.config.trainer.maxSteps}`,
+    `Config path: ${receipt.files.trainingConfigJson}`,
+    "",
+    "## Runner",
+    "",
+    `Mode: ${receipt.runner.executionMode}`,
+    `Package status: ${receipt.runner.packageStatus.summary}`,
+    ...(receipt.runner.blockedReasons.length ? ["", "Blocked/dry-run reasons:", "", ...receipt.runner.blockedReasons.map((item) => `- ${item}`)] : []),
+    "",
+    "## Outputs",
+    "",
+    ...receipt.outputs.map((item) => `- ${item.label}: ${item.path || item.detail}`),
+    "",
+    "## Next Actions",
+    "",
+    ...receipt.nextActions.map((item) => `- ${item.label}: ${item.detail}`),
+    ""
+  ].join("\n");
+}
+
+async function buildBuilderAdapter(body = {}) {
+  await ensureDataRoot();
+  const plan = await getBuilderPlanById(body.planId || "");
+  if (!plan?.planId) {
+    throw new Error("Create a Builder plan before preparing an adapter.");
+  }
+  const routePlan = plan.trainingRoutePlan || (await getLatestTrainingRoutePlan());
+  const createdAt = new Date().toISOString();
+  const adapterBuildIdValue = adapterBuildId();
+  const latestDir = join(dataRoot, "adapters", "latest");
+  const historyDir = join(dataRoot, "adapters", "history", adapterBuildIdValue);
+  const checkpointDir = join(latestDir, "checkpoints", "dry-run");
+  const historyCheckpointDir = join(historyDir, "checkpoints", "dry-run");
+  await mkdir(latestDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+  await mkdir(checkpointDir, { recursive: true });
+  await mkdir(historyCheckpointDir, { recursive: true });
+
+  const dataset = await buildDatasetForge({
+    ...(plan.request || {}),
+    requestedBy: "ModelForge Adapter Builder",
+    sourceScope: plan.request?.sourceScope || "whole-project",
+    maxFiles: Number(body.maxFiles || 120)
+  });
+  const hardware = plan.hardware || (await getHardwareProfile());
+  const adapterName = adapterNameForPlan(plan);
+  const config = adapterTrainingConfigFor({ plan, dataset, hardware, adapterName, latestDir });
+  const packageStatus = await checkAdapterPythonPackages();
+  const route = routePlan?.routes?.find((item) => item.id === "lora-qlora-adapter") || routePlan?.routes?.find((item) => item.id === routePlan.selectedRouteId) || null;
+  const explicitRun = body.runTraining === true && body.allowLongRun === true;
+  const blockedReasons = [
+    !dataset?.summary?.totalExamples ? "Dataset Forge did not produce training examples." : "",
+    !hardware.tier?.canTrainAdapter ? "Hardware tier is not marked adapter-training capable." : "",
+    !packageStatus.ok ? packageStatus.summary : "",
+    !explicitRun ? "Real training was not explicitly armed, so ModelForge performed a dry-run." : ""
+  ].filter(Boolean);
+  const canTrainNow = Boolean(explicitRun && dataset?.summary?.totalExamples && hardware.tier?.canTrainAdapter && packageStatus.ok);
+  const executionMode = canTrainNow ? "local-ready" : "dry-run";
+  const runnerRecipe = adapterRunnerRecipeFor({ config, packageStatus, plan, executionMode, blockedReasons });
+  const files = {
+    latestDir,
+    historyDir,
+    trainingDatasetJsonl: join(latestDir, "training-dataset.jsonl"),
+    trainingDatasetManifest: join(latestDir, "training-dataset-manifest.json"),
+    trainingConfigJson: join(latestDir, "adapter-training-config.json"),
+    runnerRecipeJson: join(latestDir, "adapter-runner-recipe.json"),
+    runnerRecipeMarkdown: join(latestDir, "adapter-runner-recipe.md"),
+    adapterManifestJson: join(latestDir, "adapter-manifest.json"),
+    receiptJson: join(latestDir, "adapter-builder-receipt.json"),
+    receiptMarkdown: join(latestDir, "adapter-builder-receipt.md"),
+    checkpointDir,
+    historyTrainingDatasetJsonl: join(historyDir, "training-dataset.jsonl"),
+    historyTrainingDatasetManifest: join(historyDir, "training-dataset-manifest.json"),
+    historyTrainingConfigJson: join(historyDir, "adapter-training-config.json"),
+    historyRunnerRecipeJson: join(historyDir, "adapter-runner-recipe.json"),
+    historyRunnerRecipeMarkdown: join(historyDir, "adapter-runner-recipe.md"),
+    historyAdapterManifestJson: join(historyDir, "adapter-manifest.json"),
+    historyReceiptJson: join(historyDir, "adapter-builder-receipt.json"),
+    historyReceiptMarkdown: join(historyDir, "adapter-builder-receipt.md"),
+    historyCheckpointDir
+  };
+  config.files = {
+    trainingConfig: files.trainingConfigJson,
+    datasetJsonl: files.trainingDatasetJsonl,
+    datasetManifest: files.trainingDatasetManifest,
+    checkpointDir: files.checkpointDir
+  };
+  runnerRecipe.command[runnerRecipe.command.length - 1] = files.trainingConfigJson;
+
+  await copyIfExists(dataset.files?.jsonl, files.trainingDatasetJsonl);
+  await copyIfExists(dataset.files?.manifest, files.trainingDatasetManifest);
+  await copyIfExists(dataset.files?.jsonl, files.historyTrainingDatasetJsonl);
+  await copyIfExists(dataset.files?.manifest, files.historyTrainingDatasetManifest);
+
+  const placeholderText = [
+    "ModelForge Adapter Builder dry-run checkpoint.",
+    "",
+    "No adapter weights are claimed in this folder.",
+    `Adapter build: ${adapterBuildIdValue}`,
+    `Created: ${createdAt}`,
+    `Reason: ${blockedReasons.join(" ") || "Training was prepared but not launched."}`,
+    ""
+  ].join("\n");
+  await writeFile(join(checkpointDir, "ADAPTER_NOT_TRAINED.txt"), placeholderText, "utf-8");
+  await writeFile(join(historyCheckpointDir, "ADAPTER_NOT_TRAINED.txt"), placeholderText, "utf-8");
+
+  const adapterManifest = {
+    schema: "modelforge.adapter_manifest.v1",
+    adapterBuildId: adapterBuildIdValue,
+    createdAt,
+    name: adapterName,
+    baseModel: config.baseModel,
+    method: config.method,
+    trained: false,
+    dryRun: executionMode !== "local-trained",
+    status: executionMode,
+    datasetId: dataset.datasetId,
+    sourceScope: dataset.sourceScope || null,
+    checkpointDir,
+    files: {
+      config: files.trainingConfigJson,
+      runnerRecipe: files.runnerRecipeJson,
+      receipt: files.receiptJson
+    }
+  };
+  const outputs = [
+    { label: "Training dataset", detail: `${dataset.summary.totalExamples.toLocaleString()} examples`, path: files.trainingDatasetJsonl },
+    { label: "Training config", detail: `${config.method.toUpperCase()} config`, path: files.trainingConfigJson },
+    { label: "Runner recipe", detail: executionMode, path: files.runnerRecipeJson },
+    { label: "Checkpoint folder", detail: executionMode === "dry-run" ? "Dry-run placeholder" : "Ready for trainer output", path: checkpointDir },
+    { label: "Adapter manifest", detail: adapterManifest.status, path: files.adapterManifestJson }
+  ];
+  const receipt = {
+    schema: "modelforge.adapter_builder_receipt.v1",
+    adapterBuildId: adapterBuildIdValue,
+    createdAt,
+    planId: plan.planId,
+    routePlanId: routePlan?.routePlanId || "",
+    ok: true,
+    status: executionMode === "local-trained" ? "trained" : "dry-run",
+    summary:
+      executionMode === "local-ready"
+        ? `Prepared ${adapterName} for local ${config.method.toUpperCase()} training; launch is explicit because it can be long-running.`
+        : `Prepared ${adapterName} as a dry-run adapter pack with dataset, config, runner recipe, and checkpoint placeholders.`,
+    aiName: plan.aiProfile?.name || plan.request?.aiName || "Local AI",
+    trainingRoute: route
+      ? {
+          id: route.id,
+          label: route.label,
+          status: route.status,
+          fit: route.fit
+        }
+      : null,
+    adapter: {
+      name: adapterName,
+      baseModel: config.baseModel,
+      method: config.method,
+      trained: executionMode === "local-trained",
+      dryRun: executionMode !== "local-trained",
+      checkpointDir,
+      manifestPath: files.adapterManifestJson,
+      outputDir: config.outputDir
+    },
+    dataset: {
+      datasetId: dataset.datasetId,
+      examples: dataset.summary.totalExamples,
+      estimatedTokens: dataset.summary.estimatedTokens,
+      sourceJsonl: dataset.files?.jsonl || "",
+      adapterJsonl: files.trainingDatasetJsonl,
+      manifest: files.trainingDatasetManifest,
+      sourceScope: dataset.sourceScope || null,
+      splits: dataset.splits
+    },
+    config,
+    runner: {
+      executionMode,
+      canTrainNow,
+      packageStatus,
+      blockedReasons,
+      recipe: runnerRecipe
+    },
+    outputs,
+    nextActions: [
+      {
+        id: "review-adapter-config",
+        label: "Review adapter config",
+        detail: "Check base model, LoRA rank, context length, dataset size, and source scope before training.",
+        workspace: "builder"
+      },
+      {
+        id: "install-adapter-deps",
+        label: "Install trainer deps",
+        detail: packageStatus.ok ? "Required Python packages are present." : packageStatus.summary,
+        workspace: "setup"
+      },
+      {
+        id: "test-adapter-ai",
+        label: "Retest after training",
+        detail: "After a real adapter checkpoint exists, run source-backed prompts before sharing claims.",
+        workspace: "model"
+      }
+    ],
+    files
+  };
+  const runnerMarkdown = [
+    "# Adapter Runner Recipe",
+    "",
+    `Adapter: ${adapterName}`,
+    `Mode: ${executionMode}`,
+    `Method: ${config.method}`,
+    `Base model: ${config.baseModel}`,
+    `Dataset: ${files.trainingDatasetJsonl}`,
+    "",
+    "## Command",
+    "",
+    "```text",
+    runnerRecipe.command.join(" "),
+    "```",
+    "",
+    "## Notes",
+    "",
+    ...runnerRecipe.runnerNotes.map((item) => `- ${item}`),
+    ""
+  ].join("\n");
+
+  await writeJson(files.trainingConfigJson, config);
+  await writeJson(files.runnerRecipeJson, runnerRecipe);
+  await writeFile(files.runnerRecipeMarkdown, runnerMarkdown, "utf-8");
+  await writeJson(files.adapterManifestJson, adapterManifest);
+  await writeJson(files.receiptJson, receipt);
+  await writeFile(files.receiptMarkdown, adapterBuilderReceiptMarkdown(receipt), "utf-8");
+  await writeJson(files.historyTrainingConfigJson, { ...config, files: { ...config.files, trainingConfig: files.historyTrainingConfigJson, datasetJsonl: files.historyTrainingDatasetJsonl, datasetManifest: files.historyTrainingDatasetManifest, checkpointDir: files.historyCheckpointDir } });
+  await writeJson(files.historyRunnerRecipeJson, runnerRecipe);
+  await writeFile(files.historyRunnerRecipeMarkdown, runnerMarkdown, "utf-8");
+  await writeJson(files.historyAdapterManifestJson, { ...adapterManifest, checkpointDir: files.historyCheckpointDir });
+  await writeJson(files.historyReceiptJson, receipt);
+  await writeFile(files.historyReceiptMarkdown, adapterBuilderReceiptMarkdown(receipt), "utf-8");
+
+  return {
+    ok: true,
+    receipt,
+    dataset,
+    plan,
+    project: await getProjectPayload()
+  };
+}
+
 async function buildAiBuildPlan(body = {}) {
   await ensureDataRoot();
   const createdAt = new Date().toISOString();
@@ -3835,10 +4604,18 @@ async function buildAiBuildPlan(body = {}) {
     proofFresh,
     evalFresh
   };
-  const route = chooseBuilderRoute(request, hardware, artifacts);
   const baseModel = chooseBaseModelRecommendation(request, hardware, ollama);
   const selectedSourceScope = resolveSourceScope(sources, request.sourceScope);
   const sourceScopePreview = buildSourceScopePreview(sources, request.sourceScope);
+  const trainingRoutePlan = buildTrainingRoutePlanner({
+    request,
+    hardware,
+    artifacts,
+    sources,
+    sourceScope: selectedSourceScope,
+    baseModel
+  });
+  const route = chooseBuilderRoute(request, hardware, artifacts, trainingRoutePlan);
   const blueprint = buildPlanBlueprint({ request, hardware, route, baseModel, artifacts, sources, sourceScope: selectedSourceScope });
   const aiProfile = buildAiProfileContract({ request, route, baseModel, artifacts, sources, sourceScope: selectedSourceScope });
   const routeNeedsAdapter = ["adapter-lora", "dataset-then-adapter"].includes(route.id);
@@ -3885,6 +4662,14 @@ async function buildAiBuildPlan(body = {}) {
       "model"
     ),
     planStep(
+      "training-route-planner",
+      "Classify training route",
+      trainingRoutePlan.selectedStatus === "blocked" ? "blocked" : trainingRoutePlan.selectedStatus === "avoid" || trainingRoutePlan.selectedStatus === "stretch" ? "warn" : "pass",
+      "Choose between Profile, RAG, LoRA/QLoRA adapter, continued pretraining, and tiny from-scratch routes.",
+      `${trainingRoutePlan.selectedRouteLabel}: ${trainingRoutePlan.summary}`,
+      "model"
+    ),
+    planStep(
       "model-profile",
       "Export local model profile",
       artifacts.modelProfileReady ? "pass" : ollama.ok ? "ready" : "warn",
@@ -3919,8 +4704,11 @@ async function buildAiBuildPlan(body = {}) {
   ];
   const limitations = [
     routeNeedsAdapter
-      ? "ModelForge exports the adapter plan today; full local LoRA/QLoRA execution is the next runner milestone."
+      ? "ModelForge can prepare or dry-run adapter training; real LoRA/QLoRA execution still depends on local ML dependencies and hardware fit."
       : "This plan builds model-ready artifacts and local Ollama targets, not a new foundation model from scratch.",
+    trainingRoutePlan.selectedRouteId === "tiny-from-scratch"
+      ? "The from-scratch route is scoped as a tiny lab route, not a claim that ModelForge can locally create a general foundation model."
+      : "The training route planner records why heavier routes were selected, stretched, blocked, or avoided.",
     hardware.tier.canTrainAdapter
       ? "Adapter feasibility still depends on the exact base model, context length, batch size, and quantization."
       : "No strong local-training GPU was detected, so the recommended route avoids pretending this machine should train heavy adapters.",
@@ -3939,11 +4727,15 @@ async function buildAiBuildPlan(body = {}) {
     dir: latestDir,
     json: join(latestDir, "build-plan.json"),
     markdown: join(latestDir, "build-plan.md"),
+    trainingRouteJson: join(latestDir, "training-route-plan.json"),
+    trainingRouteMarkdown: join(latestDir, "training-route-plan.md"),
     starterModelCardJson: join(latestDir, "starter-model-card.json"),
     starterModelCardMarkdown: join(latestDir, "starter-model-card.md"),
     versionDir,
     versionJson: join(versionDir, "build-plan.json"),
     versionMarkdown: join(versionDir, "build-plan.md"),
+    versionTrainingRouteJson: join(versionDir, "training-route-plan.json"),
+    versionTrainingRouteMarkdown: join(versionDir, "training-route-plan.md"),
     versionStarterModelCardJson: join(versionDir, "starter-model-card.json"),
     versionStarterModelCardMarkdown: join(versionDir, "starter-model-card.md")
   };
@@ -3982,6 +4774,7 @@ async function buildAiBuildPlan(body = {}) {
     aiProfile,
     starterModelCard,
     hardwareRecipe,
+    trainingRoutePlan,
     blueprint,
     baseModelRecommendation: baseModel,
     estimates: {
@@ -4009,6 +4802,7 @@ async function buildAiBuildPlan(body = {}) {
     `Voice: ${aiProfile.voice}`,
     `Blueprint: ${blueprint.summary}`,
     `AI profile: ${aiProfile.summary}`,
+    `Training route: ${trainingRoutePlan.selectedRouteLabel} (${trainingRoutePlan.selectedStatus})`,
     "",
     "## Intent",
     "",
@@ -4040,6 +4834,17 @@ async function buildAiBuildPlan(body = {}) {
     `Knowledge boundary: ${aiProfile.knowledgeBoundary}`,
     `Source scope: ${aiProfile.sourceScope}`,
     `Starter model card: ${starterModelCard.files.markdown}`,
+    "",
+    "## Training Route Planner",
+    "",
+    `Selected route: ${trainingRoutePlan.selectedRouteLabel}`,
+    `Status: ${trainingRoutePlan.selectedStatus}`,
+    `Summary: ${trainingRoutePlan.summary}`,
+    `Hardware: ${trainingRoutePlan.hardwareSignals.summary}`,
+    `Data: ${trainingRoutePlan.dataSignals.summary}`,
+    `Route plan: ${planFiles.trainingRouteMarkdown}`,
+    "",
+    ...trainingRoutePlan.routes.map((routeOption) => `- ${routeOption.label}: ${routeOption.status}. ${routeOption.fit}`),
     "",
     "## Hardware Fit Recipe",
     "",
@@ -4096,10 +4901,14 @@ async function buildAiBuildPlan(body = {}) {
   }
   await writeJson(plan.files.json, plan);
   await writeFile(plan.files.markdown, markdown, "utf-8");
+  await writeJson(plan.files.trainingRouteJson, trainingRoutePlan);
+  await writeFile(plan.files.trainingRouteMarkdown, trainingRoutePlanMarkdown(trainingRoutePlan), "utf-8");
   await writeJson(plan.files.starterModelCardJson, starterModelCard);
   await writeFile(plan.files.starterModelCardMarkdown, starterModelCardMarkdown(starterModelCard), "utf-8");
   await writeJson(plan.files.versionJson, plan);
   await writeFile(plan.files.versionMarkdown, markdown, "utf-8");
+  await writeJson(plan.files.versionTrainingRouteJson, trainingRoutePlan);
+  await writeFile(plan.files.versionTrainingRouteMarkdown, trainingRoutePlanMarkdown(trainingRoutePlan), "utf-8");
   await writeJson(plan.files.versionStarterModelCardJson, starterModelCard);
   await writeFile(plan.files.versionStarterModelCardMarkdown, starterModelCardMarkdown(starterModelCard), "utf-8");
   return plan;
@@ -6917,6 +7726,8 @@ async function buildModelLibrary() {
     latestExportPack,
     latestRecipeRun,
     latestBuilderAiCreateReceipt,
+    latestTrainingRoutePlan,
+    latestAdapterBuild,
     recipeRunHistory,
     recipeHistory
   ] = await Promise.all([
@@ -6931,6 +7742,8 @@ async function buildModelLibrary() {
     getLatestExportPack(),
     getLatestRecipeRun(),
     getLatestBuilderAiCreateReceipt(),
+    getLatestTrainingRoutePlan(),
+    getLatestAdapterBuilderReceipt(),
     getRecipeRunHistory(),
     getForgeRecipeHistory()
   ]);
@@ -6953,6 +7766,10 @@ async function buildModelLibrary() {
   const globalReceipts = [
     libraryReceipt("Builder create receipt", latestBuilderAiCreateReceipt?.files?.latestJson, "receipt"),
     libraryReceipt("Builder create notes", latestBuilderAiCreateReceipt?.files?.latestMarkdown, "receipt"),
+    libraryReceipt("Training route plan", latestTrainingRoutePlan?.files?.trainingRouteJson || latestTrainingRoutePlan?.files?.json || join(dataRoot, "builder", "latest", "training-route-plan.json"), "receipt"),
+    libraryReceipt("Adapter build receipt", latestAdapterBuild?.files?.receiptJson, "receipt"),
+    libraryReceipt("Adapter training config", latestAdapterBuild?.files?.trainingConfigJson, "artifact"),
+    libraryReceipt("Adapter runner recipe", latestAdapterBuild?.files?.runnerRecipeJson, "artifact"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
     libraryReceipt("Modelfile", latestModelExport?.modelfilePath || latestRecipe?.evidence?.modelfilePath, "model"),
     libraryReceipt("System prompt", latestModelExport?.promptPath, "model"),
@@ -7021,6 +7838,56 @@ async function buildModelLibrary() {
           kind: "builder-test",
           workspace: "builder",
           detail: "Run the guided source-backed Builder test for this target."
+        }
+      ]
+    });
+  }
+
+  if (latestAdapterBuild?.adapter?.name) {
+    items.push({
+      id: "adapter-current",
+      name: latestAdapterBuild.adapter.name,
+      kind: "adapter",
+      status: latestAdapterBuild.status || "dry-run",
+      statusLabel: latestAdapterBuild.status === "trained" ? "Adapter ready" : latestAdapterBuild.status === "ready" ? "Ready to train" : "Dry-run ready",
+      modelName: latestAdapterBuild.adapter.name,
+      baseModel: latestAdapterBuild.adapter.baseModel || baseModel,
+      description:
+        latestAdapterBuild.status === "trained"
+          ? "LoRA/QLoRA adapter checkpoint exists with Builder receipts attached."
+          : "Adapter training dataset, config, runner recipe, and checkpoint folder are prepared without claiming trained weights.",
+      canChat: false,
+      canRunPack: false,
+      createdAt: latestAdapterBuild.createdAt || "",
+      metrics: {
+        examples: latestAdapterBuild.dataset?.examples || latestDataset?.summary?.totalExamples || 0,
+        tokens: latestAdapterBuild.dataset?.estimatedTokens || latestDataset?.summary?.estimatedTokens || 0,
+        sourceFiles: latestAdapterBuild.dataset?.sourceScope?.includedFiles || sources.totalFiles,
+        dryRun: Boolean(latestAdapterBuild.adapter?.dryRun),
+        trained: Boolean(latestAdapterBuild.adapter?.trained)
+      },
+      receipts: [
+        libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
+        libraryReceipt("Training config", latestAdapterBuild.files?.trainingConfigJson, "artifact"),
+        libraryReceipt("Runner recipe", latestAdapterBuild.files?.runnerRecipeJson, "artifact"),
+        libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
+        libraryReceipt("Training dataset", latestAdapterBuild.files?.trainingDatasetJsonl, "dataset")
+      ].filter(Boolean),
+      sources: sourceEvidence.slice(0, 3),
+      actions: [
+        {
+          id: "builder-build-adapter",
+          label: latestAdapterBuild.status === "trained" ? "Rebuild Adapter" : "Prepare Adapter",
+          kind: "builder-adapter",
+          workspace: "builder",
+          detail: "Regenerate the source-scoped adapter dataset, config, runner recipe, and receipt."
+        },
+        {
+          id: "builder-retest-ai",
+          label: "Retest AI",
+          kind: "builder-test",
+          workspace: "builder",
+          detail: "Run the guided source-backed Builder test after training or changing the source scope."
         }
       ]
     });
@@ -7461,6 +8328,8 @@ async function getProjectPayload() {
     latestAppliedHardwareRecipe,
     latestGuidedBuilderTest,
     latestBuilderAiCreateReceipt,
+    latestTrainingRoutePlan,
+    latestAdapterBuild,
     builderRunHistory
   ] = await Promise.all([
     getToolStatus(),
@@ -7479,6 +8348,8 @@ async function getProjectPayload() {
     getLatestAppliedHardwareRecipe(),
     getLatestGuidedBuilderTestReceipt(),
     getLatestBuilderAiCreateReceipt(),
+    getLatestTrainingRoutePlan(),
+    getLatestAdapterBuilderReceipt(),
     getBuilderRunHistory()
   ]);
   const dataset = estimateDatasetMetrics(sources);
@@ -7516,6 +8387,8 @@ async function getProjectPayload() {
     latestAppliedHardwareRecipe,
     latestGuidedBuilderTest,
     latestBuilderAiCreateReceipt,
+    latestTrainingRoutePlan,
+    latestAdapterBuild,
     builderRunHistory,
     pipeline: [
       {
@@ -7877,6 +8750,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/builder/ai/create-update") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await createOrUpdateBuilderAi(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/build") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await buildBuilderAdapter(body));
       return;
     }
 
