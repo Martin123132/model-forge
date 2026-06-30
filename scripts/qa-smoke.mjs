@@ -204,6 +204,24 @@ async function main() {
         : "no applied hardware recipe"
     ),
     check(
+      "Guided Builder test receipt",
+      Boolean(
+        project.latestGuidedBuilderTest?.schema === "modelforge.builder_guided_test_receipt.v1" &&
+          ["pass", "warn"].includes(String(project.latestGuidedBuilderTest.status || "").toLowerCase()) &&
+          project.latestGuidedBuilderTest.planId === project.latestBuildPlan?.planId &&
+          project.latestGuidedBuilderTest.appliedReceiptId === project.latestAppliedHardwareRecipe?.receiptId &&
+          project.latestGuidedBuilderTest.prompt &&
+          project.latestGuidedBuilderTest.answer?.content &&
+          project.latestGuidedBuilderTest.verification?.sourceScope?.id &&
+          project.latestGuidedBuilderTest.verification?.retrievalInsideScope === true &&
+          project.latestGuidedBuilderTest.files?.latestJson &&
+          existsSync(project.latestGuidedBuilderTest.files.latestJson)
+      ),
+      project.latestGuidedBuilderTest
+        ? `${project.latestGuidedBuilderTest.status}: ${project.latestGuidedBuilderTest.verification?.citedPaths?.length || 0} cited, ${project.latestGuidedBuilderTest.verification?.retrievalSourcePaths?.length || 0} retrieval sources`
+        : "no guided Builder test receipt"
+    ),
+    check(
       "Builder blueprint",
       Boolean(project.latestBuildPlan?.blueprint?.summary && project.latestBuildPlan?.request?.aiType),
       project.latestBuildPlan?.blueprint ? `${project.latestBuildPlan.blueprint.aiType?.label}: ${project.latestBuildPlan.blueprint.summary}` : "no builder blueprint"

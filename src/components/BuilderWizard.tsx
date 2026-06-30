@@ -24,6 +24,7 @@ import {
 import { useMemo, useState } from "react";
 import type {
   BuilderAppliedHardwareRecipe,
+  BuilderGuidedTestReceipt,
   BuilderAiProfile,
   BuilderPlan,
   BuilderPlanRequest,
@@ -48,6 +49,7 @@ type BuilderWizardProps = {
   datasetForge?: DatasetForge | null;
   recipe?: ForgeRecipe | null;
   appliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
+  guidedBuilderTest?: BuilderGuidedTestReceipt | null;
   builderRun?: BuilderRun | null;
   builderRunHistory?: BuilderRun[];
   busy: boolean;
@@ -451,6 +453,11 @@ function fitTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
   if (status === "comfortable") return "pass";
   if (status === "possible" || status === "tight") return "warn";
   if (status === "avoid") return "fail";
+  return "neutral";
+}
+
+function receiptTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "pass" || status === "warn" || status === "fail") return status;
   return "neutral";
 }
 
@@ -895,6 +902,7 @@ export function BuilderWizard({
   datasetForge,
   recipe,
   appliedHardwareRecipe,
+  guidedBuilderTest,
   builderRun,
   builderRunHistory = [],
   busy,
@@ -1025,6 +1033,15 @@ export function BuilderWizard({
   const appliedRecipeMatchesPlan = Boolean(planMatchesForm && plan?.planId && appliedHardwareRecipe?.ok && appliedHardwareRecipe.planId === plan.planId);
   const appliedReceiptPath = appliedRecipeMatchesPlan ? appliedHardwareRecipe?.files.latestJson || appliedHardwareRecipe?.files.historyJson || "" : "";
   const guidedTest = appliedRecipeMatchesPlan ? appliedHardwareRecipe?.testPrompt : null;
+  const guidedReceiptMatchesPlan = Boolean(
+    appliedRecipeMatchesPlan &&
+      guidedBuilderTest?.planId === plan?.planId &&
+      guidedBuilderTest?.appliedReceiptId === appliedHardwareRecipe?.receiptId
+  );
+  const guidedReceipt = guidedReceiptMatchesPlan ? guidedBuilderTest : null;
+  const guidedReceiptTone =
+    guidedReceipt?.status === "pass" ? "pass" : guidedReceipt?.status === "warn" ? "warn" : guidedReceipt?.status === "fail" ? "fail" : "neutral";
+  const guidedReceiptPath = guidedReceipt?.files.latestJson || guidedReceipt?.files.historyJson || "";
   const aiProfile = useMemo(
     () =>
       (planMatchesForm && plan?.aiProfile) ||
@@ -1640,7 +1657,7 @@ export function BuilderWizard({
                 {guidedTest?.unlocked ? (
                   <button className="plain-button small" type="button" onClick={() => onRunGuidedTest(guidedTest.prompt, guidedTest.modelName)} disabled={chatBusy}>
                     {chatBusy ? <LoaderCircle className="spin-icon" size={15} /> : <MessageSquare size={15} />}
-                    <span>{chatBusy ? "Testing" : "Run Test Prompt"}</span>
+                    <span>{chatBusy ? "Testing" : guidedReceipt ? "Rerun Test" : "Run Test Prompt"}</span>
                   </button>
                 ) : null}
               </div>
@@ -1649,6 +1666,40 @@ export function BuilderWizard({
                   <strong>Guided source-backed test</strong>
                   <p>{guidedTest.prompt}</p>
                   <em>{guidedTest.detail}</em>
+                </div>
+              ) : null}
+              {guidedReceipt ? (
+                <div className={`hardware-test-result ${guidedReceipt.status}`}>
+                  <div>
+                    <strong>Test receipt</strong>
+                    <StatusPill status={guidedReceiptTone} label={guidedReceipt.status} />
+                  </div>
+                  <p>{guidedReceipt.summary}</p>
+                  <div className="hardware-test-facts">
+                    <span>
+                      <strong>Cited</strong>
+                      <em>
+                        {guidedReceipt.verification.citedPaths.length}/{guidedReceipt.verification.requiredCitationCount}
+                      </em>
+                    </span>
+                    <span>
+                      <strong>Retrieval</strong>
+                      <em>{guidedReceipt.verification.retrievalInsideScope ? "In scope" : "Review"}</em>
+                    </span>
+                    <span>
+                      <strong>Receipt</strong>
+                      <em title={guidedReceiptPath}>{compactPath(guidedReceiptPath)}</em>
+                    </span>
+                  </div>
+                  <div className="hardware-test-checks">
+                    {guidedReceipt.verification.checks.slice(0, 4).map((check) => (
+                      <span key={check.id}>
+                        <StatusPill status={receiptTone(check.status)} label={check.status} />
+                        <em>{check.label}</em>
+                      </span>
+                    ))}
+                  </div>
+                  <blockquote>{guidedReceipt.answer.content || "No model answer was captured."}</blockquote>
                 </div>
               ) : null}
             </div>

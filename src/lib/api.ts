@@ -1,5 +1,6 @@
 import type {
   BuilderAppliedHardwareRecipe,
+  BuilderGuidedTestReceipt,
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
@@ -99,6 +100,19 @@ export function applyBuilderHardwareRecipe(planId?: string) {
   }>("/api/builder/hardware-recipe/apply", {
     method: "POST",
     body: JSON.stringify({ planId })
+  });
+}
+
+export function runBuilderGuidedTest(planId?: string, prompt?: string, modelName?: string) {
+  return requestJson<{
+    ok: boolean;
+    receipt: BuilderGuidedTestReceipt;
+    applied: BuilderAppliedHardwareRecipe;
+    plan: BuilderPlan;
+    project: ProjectPayload;
+  }>("/api/builder/guided-test/run", {
+    method: "POST",
+    body: JSON.stringify({ planId, prompt, modelName })
   });
 }
 

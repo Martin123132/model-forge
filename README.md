@@ -56,6 +56,9 @@ artifacts from code and project folders.
   base model is installed, pulls it through Ollama when needed, writes the
   recipe-aware model profile and Modelfile metadata, saves an applied-recipe
   receipt, and unlocks a guided source-backed test prompt.
+- Writes a **Guided Builder Test Receipt** when that prompt runs: captures the
+  model answer, checks cited paths and retrieval sources against the expected
+  source scope, and shows a pass/warn/fail result back in Builder.
 - Shows an **AI build contract** before the user starts: what AI is being made,
   what it is allowed to know, how ModelForge will build it, what artifacts will
   be produced, and what counts as done.
@@ -157,6 +160,9 @@ The plan records:
 - An **Apply Hardware Recipe** receipt that records the base-model install
   check or pull, persisted model profile, recipe-aware Modelfile, and guided
   source-backed test prompt for Model Lab.
+- A **Guided Builder Test Receipt** after Run Test Prompt captures the answer,
+  verifies cited source paths and retrieved evidence against the expected
+  source scope, and stores the pass/warn/fail result beside the applied recipe.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
   prep when the hardware makes that realistic.
 - Ordered next steps mapped back to the app: Setup, Sources, Dataset Forge,

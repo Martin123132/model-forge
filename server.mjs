@@ -3169,8 +3169,16 @@ async function getLatestAppliedHardwareRecipe() {
   return readJsonIfExists(join(dataRoot, "builder", "latest", "applied-hardware-recipe.json"));
 }
 
+async function getLatestGuidedBuilderTestReceipt() {
+  return readJsonIfExists(join(dataRoot, "builder", "latest", "guided-test-receipt.json"));
+}
+
 function appliedHardwareRecipeId() {
   return `applied-recipe-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function guidedBuilderTestId() {
+  return `guided-test-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
 }
 
 function resolveRecommendedBaseModel(value = "", ollama = null) {
@@ -3204,6 +3212,28 @@ function buildGuidedTestPrompt({ plan, sourceScope }) {
     expectedSources: paths,
     detail: paths.length ? `Built from ${sourceScope.label} with ${paths.length} suggested source paths.` : "Built from the selected source scope."
   };
+}
+
+function normalizeCitationPath(value = "") {
+  return String(value || "")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "")
+    .toLowerCase();
+}
+
+function answerMentionsPath(answer = "", path = "") {
+  const raw = String(path || "").trim();
+  if (!raw) return false;
+  const lowerAnswer = String(answer || "").toLowerCase();
+  const slashPath = raw.replaceAll("\\", "/");
+  const backslashPath = slashPath.replaceAll("/", "\\");
+  const candidates = [raw, slashPath, backslashPath, `./${slashPath}`].map((item) => item.toLowerCase());
+  return candidates.some((candidate) => lowerAnswer.includes(candidate));
+}
+
+function uniqueNonEmpty(values = []) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
 function appliedHardwareRecipeMarkdown(applied) {
@@ -3373,6 +3403,215 @@ async function applyBuilderHardwareRecipe(body = {}) {
     modelExport,
     project: await getProjectPayload(),
     ollama: await getOllamaStatus({ force: true })
+  };
+}
+
+function verifyGuidedBuilderTest({ answer, retrievalSources = [], sourceScope, expectedSources = [] }) {
+  const allowedRows = sourceScope?.includedRows || [];
+  const allowedByNormalizedPath = new Map(allowedRows.map((row) => [normalizeCitationPath(row.path), row.path]));
+  const expected = uniqueNonEmpty(expectedSources).filter((path) => allowedByNormalizedPath.has(normalizeCitationPath(path)));
+  const retrievalSourcePaths = uniqueNonEmpty(retrievalSources.map((source) => source.sourcePath || source.path || ""));
+  const outOfScopeRetrieval = retrievalSourcePaths.filter((path) => !allowedByNormalizedPath.has(normalizeCitationPath(path)));
+  const citedAllowedPaths = uniqueNonEmpty(allowedRows.filter((row) => answerMentionsPath(answer, row.path)).map((row) => row.path));
+  const expectedMatchedSources = expected.filter((path) => {
+    const normalized = normalizeCitationPath(path);
+    return (
+      citedAllowedPaths.some((citedPath) => normalizeCitationPath(citedPath) === normalized) ||
+      retrievalSourcePaths.some((sourcePath) => normalizeCitationPath(sourcePath) === normalized)
+    );
+  });
+  const retrievalInsideScope = retrievalSourcePaths.length > 0 && outOfScopeRetrieval.length === 0;
+  const requiredCitationCount = Math.min(2, Math.max(1, allowedRows.length));
+  const answerCitesRequiredCount = citedAllowedPaths.length >= requiredCitationCount;
+  const checks = [
+    {
+      id: "answer-present",
+      label: "Answer captured",
+      status: answer.trim() ? "pass" : "fail",
+      detail: answer.trim() ? `${answer.length.toLocaleString()} characters` : "No model answer was captured."
+    },
+    {
+      id: "retrieval-in-scope",
+      label: "Retrieval inside source scope",
+      status: retrievalInsideScope ? "pass" : retrievalSourcePaths.length ? "fail" : "warn",
+      detail: retrievalInsideScope
+        ? `${retrievalSourcePaths.length.toLocaleString()} retrieval source(s) are inside ${sourceScope?.label || "the selected scope"}.`
+        : retrievalSourcePaths.length
+          ? `${outOfScopeRetrieval.length.toLocaleString()} retrieval source(s) were outside scope.`
+          : "No retrieval sources were returned."
+    },
+    {
+      id: "answer-citations",
+      label: "Answer cites source paths",
+      status: answerCitesRequiredCount ? "pass" : "warn",
+      detail: answerCitesRequiredCount
+        ? `${citedAllowedPaths.length.toLocaleString()} allowed source path(s) cited in the answer.`
+        : `Expected ${requiredCitationCount} cited source path(s); found ${citedAllowedPaths.length}.`
+    },
+    {
+      id: "expected-source-hits",
+      label: "Expected source hints matched",
+      status: expected.length ? (expectedMatchedSources.length ? "pass" : "warn") : "warn",
+      detail: expected.length
+        ? `${expectedMatchedSources.length.toLocaleString()}/${expected.length.toLocaleString()} expected source hint(s) matched.`
+        : "The applied recipe did not provide expected source hints."
+    }
+  ];
+  const hasFail = checks.some((check) => check.status === "fail");
+  const hasWarn = checks.some((check) => check.status === "warn");
+  return {
+    status: hasFail ? "fail" : hasWarn ? "warn" : "pass",
+    checks,
+    sourceScope: publicSourceScopeResolution(sourceScope),
+    expectedSources: expected,
+    expectedMatchedSources,
+    citedPaths: citedAllowedPaths,
+    retrievalSourcePaths,
+    outOfScopePaths: outOfScopeRetrieval,
+    retrievalInsideScope,
+    answerCitesRequiredCount,
+    requiredCitationCount
+  };
+}
+
+function guidedBuilderTestMarkdown(receipt) {
+  return [
+    `# ${receipt.aiName} Guided Builder Test`,
+    "",
+    `Receipt: ${receipt.testId}`,
+    `Created: ${receipt.createdAt}`,
+    `Plan: ${receipt.planId}`,
+    `Applied recipe: ${receipt.appliedReceiptId}`,
+    `Status: ${receipt.status}`,
+    `Model: ${receipt.modelName}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary,
+    "",
+    "## Prompt",
+    "",
+    receipt.prompt,
+    "",
+    "## Answer",
+    "",
+    receipt.answer.content || "No answer captured.",
+    "",
+    "## Verification",
+    "",
+    ...receipt.verification.checks.map((check) => `- ${check.status.toUpperCase()} ${check.label}: ${check.detail}`),
+    "",
+    "## Cited Paths",
+    "",
+    ...(receipt.verification.citedPaths.length ? receipt.verification.citedPaths.map((item) => `- ${item}`) : ["- No exact source paths were cited in the answer."]),
+    "",
+    "## Retrieval Sources",
+    "",
+    ...(receipt.verification.retrievalSourcePaths.length ? receipt.verification.retrievalSourcePaths.map((item) => `- ${item}`) : ["- No retrieval sources were returned."]),
+    ""
+  ].join("\n");
+}
+
+async function runBuilderGuidedTest(body = {}) {
+  await ensureDataRoot();
+  const applied = await getLatestAppliedHardwareRecipe();
+  if (!applied?.ok || !applied.testPrompt?.unlocked) {
+    throw new Error("Apply the Builder hardware recipe before running the guided source-backed test.");
+  }
+  const plan = await getBuilderPlanById(body.planId || applied.planId || "");
+  if (!plan?.planId || plan.planId !== applied.planId) {
+    throw new Error("The latest applied hardware recipe does not match the requested Builder plan.");
+  }
+  const createdAt = new Date().toISOString();
+  const testId = guidedBuilderTestId();
+  const latestDir = join(dataRoot, "builder", "latest");
+  const historyDir = join(dataRoot, "builder", "history", plan.planId, "guided-tests");
+  const files = {
+    latestJson: join(latestDir, "guided-test-receipt.json"),
+    latestMarkdown: join(latestDir, "guided-test-receipt.md"),
+    historyJson: join(historyDir, `${testId}.json`),
+    historyMarkdown: join(historyDir, `${testId}.md`)
+  };
+  await mkdir(latestDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+
+  const prompt = cleanSetting(body.prompt) || applied.testPrompt.prompt || "";
+  const modelName = cleanSetting(body.modelName) || applied.testPrompt.modelName || applied.modelProfile?.modelName || defaultTargetModelName();
+  if (!prompt) {
+    throw new Error("Guided Builder test requires a prompt.");
+  }
+
+  let chat = null;
+  let chatError = "";
+  try {
+    chat = await chatWithOllama({
+      modelName,
+      messages: [{ role: "user", content: prompt }],
+      retrievalLimit: Number(body.retrievalLimit || 6),
+      maxTokens: Number(body.maxTokens || 260),
+      timeoutMs: Number(body.timeoutMs || 180000)
+    });
+  } catch (error) {
+    chatError = error instanceof Error ? error.message : String(error);
+  }
+
+  const sources = await walkSources(sourceRoot);
+  const sourceScope = resolveSourceScope(sources, plan.request?.sourceScope || "whole-project");
+  const answer = chat?.message?.content || "";
+  const verification = verifyGuidedBuilderTest({
+    answer,
+    retrievalSources: chat?.retrieval?.sources || [],
+    sourceScope,
+    expectedSources: applied.testPrompt.expectedSources || []
+  });
+  const status = chatError ? "fail" : verification.status;
+  const ok = status !== "fail";
+  const summary = chatError
+    ? `Guided Builder test failed before a model answer was captured: ${chatError}`
+    : status === "pass"
+      ? `Guided Builder test passed with ${verification.citedPaths.length} source path citation(s) inside ${sourceScope.label}.`
+      : status === "warn"
+        ? `Guided Builder test produced an answer, but citation evidence needs review.`
+        : `Guided Builder test failed source-backed verification.`;
+  const receipt = {
+    schema: "modelforge.builder_guided_test_receipt.v1",
+    testId,
+    createdAt,
+    planId: plan.planId,
+    appliedReceiptId: applied.receiptId,
+    ok,
+    status,
+    summary,
+    aiName: applied.aiName || plan.aiProfile?.name || "Local AI",
+    route: applied.route || plan.routeLabel || "Builder",
+    modelName: chat?.modelName || modelName,
+    requestedModelName: chat?.requestedModelName || modelName,
+    fallbackUsed: Boolean(chat?.fallbackUsed),
+    prompt,
+    answer: {
+      role: "assistant",
+      content: answer,
+      createdAt: chat?.message?.createdAt || createdAt,
+      sources: chat?.message?.sources || []
+    },
+    verification,
+    chat: {
+      transcriptPath: chat?.transcriptPath || "",
+      retrieval: chat?.retrieval || { packId: "", queryKeywords: [], sources: [] },
+      error: chatError
+    },
+    files
+  };
+  await writeJson(files.latestJson, receipt);
+  await writeFile(files.latestMarkdown, guidedBuilderTestMarkdown(receipt), "utf-8");
+  await writeJson(files.historyJson, receipt);
+  await writeFile(files.historyMarkdown, guidedBuilderTestMarkdown(receipt), "utf-8");
+  return {
+    ok,
+    receipt,
+    applied,
+    plan,
+    project: await getProjectPayload()
   };
 }
 
@@ -6990,7 +7229,7 @@ async function getOllamaStatus({ force = false } = {}) {
 
 async function getProjectPayload() {
   const sources = await walkSources(sourceRoot);
-  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestKnowledgePack, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, latestAppliedHardwareRecipe, builderRunHistory] = await Promise.all([
+  const [toolStatus, latestModelExport, latestProof, latestEval, latestShare, latestDataset, latestKnowledgePack, latestRecipe, latestRecipeRun, recipeRunHistory, recipeHistory, latestBuildPlan, latestBuilderRun, latestAppliedHardwareRecipe, latestGuidedBuilderTest, builderRunHistory] = await Promise.all([
     getToolStatus(),
     getLatestModelExport(),
     getLatestProofBundle(),
@@ -7005,6 +7244,7 @@ async function getProjectPayload() {
     getLatestBuilderPlan(),
     getLatestBuilderRun(),
     getLatestAppliedHardwareRecipe(),
+    getLatestGuidedBuilderTestReceipt(),
     getBuilderRunHistory()
   ]);
   const dataset = estimateDatasetMetrics(sources);
@@ -7040,6 +7280,7 @@ async function getProjectPayload() {
     latestBuildPlan,
     latestBuilderRun,
     latestAppliedHardwareRecipe,
+    latestGuidedBuilderTest,
     builderRunHistory,
     pipeline: [
       {
@@ -7389,6 +7630,12 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/builder/hardware-recipe/apply") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await applyBuilderHardwareRecipe(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/guided-test/run") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await runBuilderGuidedTest(body));
       return;
     }
 

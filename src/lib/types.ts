@@ -372,6 +372,62 @@ export type BuilderAppliedHardwareRecipe = {
   };
 };
 
+export type BuilderGuidedTestReceipt = {
+  schema: string;
+  testId: string;
+  createdAt: string;
+  planId: string;
+  appliedReceiptId: string;
+  ok: boolean;
+  status: "pass" | "warn" | "fail" | string;
+  summary: string;
+  aiName: string;
+  route: string;
+  modelName: string;
+  requestedModelName: string;
+  fallbackUsed: boolean;
+  prompt: string;
+  answer: {
+    role: "assistant";
+    content: string;
+    createdAt: string;
+    sources: KnowledgeSnippetSource[];
+  };
+  verification: {
+    status: "pass" | "warn" | "fail" | string;
+    checks: Array<{
+      id: string;
+      label: string;
+      status: "pass" | "warn" | "fail" | string;
+      detail: string;
+    }>;
+    sourceScope: SourceScopeOption;
+    expectedSources: string[];
+    expectedMatchedSources: string[];
+    citedPaths: string[];
+    retrievalSourcePaths: string[];
+    outOfScopePaths: string[];
+    retrievalInsideScope: boolean;
+    answerCitesRequiredCount: boolean;
+    requiredCitationCount: number;
+  };
+  chat: {
+    transcriptPath: string;
+    retrieval: {
+      packId: string;
+      queryKeywords: string[];
+      sources: KnowledgeSnippetSource[];
+    };
+    error: string;
+  };
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
+};
+
 export type BuilderPlan = {
   schema: string;
   planId: string;
@@ -1213,6 +1269,7 @@ export type ProjectPayload = {
   latestBuildPlan?: BuilderPlan | null;
   latestBuilderRun?: BuilderRun | null;
   latestAppliedHardwareRecipe?: BuilderAppliedHardwareRecipe | null;
+  latestGuidedBuilderTest?: BuilderGuidedTestReceipt | null;
   builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];
   sources: SourceSummary;

@@ -2080,6 +2080,112 @@ h2 {
   font-weight: 700;
 }
 
+.hardware-test-result {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #dbe7f7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.hardware-test-result.pass {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.hardware-test-result.warn {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.hardware-test-result.fail {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.hardware-test-result > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hardware-test-result > div:first-child strong {
+  color: #172236;
+  font-size: 11px;
+  font-weight: 840;
+}
+
+.hardware-test-result p {
+  margin: 0;
+  color: #3d4e66;
+  font-size: 11px;
+  font-weight: 640;
+  line-height: 1.4;
+}
+
+.hardware-test-facts,
+.hardware-test-checks {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hardware-test-facts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hardware-test-facts span,
+.hardware-test-checks span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.hardware-test-facts strong,
+.hardware-test-facts em,
+.hardware-test-checks em {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hardware-test-facts strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hardware-test-facts em,
+.hardware-test-checks em {
+  color: #172236;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+}
+
+.hardware-test-result blockquote {
+  overflow: hidden;
+  display: -webkit-box;
+  min-width: 0;
+  margin: 0;
+  color: #263850;
+  font-size: 11px;
+  font-weight: 610;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+}
+
 .fit-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6975,6 +7081,7 @@ h2 {
   .hardware-recipe-grid,
   .hardware-apply-facts,
   .hardware-apply-actions,
+  .hardware-test-facts,
   .source-scope-preview-lists,
   .ai-profile-facts,
   .ai-profile-rules > div,
@@ -7034,6 +7141,9 @@ h2 {
   .hardware-apply-facts strong,
   .hardware-apply-facts em,
   .hardware-test-prompt p,
+  .hardware-test-facts strong,
+  .hardware-test-facts em,
+  .hardware-test-checks em,
   .builder-run-stage strong,
   .builder-run-stage em,
   .builder-run-output em,

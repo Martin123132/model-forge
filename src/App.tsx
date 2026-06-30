@@ -27,6 +27,7 @@ import {
   getSources,
   runFirstSetup,
   runSetupDoctorAction,
+  runBuilderGuidedTest,
   runEvalGates,
   runRecipePack,
   runPipeline,
@@ -39,6 +40,7 @@ import {
 } from "./lib/api";
 import type {
   BuilderAppliedHardwareRecipe,
+  BuilderGuidedTestReceipt,
   BuilderPlan,
   BuilderPlanRequest,
   BuilderRun,
@@ -185,6 +187,7 @@ function App() {
   const [hardwareProfile, setHardwareProfile] = useState<HardwareProfile | null>(null);
   const [buildPlan, setBuildPlan] = useState<BuilderPlan | null>(null);
   const [appliedHardwareRecipe, setAppliedHardwareRecipe] = useState<BuilderAppliedHardwareRecipe | null>(null);
+  const [guidedBuilderTest, setGuidedBuilderTest] = useState<BuilderGuidedTestReceipt | null>(null);
   const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
   const [builderRunHistory, setBuilderRunHistory] = useState<BuilderRun[]>([]);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
@@ -223,6 +226,7 @@ function App() {
   const [builderBusy, setBuilderBusy] = useState(false);
   const [builderRunBusy, setBuilderRunBusy] = useState(false);
   const [applyRecipeBusy, setApplyRecipeBusy] = useState(false);
+  const [builderTestBusy, setBuilderTestBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -246,6 +250,7 @@ function App() {
       setHardwareProfile(hardwarePayload);
       setBuildPlan(projectPayload.latestBuildPlan || null);
       setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(projectPayload.latestGuidedBuilderTest || null);
       setModelExport(projectPayload.latestModelExport || null);
       setProof(projectPayload.latestProof || null);
       setEvalReport(projectPayload.latestEval || null);
@@ -288,6 +293,7 @@ function App() {
     setHardwareProfile(hardwarePayload);
     setBuildPlan(result.project.latestBuildPlan || null);
     setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+    setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
     setModelExport(result.project.latestModelExport || null);
     setProof(result.project.latestProof || null);
     setEvalReport(result.project.latestEval || null);
@@ -323,6 +329,7 @@ function App() {
       const result = await buildAiBuildPlan(request);
       setBuildPlan(result.plan);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setHardwareProfile(result.plan.hardware);
       setProject(result.project);
       setSources(result.project.sources);
@@ -337,6 +344,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("builder");
     } catch (planError) {
@@ -369,6 +377,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       await refreshModelLibrary();
     } catch (runError) {
@@ -400,6 +409,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       await refreshModelLibrary();
@@ -519,6 +529,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       setModelLibrary(modelLibraryPayload.library);
@@ -552,6 +563,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       setActiveWorkspace("setup");
@@ -586,6 +598,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setProjectRegistry(projectRegistryPayload.registry);
       setModelLibrary(modelLibraryPayload.library);
@@ -649,6 +662,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setOllama(await getOllamaStatus());
       setActiveWorkspace("model");
@@ -677,6 +691,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("release");
       await refreshModelLibrary();
@@ -702,6 +717,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace(nextWorkspace);
       await refreshModelLibrary();
@@ -738,6 +754,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("model");
       await refreshModelLibrary();
@@ -767,6 +784,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace(nextWorkspace);
@@ -806,6 +824,7 @@ function App() {
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setExportPack(exportPackPayload.pack || null);
       setActiveWorkspace("model");
@@ -838,6 +857,7 @@ function App() {
     setRecipeHistory(projectPayload.recipeHistory || []);
     setBuilderRun(projectPayload.latestBuilderRun || null);
     setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
+    setGuidedBuilderTest(projectPayload.latestGuidedBuilderTest || null);
     setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
     setModelLibrary(modelLibraryPayload.library);
@@ -919,6 +939,7 @@ function App() {
     setHardwareProfile(hardwarePayload);
     setBuildPlan(projectPayload.latestBuildPlan || null);
     setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
+    setGuidedBuilderTest(projectPayload.latestGuidedBuilderTest || null);
     setModelExport(projectPayload.latestModelExport || null);
     setProof(projectPayload.latestProof || null);
     setEvalReport(projectPayload.latestEval || null);
@@ -930,6 +951,7 @@ function App() {
     setRecipeHistory(projectPayload.recipeHistory || []);
     setBuilderRun(projectPayload.latestBuilderRun || fallbackRun || null);
     setAppliedHardwareRecipe(projectPayload.latestAppliedHardwareRecipe || null);
+    setGuidedBuilderTest(projectPayload.latestGuidedBuilderTest || null);
     setBuilderRunHistory(projectPayload.builderRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
     setModelLibrary(modelLibraryPayload.library);
@@ -999,6 +1021,7 @@ function App() {
       setRecipeRunHistory(result.project.recipeRunHistory || []);
       setRecipeHistory(result.project.recipeHistory || []);
       setBuilderRun(result.project.latestBuilderRun || null);
+      setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setActiveWorkspace("builder");
       await refreshModelLibrary();
@@ -1050,10 +1073,42 @@ function App() {
   }, [chatMessages]);
 
   const handleRunGuidedBuilderTest = useCallback(async (prompt: string, modelName: string) => {
-    if (!prompt.trim() || !modelName.trim()) return;
-    setActiveWorkspace("model");
-    await handleSendChat(prompt, modelName);
-  }, [handleSendChat]);
+    if (!buildPlan || !prompt.trim() || !modelName.trim()) return;
+    setBuilderTestBusy(true);
+    setError("");
+    try {
+      const result = await runBuilderGuidedTest(buildPlan.planId, prompt, modelName);
+      setGuidedBuilderTest(result.receipt);
+      setBuildPlan(result.plan);
+      setAppliedHardwareRecipe(result.applied);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setProof(result.project.latestProof || null);
+      setEvalReport(result.project.latestEval || null);
+      setShareCard(result.project.latestShare || null);
+      setDatasetForge(result.project.latestDataset || null);
+      setForgeRecipe(result.project.latestRecipe || null);
+      setRecipeRun(result.project.latestRecipeRun || null);
+      setRecipeRunHistory(result.project.recipeRunHistory || []);
+      setRecipeHistory(result.project.recipeHistory || []);
+      setBuilderRun(result.project.latestBuilderRun || null);
+      setBuilderRunHistory(result.project.builderRunHistory || []);
+      setChatMessages((messages) => [
+        ...messages,
+        { role: "user", content: result.receipt.prompt, createdAt: result.receipt.createdAt },
+        { role: "assistant", content: result.receipt.answer.content, createdAt: result.receipt.answer.createdAt, sources: result.receipt.answer.sources }
+      ]);
+      setActiveWorkspace("builder");
+      await refreshModelLibrary();
+      if (!result.ok) {
+        setError(result.receipt.summary || "Guided Builder test did not pass.");
+      }
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : String(testError));
+    } finally {
+      setBuilderTestBusy(false);
+    }
+  }, [buildPlan, refreshModelLibrary]);
 
   const handleCompareModels = useCallback(async (prompt: string, baseModel?: string, forgedModel?: string) => {
     setCompareBusy(true);
@@ -1388,12 +1443,13 @@ function App() {
                     datasetForge={datasetForge}
                     recipe={forgeRecipe}
                     appliedHardwareRecipe={appliedHardwareRecipe}
+                    guidedBuilderTest={guidedBuilderTest}
                     builderRun={builderRun}
                     builderRunHistory={builderRunHistory}
                     busy={builderBusy}
                     builderRunBusy={builderRunBusy || builderRun?.status === "running"}
                     applyRecipeBusy={applyRecipeBusy}
-                    chatBusy={chatBusy}
+                    chatBusy={chatBusy || builderTestBusy}
                     hardwareBusy={hardwareBusy}
                     datasetBusy={datasetBusy}
                     recipeBusy={recipeBusy}
