@@ -23,6 +23,10 @@ async function postJson(path, body) {
   return response.json();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function gateCounts(gates = []) {
   return gates.reduce(
     (summary, gate) => {
@@ -47,7 +51,7 @@ function formatCheck(item) {
 }
 
 async function main() {
-  const [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorStartDryRun, doctorRepairDryRun] = await Promise.all([
+  let [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorStartDryRun, doctorRepairDryRun] = await Promise.all([
     getJson("/api/project"),
     getJson("/api/sources"),
     getJson("/api/setup"),
@@ -64,7 +68,7 @@ async function main() {
   const dataset = project.latestDataset || datasetResponse.dataset || null;
   const knowledgePack = project.latestKnowledgePack || null;
   const exportPack = exportPackResponse.pack || null;
-  const modelLibrary = modelLibraryResponse.library || null;
+  let modelLibrary = modelLibraryResponse.library || null;
   const projectRegistry = projectRegistryResponse.registry || null;
   const diagnostics = diagnosticsResponse.diagnostics || null;
   const activeRegistryProject = projectRegistry?.projects?.find((item) => item.id === projectRegistry.activeProjectId) || null;
@@ -72,7 +76,8 @@ async function main() {
   const latestBuilderRun = project.latestBuilderRun || null;
   const latestBuilderAiCreateReceipt = project.latestBuilderAiCreateReceipt || null;
   const trainingRoutePlan = project.latestBuildPlan?.trainingRoutePlan || project.latestTrainingRoutePlan || null;
-  const latestAdapterBuild = project.latestAdapterBuild || null;
+  let latestAdapterBuild = project.latestAdapterBuild || null;
+  let latestAdapterTrainingRun = project.latestAdapterTrainingRun || null;
   const builderStages = latestBuilderRun?.stages || [];
   const planScope = project.latestBuildPlan?.request?.sourceScope || "";
   const scopePreviewOptions = project.latestBuildPlan?.sourceScopePreview?.options || [];
@@ -91,6 +96,25 @@ async function main() {
       proofSummary.totalSizeBytes === sources.totalSizeBytes
   );
   const evalFresh = Boolean(evalReport && project.latestProof?.path && evalReport.proofPath === project.latestProof.path && proofFresh);
+  if (latestAdapterBuild?.adapterBuildId) {
+    const started = await postJson("/api/builder/adapter/training/run", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      runTraining: false,
+      allowLongRun: false
+    });
+    latestAdapterTrainingRun = started.run || latestAdapterTrainingRun;
+    for (let index = 0; index < 20 && latestAdapterTrainingRun?.status === "running"; index += 1) {
+      await sleep(250);
+      const polled = await getJson(`/api/builder/adapter/training/run?runId=${encodeURIComponent(latestAdapterTrainingRun.runId)}`);
+      latestAdapterTrainingRun = polled.run || latestAdapterTrainingRun;
+    }
+    const [refreshedProject, refreshedModelLibraryResponse] = await Promise.all([getJson("/api/project"), getJson("/api/models/library")]);
+    project = refreshedProject;
+    latestAdapterBuild = project.latestAdapterBuild || latestAdapterBuild;
+    latestAdapterTrainingRun = project.latestAdapterTrainingRun || latestAdapterTrainingRun;
+    modelLibrary = refreshedModelLibraryResponse.library || modelLibrary;
+  }
+
   const forgedLibraryItem = modelLibrary?.items?.find((item) => item.kind === "forged") || null;
   const adapterLibraryItem = modelLibrary?.items?.find((item) => item.kind === "adapter") || null;
 
@@ -271,6 +295,8 @@ async function main() {
           existsSync(latestAdapterBuild.files.trainingDatasetJsonl) &&
           latestAdapterBuild.files?.trainingConfigJson &&
           existsSync(latestAdapterBuild.files.trainingConfigJson) &&
+          latestAdapterBuild.files?.runnerScript &&
+          existsSync(latestAdapterBuild.files.runnerScript) &&
           latestAdapterBuild.files?.runnerRecipeJson &&
           existsSync(latestAdapterBuild.files.runnerRecipeJson) &&
           latestAdapterBuild.files?.receiptJson &&
@@ -281,6 +307,24 @@ async function main() {
       latestAdapterBuild
         ? `${latestAdapterBuild.status}: ${latestAdapterBuild.adapter?.name || "adapter"}; examples=${latestAdapterBuild.dataset?.examples || 0}; mode=${latestAdapterBuild.runner?.executionMode || "unknown"}`
         : "no Adapter Builder receipt"
+    ),
+    check(
+      "Adapter Training Run receipt",
+      Boolean(
+        latestAdapterTrainingRun?.schema === "modelforge.adapter_training_run.v1" &&
+          latestAdapterTrainingRun.adapterBuildId === latestAdapterBuild?.adapterBuildId &&
+          ["pass", "fail", "canceled"].includes(String(latestAdapterTrainingRun.status || "").toLowerCase()) &&
+          latestAdapterTrainingRun.mode === "dry-run" &&
+          latestAdapterTrainingRun.files?.latestJson &&
+          existsSync(latestAdapterTrainingRun.files.latestJson) &&
+          latestAdapterTrainingRun.files?.trainingReceiptJson &&
+          existsSync(latestAdapterTrainingRun.files.trainingReceiptJson) &&
+          latestAdapterTrainingRun.checkpoint?.dryRun === true &&
+          latestAdapterTrainingRun.checkpoint?.trained === false
+      ),
+      latestAdapterTrainingRun
+        ? `${latestAdapterTrainingRun.status}: ${latestAdapterTrainingRun.mode}; checkpoint=${latestAdapterTrainingRun.checkpoint?.summary || "none"}`
+        : "no Adapter Training Run receipt"
     ),
     check(
       "Builder blueprint",
@@ -358,7 +402,9 @@ async function main() {
       Boolean(
         adapterLibraryItem?.kind === "adapter" &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Adapter receipt" && receipt.exists) &&
-          adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter")
+          adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter") &&
+          adapterLibraryItem.actions?.some((action) => action.id === "builder-run-adapter-training" && action.kind === "builder-adapter-run") &&
+          adapterLibraryItem.actions?.some((action) => action.id === "builder-promote-adapter" && action.kind === "builder-adapter-promote")
       ),
       adapterLibraryItem
         ? `${adapterLibraryItem.name}: ${adapterLibraryItem.statusLabel}; ${(adapterLibraryItem.actions || []).map((action) => action.id).join(", ") || "no actions"}`

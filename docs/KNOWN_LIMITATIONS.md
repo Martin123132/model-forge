@@ -12,8 +12,12 @@ model trainer.
 - The Training Route Planner may classify tiny from-scratch experiments, but
   those are educational lab routes, not general foundation-model claims.
 - Adapter Builder prepares LoRA/QLoRA datasets, configs, runner recipes,
-  checkpoint folders, manifests, and receipts. It dry-runs by default unless
-  hardware, Python ML dependencies, and explicit long-run approval are present.
+  runner scripts, checkpoint folders, manifests, and receipts. It dry-runs by
+  default unless hardware, Python ML dependencies, explicit long-run approval,
+  and a compatible Transformers/Hugging Face or local base model id are present.
+- Dry-run adapter receipts prove the dataset/config/runner path executed, but
+  they do not claim trained weights. Promotion into an Ollama target is blocked
+  until real adapter weight and config files are detected.
 - Hardware fit estimates are guidance, not a promise that every base model,
   context length, quantization, or adapter setting will fit.
 

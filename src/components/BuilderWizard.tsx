@@ -24,6 +24,8 @@ import {
 import { useMemo, useState } from "react";
 import type {
   AdapterBuilderReceipt,
+  AdapterPromotionReceipt,
+  AdapterTrainingRun,
   BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
@@ -54,6 +56,8 @@ type BuilderWizardProps = {
   guidedBuilderTest?: BuilderGuidedTestReceipt | null;
   builderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   adapterBuild?: AdapterBuilderReceipt | null;
+  adapterTrainingRun?: AdapterTrainingRun | null;
+  adapterPromotion?: AdapterPromotionReceipt | null;
   builderRun?: BuilderRun | null;
   builderRunHistory?: BuilderRun[];
   busy: boolean;
@@ -61,6 +65,8 @@ type BuilderWizardProps = {
   applyRecipeBusy: boolean;
   createAiBusy: boolean;
   adapterBusy: boolean;
+  adapterTrainingBusy: boolean;
+  adapterPromoteBusy: boolean;
   chatBusy: boolean;
   hardwareBusy: boolean;
   datasetBusy: boolean;
@@ -69,6 +75,9 @@ type BuilderWizardProps = {
   onApplyHardwareRecipe: () => void;
   onCreateOrUpdateAi: () => void;
   onBuildAdapter: () => void;
+  onRunAdapterTraining: () => void;
+  onCancelAdapterTraining: (runId: string) => void;
+  onPromoteAdapter: () => void;
   onRunGuidedTest: (prompt: string, modelName: string) => void;
   onStartBuild: () => void;
   onCancelBuild: (runId: string) => void;
@@ -497,6 +506,29 @@ function adapterReceiptTone(status?: string): "pass" | "warn" | "fail" | "neutra
   if (status === "dry-run") return "warn";
   if (status === "blocked" || status === "failed") return "fail";
   return "neutral";
+}
+
+function adapterRunTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "pass") return "pass";
+  if (status === "running") return "warn";
+  if (status === "fail" || status === "canceled") return "fail";
+  return "neutral";
+}
+
+function adapterRunLabel(run?: AdapterTrainingRun | null) {
+  if (!run) return "Not run";
+  if (run.status === "running") return run.mode === "train" ? "Training" : "Dry-running";
+  if (run.status === "pass") return run.mode === "train" ? "Trained" : "Dry-run";
+  if (run.status === "canceled") return "Canceled";
+  if (run.status === "fail") return "Failed";
+  return run.status || "Not run";
+}
+
+function adapterRunPercent(run?: AdapterTrainingRun | null) {
+  const current = Number(run?.progress?.currentStep || 0);
+  const total = Number(run?.progress?.totalSteps || 0);
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
 }
 
 function optionLabel(options: Array<{ id: string; label: string }>, id?: string) {
@@ -943,6 +975,8 @@ export function BuilderWizard({
   guidedBuilderTest,
   builderAiCreateReceipt,
   adapterBuild,
+  adapterTrainingRun,
+  adapterPromotion,
   builderRun,
   builderRunHistory = [],
   busy,
@@ -950,6 +984,8 @@ export function BuilderWizard({
   applyRecipeBusy,
   createAiBusy,
   adapterBusy,
+  adapterTrainingBusy,
+  adapterPromoteBusy,
   chatBusy,
   hardwareBusy,
   datasetBusy,
@@ -958,6 +994,9 @@ export function BuilderWizard({
   onApplyHardwareRecipe,
   onCreateOrUpdateAi,
   onBuildAdapter,
+  onRunAdapterTraining,
+  onCancelAdapterTraining,
+  onPromoteAdapter,
   onRunGuidedTest,
   onStartBuild,
   onCancelBuild,
@@ -1106,6 +1145,13 @@ export function BuilderWizard({
   const adapterReceipt = adapterReceiptMatchesPlan ? adapterBuild : null;
   const adapterReceiptPath = adapterReceipt?.files.receiptJson || adapterReceipt?.files.historyReceiptJson || "";
   const adapterActionLabel = adapterBusy ? "Preparing" : adapterReceipt ? "Rebuild Adapter" : "Prepare Adapter";
+  const adapterRunMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterTrainingRun?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterRun = adapterRunMatchesReceipt ? adapterTrainingRun : null;
+  const adapterRunProgress = adapterRunPercent(currentAdapterRun);
+  const adapterCheckpoint = currentAdapterRun?.checkpoint || adapterReceipt?.runner?.checkpoint || null;
+  const adapterPromoteMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterPromotion?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterPromotion = adapterPromoteMatchesReceipt ? adapterPromotion : null;
+  const canPromoteAdapter = Boolean(adapterCheckpoint?.trained && adapterReceipt?.adapterBuildId && currentAdapterRun?.status === "pass");
   const aiProfile = useMemo(
     () =>
       (planMatchesForm && plan?.aiProfile) ||
@@ -1880,10 +1926,63 @@ export function BuilderWizard({
                   </span>
                 </div>
               ) : null}
-              <button className="primary-action compact" type="button" onClick={onBuildAdapter} disabled={!planMatchesForm || !plan || adapterBusy}>
-                {adapterBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Hammer size={15} />}
-                <span>{adapterActionLabel}</span>
-              </button>
+              {adapterReceipt ? (
+                <div className="adapter-runner-panel">
+                  <div className="adapter-runner-head">
+                    <div>
+                      <strong>Trainer</strong>
+                      <span>{currentAdapterRun?.summary || adapterReceipt.runner.blockedReasons[0] || "Ready to run the guarded local trainer."}</span>
+                    </div>
+                    <StatusPill status={adapterRunTone(currentAdapterRun?.status)} label={adapterRunLabel(currentAdapterRun)} />
+                  </div>
+                  <div className="adapter-runner-meter" aria-label="Adapter trainer progress">
+                    <span style={{ width: `${adapterRunProgress}%` }} />
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Checkpoint</strong>
+                      <em>{adapterCheckpoint?.trained ? "trained" : adapterCheckpoint?.dryRun ? "dry-run" : "waiting"}</em>
+                    </span>
+                    <span>
+                      <strong>Run mode</strong>
+                      <em>{currentAdapterRun?.mode || adapterReceipt.runner.executionMode}</em>
+                    </span>
+                    <span>
+                      <strong>Promotion</strong>
+                      <em>{currentAdapterPromotion?.status || "not promoted"}</em>
+                    </span>
+                    <span>
+                      <strong>Run receipt</strong>
+                      <em title={currentAdapterRun?.files.latestJson || ""}>{compactPath(currentAdapterRun?.files.latestJson || "")}</em>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+              <div className="adapter-builder-actions">
+                <button className="primary-action compact" type="button" onClick={onBuildAdapter} disabled={!planMatchesForm || !plan || adapterBusy}>
+                  {adapterBusy ? <LoaderCircle className="spin-icon" size={15} /> : <Hammer size={15} />}
+                  <span>{adapterActionLabel}</span>
+                </button>
+                {adapterReceipt ? (
+                  currentAdapterRun?.status === "running" ? (
+                    <button className="plain-button small" type="button" onClick={() => onCancelAdapterTraining(currentAdapterRun.runId)}>
+                      <CircleStop size={14} />
+                      <span>Cancel</span>
+                    </button>
+                  ) : (
+                    <button className="plain-button small" type="button" onClick={onRunAdapterTraining} disabled={adapterTrainingBusy}>
+                      {adapterTrainingBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Play size={14} />}
+                      <span>{adapterTrainingBusy ? "Starting" : adapterCheckpoint?.trained ? "Rerun Trainer" : "Run Trainer"}</span>
+                    </button>
+                  )
+                ) : null}
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onPromoteAdapter} disabled={!canPromoteAdapter || adapterPromoteBusy || currentAdapterPromotion?.ok}>
+                    {adapterPromoteBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Rocket size={14} />}
+                    <span>{currentAdapterPromotion?.ok ? "Promoted" : adapterPromoteBusy ? "Promoting" : "Promote AI"}</span>
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
 

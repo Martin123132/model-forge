@@ -2,7 +2,7 @@ import { Bot, Copy, Database, Download, FileText, FolderOpen, Hammer, History, L
 import { useEffect, useMemo, useRef, useState } from "react";
 import { datasetForgeDownloadUrl } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
-import type { ChatCompareResponse, ChatCompareTurn, ChatMessage, DatasetForge, ForgeRecipe, ModelExport, ModelLibrary, ModelLibraryItem, OllamaStatus, RecipePackRun } from "../lib/types";
+import type { AdapterPromotionReceipt, AdapterTrainingRun, ChatCompareResponse, ChatCompareTurn, ChatMessage, DatasetForge, ForgeRecipe, ModelExport, ModelLibrary, ModelLibraryItem, OllamaStatus, RecipePackRun } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 
 type ModelLabProps = {
@@ -14,12 +14,17 @@ type ModelLabProps = {
   recipeRunHistory?: RecipePackRun[];
   recipeHistory?: ForgeRecipe[];
   modelLibrary?: ModelLibrary | null;
+  adapterTrainingRun?: AdapterTrainingRun | null;
+  adapterPromotion?: AdapterPromotionReceipt | null;
   compareResult?: ChatCompareResponse | null;
   recipeBusy: boolean;
   datasetBusy: boolean;
   selectRecipeBusy: boolean;
   packRunBusy: boolean;
   createBusy: boolean;
+  adapterBusy: boolean;
+  adapterTrainingBusy: boolean;
+  adapterPromoteBusy: boolean;
   chatBusy: boolean;
   compareBusy: boolean;
   chatMessages: ChatMessage[];
@@ -31,6 +36,8 @@ type ModelLabProps = {
   onCreate: (modelName: string) => void;
   onRebuildBuilderAi: () => void;
   onBuildAdapter: () => void;
+  onRunAdapterTraining: () => void;
+  onPromoteAdapter: () => void;
   onRetestBuilderAi: () => void;
   onSend: (prompt: string, modelName: string) => void;
   onCompare: (prompt: string, baseModel?: string, forgedModel?: string) => void;
@@ -148,12 +155,17 @@ export function ModelLab({
   recipeRunHistory = [],
   recipeHistory = [],
   modelLibrary,
+  adapterTrainingRun,
+  adapterPromotion,
   compareResult,
   recipeBusy,
   datasetBusy,
   selectRecipeBusy,
   packRunBusy,
   createBusy,
+  adapterBusy,
+  adapterTrainingBusy,
+  adapterPromoteBusy,
   chatBusy,
   compareBusy,
   chatMessages,
@@ -165,6 +177,8 @@ export function ModelLab({
   onCreate,
   onRebuildBuilderAi,
   onBuildAdapter,
+  onRunAdapterTraining,
+  onPromoteAdapter,
   onRetestBuilderAi,
   onSend,
   onCompare
@@ -363,22 +377,44 @@ export function ModelLab({
                 ) : null}
                 {item.actions?.length ? (
                   <div className="model-library-actions">
-                    {item.actions.slice(0, 2).map((action) => {
+                    {item.actions.slice(0, item.kind === "adapter" ? 4 : 2).map((action) => {
                       const isRebuild = action.id === "builder-rebuild-ai";
-                      const isAdapter = action.id === "builder-build-adapter";
-                      const disabled = isRebuild ? createBusy : action.id === "builder-retest-ai" ? chatBusy : false;
-                      const Icon = isRebuild ? RefreshCw : isAdapter ? Hammer : MessageSquare;
+                      const isAdapterPrep = action.id === "builder-build-adapter";
+                      const isAdapterRun = action.id === "builder-run-adapter-training";
+                      const isAdapterPromote = action.id === "builder-promote-adapter";
+                      const isRetest = action.id === "builder-retest-ai";
+                      const disabled = isRebuild
+                        ? createBusy
+                        : isAdapterPrep
+                          ? adapterBusy
+                          : isAdapterRun
+                            ? adapterTrainingBusy || adapterTrainingRun?.status === "running"
+                            : isAdapterPromote
+                              ? adapterPromoteBusy || adapterPromotion?.ok === true
+                              : isRetest
+                                ? chatBusy
+                                : false;
+                      const Icon = isRebuild ? RefreshCw : isAdapterPrep ? Hammer : isAdapterRun ? Play : isAdapterPromote ? Download : MessageSquare;
+                      const busyLabel = isRebuild
+                        ? "Rebuilding"
+                        : isAdapterPrep
+                          ? "Preparing"
+                          : isAdapterRun
+                            ? adapterTrainingRun?.status === "running" ? "Training" : "Starting"
+                            : isAdapterPromote
+                              ? adapterPromotion?.ok ? "Promoted" : "Promoting"
+                              : "Testing";
                       return (
                         <button
-                          className={isRebuild || isAdapter ? "primary-action compact" : "plain-button small"}
+                          className={isRebuild || isAdapterPrep || isAdapterRun ? "primary-action compact" : "plain-button small"}
                           disabled={disabled}
                           key={`${item.id}-${action.id}`}
-                          onClick={isRebuild ? onRebuildBuilderAi : isAdapter ? onBuildAdapter : onRetestBuilderAi}
+                          onClick={isRebuild ? onRebuildBuilderAi : isAdapterPrep ? onBuildAdapter : isAdapterRun ? onRunAdapterTraining : isAdapterPromote ? onPromoteAdapter : onRetestBuilderAi}
                           title={action.detail}
                           type="button"
                         >
                           <Icon className={disabled ? "spin-icon" : ""} size={14} />
-                          <span>{disabled ? (isRebuild ? "Rebuilding" : isAdapter ? "Preparing" : "Testing") : action.label}</span>
+                          <span>{disabled ? busyLabel : action.label}</span>
                         </button>
                       );
                     })}

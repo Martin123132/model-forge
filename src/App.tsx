@@ -9,6 +9,7 @@ import {
   buildShareCard,
   applyBuilderHardwareRecipe,
   archiveProject,
+  cancelAdapterTrainingRun,
   cancelBuilderRun,
   cancelRecipePackRun,
   compareModels,
@@ -18,6 +19,7 @@ import {
   deleteProject,
   exportModelProfile,
   getBuilderRun,
+  getAdapterTrainingRun,
   getRecipePackRun,
   getLatestExportPack,
   getHardwareProfile,
@@ -38,10 +40,14 @@ import {
   selectProject,
   resetProjectData,
   sendChat,
-  startBuilderRun
+  startAdapterTrainingRun,
+  startBuilderRun,
+  promoteAdapterToOllama
 } from "./lib/api";
 import type {
   AdapterBuilderReceipt,
+  AdapterPromotionReceipt,
+  AdapterTrainingRun,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
   BuilderPlan,
@@ -193,6 +199,9 @@ function App() {
   const [guidedBuilderTest, setGuidedBuilderTest] = useState<BuilderGuidedTestReceipt | null>(null);
   const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
   const [adapterBuild, setAdapterBuild] = useState<AdapterBuilderReceipt | null>(null);
+  const [adapterTrainingRun, setAdapterTrainingRun] = useState<AdapterTrainingRun | null>(null);
+  const [adapterPromotion, setAdapterPromotion] = useState<AdapterPromotionReceipt | null>(null);
+  const [adapterTrainingRunHistory, setAdapterTrainingRunHistory] = useState<AdapterTrainingRun[]>([]);
   const [builderRunHistory, setBuilderRunHistory] = useState<BuilderRun[]>([]);
   const [setupState, setSetupState] = useState<SetupState | null>(null);
   const [recipeRun, setRecipeRun] = useState<RecipePackRun | null>(null);
@@ -203,6 +212,7 @@ function App() {
   const [projectRegistry, setProjectRegistry] = useState<ProjectRegistry | null>(null);
   const packRunMonitorRef = useRef<Set<string>>(new Set());
   const builderRunMonitorRef = useRef<Set<string>>(new Set());
+  const adapterRunMonitorRef = useRef<Set<string>>(new Set());
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const previousWorkspaceRef = useRef<WorkspaceView | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -232,6 +242,8 @@ function App() {
   const [applyRecipeBusy, setApplyRecipeBusy] = useState(false);
   const [builderTestBusy, setBuilderTestBusy] = useState(false);
   const [adapterBusy, setAdapterBusy] = useState(false);
+  const [adapterTrainingBusy, setAdapterTrainingBusy] = useState(false);
+  const [adapterPromoteBusy, setAdapterPromoteBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -268,6 +280,10 @@ function App() {
       setRecipeHistory(projectPayload.recipeHistory || []);
       setBuilderRun(projectPayload.latestBuilderRun || null);
       setBuilderRunHistory(projectPayload.builderRunHistory || []);
+      setAdapterBuild(projectPayload.latestAdapterBuild || null);
+      setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || null);
+      setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
+      setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
       setModelLibrary(modelLibraryPayload.library);
       setProjectRegistry(projectRegistryPayload.registry);
     } catch (refreshError) {
@@ -310,6 +326,10 @@ function App() {
     setRecipeHistory(result.project.recipeHistory || []);
     setBuilderRun(result.project.latestBuilderRun || null);
     setBuilderRunHistory(result.project.builderRunHistory || []);
+    setAdapterBuild(result.project.latestAdapterBuild || null);
+    setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
+    setAdapterPromotion(result.project.latestAdapterPromotion || null);
+    setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
     setExportPack(exportPackPayload.pack || null);
     setModelLibrary(modelLibraryPayload.library);
     setProjectRegistry(result.registry);
@@ -793,6 +813,9 @@ function App() {
       setAppliedHardwareRecipe(result.project.latestAppliedHardwareRecipe || null);
       setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
       setActiveWorkspace("builder");
       await refreshModelLibrary();
     } catch (adapterError) {
@@ -1127,6 +1150,116 @@ function App() {
       void monitorBuilderRun(runId);
     }
   }, [builderRun?.runId, builderRun?.status, monitorBuilderRun]);
+
+  const refreshAfterAdapterRun = useCallback(async (fallbackRun?: AdapterTrainingRun | null) => {
+    const [projectPayload, ollamaPayload, modelLibraryPayload] = await Promise.all([
+      getProject(),
+      getOllamaStatus(),
+      getModelLibrary()
+    ]);
+    setProject(projectPayload);
+    setSources(projectPayload.sources);
+    setOllama(ollamaPayload);
+    setBuildPlan(projectPayload.latestBuildPlan || null);
+    setAdapterBuild(projectPayload.latestAdapterBuild || null);
+    setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || fallbackRun || null);
+    setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
+    setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
+    setModelLibrary(modelLibraryPayload.library);
+  }, []);
+
+  const monitorAdapterTrainingRun = useCallback(async (runId: string) => {
+    if (!runId || adapterRunMonitorRef.current.has(runId)) return;
+    adapterRunMonitorRef.current.add(runId);
+    try {
+      for (let index = 0; index < 720; index += 1) {
+        const result = await getAdapterTrainingRun(runId);
+        if (!result.run) break;
+        const nextRun = result.run;
+        setAdapterTrainingRun(nextRun);
+        setAdapterTrainingRunHistory((history) => [nextRun, ...history.filter((run) => run.runId !== nextRun.runId)].slice(0, 8));
+        if (nextRun.status !== "running") {
+          setAdapterTrainingBusy(false);
+          await refreshAfterAdapterRun(nextRun);
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+    } catch (pollError) {
+      setError(pollError instanceof Error ? pollError.message : String(pollError));
+      setAdapterTrainingBusy(false);
+    } finally {
+      adapterRunMonitorRef.current.delete(runId);
+    }
+  }, [refreshAfterAdapterRun]);
+
+  const handleRunAdapterTraining = useCallback(async () => {
+    const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    if (!adapterBuildId) return;
+    setAdapterTrainingBusy(true);
+    setError("");
+    try {
+      const result = await startAdapterTrainingRun(adapterBuildId, true);
+      setAdapterTrainingRun(result.run);
+      setProject(result.project);
+      setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || null);
+      setAdapterTrainingRunHistory((history) => [result.run, ...history.filter((run) => run.runId !== result.run.runId)].slice(0, 8));
+      setActiveWorkspace("builder");
+      if (result.run.runId) {
+        void monitorAdapterTrainingRun(result.run.runId);
+      }
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : String(runError));
+      setAdapterTrainingBusy(false);
+    }
+  }, [adapterBuild, monitorAdapterTrainingRun, project?.latestAdapterBuild]);
+
+  const handleCancelAdapterTraining = useCallback(async (runId: string) => {
+    if (!runId) return;
+    try {
+      const result = await cancelAdapterTrainingRun(runId);
+      if (result.run) {
+        setAdapterTrainingRun(result.run);
+        setAdapterTrainingRunHistory((history) => [result.run as AdapterTrainingRun, ...history.filter((run) => run.runId !== result.run?.runId)].slice(0, 8));
+      }
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : String(cancelError));
+    }
+  }, []);
+
+  const handlePromoteAdapter = useCallback(async () => {
+    const currentAdapter = project?.latestAdapterBuild || adapterBuild;
+    if (!currentAdapter?.adapterBuildId) return;
+    setAdapterPromoteBusy(true);
+    setError("");
+    try {
+      const result = await promoteAdapterToOllama(currentAdapter.adapterBuildId, (project?.latestAdapterTrainingRun || adapterTrainingRun)?.runId);
+      setAdapterPromotion(result.receipt);
+      setAdapterBuild(result.adapter || result.project.latestAdapterBuild || currentAdapter);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setOllama(result.ollama);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      await refreshModelLibrary();
+      if (!result.ok) {
+        setError(result.receipt.summary || "Adapter could not be promoted yet.");
+      }
+    } catch (promoteError) {
+      setError(promoteError instanceof Error ? promoteError.message : String(promoteError));
+    } finally {
+      setAdapterPromoteBusy(false);
+    }
+  }, [adapterBuild, adapterTrainingRun, project?.latestAdapterBuild, project?.latestAdapterTrainingRun, refreshModelLibrary]);
+
+  useEffect(() => {
+    const runId = adapterTrainingRun?.runId;
+    if (runId && adapterTrainingRun.status === "running") {
+      setAdapterTrainingBusy(true);
+      void monitorAdapterTrainingRun(runId);
+    }
+  }, [adapterTrainingRun?.runId, adapterTrainingRun?.status, monitorAdapterTrainingRun]);
 
   const handleSendChat = useCallback(async (prompt: string, modelName: string) => {
     const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", content: prompt, createdAt: new Date().toISOString() }];
@@ -1528,6 +1661,8 @@ function App() {
                     guidedBuilderTest={guidedBuilderTest}
                     builderAiCreateReceipt={project?.latestBuilderAiCreateReceipt || null}
                     adapterBuild={project?.latestAdapterBuild || adapterBuild}
+                    adapterTrainingRun={project?.latestAdapterTrainingRun || adapterTrainingRun}
+                    adapterPromotion={project?.latestAdapterPromotion || adapterPromotion}
                     builderRun={builderRun}
                     builderRunHistory={builderRunHistory}
                     busy={builderBusy}
@@ -1535,6 +1670,8 @@ function App() {
                     applyRecipeBusy={applyRecipeBusy}
                     createAiBusy={createBusy}
                     adapterBusy={adapterBusy}
+                    adapterTrainingBusy={adapterTrainingBusy}
+                    adapterPromoteBusy={adapterPromoteBusy}
                     chatBusy={chatBusy || builderTestBusy}
                     hardwareBusy={hardwareBusy}
                     datasetBusy={datasetBusy}
@@ -1543,6 +1680,9 @@ function App() {
                     onApplyHardwareRecipe={handleApplyHardwareRecipe}
                     onCreateOrUpdateAi={handleCreateOrUpdateBuilderAi}
                     onBuildAdapter={handleBuildAdapter}
+                    onRunAdapterTraining={handleRunAdapterTraining}
+                    onCancelAdapterTraining={handleCancelAdapterTraining}
+                    onPromoteAdapter={handlePromoteAdapter}
                     onRunGuidedTest={handleRunGuidedBuilderTest}
                     onStartBuild={handleStartBuilderRun}
                     onCancelBuild={handleCancelBuilderRun}
@@ -1601,12 +1741,17 @@ function App() {
                     recipeRunHistory={recipeRunHistory}
                     recipeHistory={recipeHistory}
                     modelLibrary={modelLibrary}
+                    adapterTrainingRun={project?.latestAdapterTrainingRun || adapterTrainingRun}
+                    adapterPromotion={project?.latestAdapterPromotion || adapterPromotion}
                     compareResult={compareResult}
                     recipeBusy={recipeBusy}
                     datasetBusy={datasetBusy}
                     selectRecipeBusy={selectRecipeBusy}
                     packRunBusy={packRunBusy || recipeRun?.status === "running"}
                     createBusy={createBusy}
+                    adapterBusy={adapterBusy}
+                    adapterTrainingBusy={adapterTrainingBusy}
+                    adapterPromoteBusy={adapterPromoteBusy}
                     chatBusy={chatBusy}
                     compareBusy={compareBusy}
                     chatMessages={chatMessages}
@@ -1618,6 +1763,8 @@ function App() {
                     onCreate={handleCreateModel}
                     onRebuildBuilderAi={handleCreateOrUpdateBuilderAi}
                     onBuildAdapter={handleBuildAdapter}
+                    onRunAdapterTraining={handleRunAdapterTraining}
+                    onPromoteAdapter={handlePromoteAdapter}
                     onRetestBuilderAi={handleRetestBuilderAi}
                     onSend={handleSendChat}
                     onCompare={handleCompareModels}

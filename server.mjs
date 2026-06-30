@@ -25,6 +25,7 @@ const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || process.env.MODEL_FORGE_PORT || (apiOnly ? 4188 : 4178));
 const recipeRunJobs = new Map();
 const builderRunJobs = new Map();
+const adapterTrainingRunJobs = new Map();
 
 const skippedDirs = new Set([
   ".git",
@@ -103,6 +104,7 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "builder", "runs"), { recursive: true });
   await mkdir(join(root, "adapters"), { recursive: true });
   await mkdir(join(root, "adapters", "history"), { recursive: true });
+  await mkdir(join(root, "adapters", "runs"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
 }
 
@@ -4260,17 +4262,234 @@ function adapterTrainingConfigFor({ plan, dataset, hardware, adapterName, latest
   };
 }
 
+function adapterRunnerScriptSource() {
+  return `#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+import time
+import traceback
+
+
+def emit(event, **payload):
+    print(json.dumps({"event": event, **payload}, ensure_ascii=True), flush=True)
+
+
+def write_json(path, value):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\\n", encoding="utf-8")
+
+
+def read_jsonl(path):
+    rows = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
+def training_text(row):
+    instruction = str(row.get("instruction") or "Answer from the supplied source.").strip()
+    source_input = str(row.get("input") or "").strip()
+    output = str(row.get("output") or "").strip()
+    source_path = str(row.get("sourcePath") or row.get("path") or "unknown-source").strip()
+    if len(source_input) > 6000:
+        source_input = source_input[:6000] + "\\n[truncated for adapter runner]"
+    return "\\n".join([
+        "### Source",
+        source_path,
+        "",
+        "### Instruction",
+        instruction,
+        "",
+        "### Input",
+        source_input,
+        "",
+        "### Response",
+        output
+    ])
+
+
+def blocked_transformers_model(config):
+    trainer = config.get("trainer") or {}
+    model_id = str(trainer.get("transformersModelId") or config.get("baseModel") or "").strip()
+    if not model_id:
+        return "No Transformers model id or local model path is configured."
+    if os.path.exists(model_id) or "/" in model_id:
+        return ""
+    if ":" in model_id:
+        return "Base model '%s' looks like an Ollama tag. Set trainer.transformersModelId to a Hugging Face id or local Transformers model path before real training." % model_id
+    return ""
+
+
+def dry_run(config, rows, run_dir, checkpoint_dir):
+    total_steps = min(6, max(3, len(rows) // 8 + 3))
+    emit("stage", label="dataset", detail="Loaded %s examples" % len(rows), currentStep=1, totalSteps=total_steps)
+    time.sleep(0.2)
+    emit("stage", label="config", detail="Validated %s config" % str(config.get("method", "lora")).upper(), currentStep=2, totalSteps=total_steps)
+    time.sleep(0.2)
+    preview_count = min(3, len(rows))
+    for index in range(3, total_steps + 1):
+        seen = min(len(rows), max(preview_count, int(len(rows) * index / total_steps)))
+        emit("progress", label="dry-run", detail="Checked %s/%s examples" % (seen, len(rows)), currentStep=index, totalSteps=total_steps)
+        time.sleep(0.2)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    dry_manifest = {
+        "schema": "modelforge.adapter_dry_run_checkpoint.v1",
+        "ok": True,
+        "trained": False,
+        "adapterName": config.get("adapterName"),
+        "baseModel": config.get("baseModel"),
+        "method": config.get("method"),
+        "examplesChecked": len(rows),
+        "checkpointDir": str(checkpoint_dir),
+        "summary": "Dry-run completed. No adapter weights were written or claimed."
+    }
+    write_json(checkpoint_dir / "DRY_RUN_CHECKPOINT.json", dry_manifest)
+    write_json(run_dir / "training-receipt.json", dry_manifest)
+    emit("complete", label="dry-run", detail=dry_manifest["summary"], currentStep=total_steps, totalSteps=total_steps)
+
+
+def train(config, rows, run_dir, checkpoint_dir):
+    blocker = blocked_transformers_model(config)
+    if blocker:
+        raise RuntimeError(blocker)
+    try:
+        import torch
+        from datasets import Dataset
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling, Trainer, TrainingArguments
+    except Exception as error:
+        raise RuntimeError("Missing training dependency: %s" % error) from error
+
+    trainer_config = config.get("trainer") or {}
+    model_id = str(trainer_config.get("transformersModelId") or config.get("baseModel")).strip()
+    method = str(config.get("method") or "lora").lower()
+    texts = [training_text(row) for row in rows]
+    emit("stage", label="load-tokenizer", detail=model_id, currentStep=1, totalSteps=6)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    emit("stage", label="tokenize", detail="%s examples" % len(texts), currentStep=2, totalSteps=6)
+    cutoff_len = int(trainer_config.get("cutoffLen") or 2048)
+    dataset = Dataset.from_dict({"text": texts})
+    tokenized = dataset.map(lambda item: tokenizer(item["text"], truncation=True, max_length=cutoff_len), batched=True, remove_columns=["text"])
+
+    emit("stage", label="load-model", detail=model_id, currentStep=3, totalSteps=6)
+    model_kwargs = {"device_map": "auto"}
+    if torch.cuda.is_available():
+        model_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    if method == "qlora":
+        try:
+            from transformers import BitsAndBytesConfig
+            model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=model_kwargs.get("torch_dtype", torch.float16))
+        except Exception:
+            emit("stage", label="qlora-fallback", detail="bitsandbytes unavailable; using regular LoRA load", currentStep=3, totalSteps=6)
+    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+    if method == "qlora":
+        model = prepare_model_for_kbit_training(model)
+
+    lora = config.get("lora") or {}
+    peft_config = LoraConfig(
+        r=int(lora.get("r") or 8),
+        lora_alpha=int(lora.get("alpha") or 16),
+        lora_dropout=float(lora.get("dropout") or 0.05),
+        target_modules=list(lora.get("targetModules") or ["q_proj", "v_proj"]),
+        bias="none",
+        task_type="CAUSAL_LM"
+    )
+    model = get_peft_model(model, peft_config)
+
+    emit("stage", label="train", detail="Starting trainer", currentStep=4, totalSteps=6)
+    args = TrainingArguments(
+        output_dir=str(checkpoint_dir),
+        max_steps=int(trainer_config.get("maxSteps") or 20),
+        per_device_train_batch_size=int(trainer_config.get("microBatchSize") or 1),
+        gradient_accumulation_steps=int(trainer_config.get("gradientAccumulation") or 16),
+        learning_rate=float(trainer_config.get("learningRate") or 0.0002),
+        warmup_ratio=float(trainer_config.get("warmupRatio") or 0.03),
+        logging_steps=1,
+        save_steps=int(trainer_config.get("saveSteps") or 10),
+        report_to=[],
+        remove_unused_columns=False
+    )
+    trainer = Trainer(model=model, args=args, train_dataset=tokenized, data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False))
+    trainer.train()
+
+    emit("stage", label="save-adapter", detail=str(checkpoint_dir), currentStep=5, totalSteps=6)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(str(checkpoint_dir))
+    tokenizer.save_pretrained(str(checkpoint_dir))
+    receipt = {
+        "schema": "modelforge.adapter_training_receipt.v1",
+        "ok": True,
+        "trained": True,
+        "adapterName": config.get("adapterName"),
+        "baseModel": config.get("baseModel"),
+        "transformersModelId": model_id,
+        "method": method,
+        "examples": len(rows),
+        "checkpointDir": str(checkpoint_dir),
+        "summary": "LoRA/QLoRA adapter training completed and adapter files were saved."
+    }
+    write_json(run_dir / "training-receipt.json", receipt)
+    emit("complete", label="trained", detail=receipt["summary"], currentStep=6, totalSteps=6)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--checkpoint-dir", required=True)
+    parser.add_argument("--mode", choices=["dry-run", "train"], default="dry-run")
+    args = parser.parse_args()
+
+    run_dir = Path(args.run_dir)
+    checkpoint_dir = Path(args.checkpoint_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    rows = read_jsonl(config["dataset"]["jsonl"])
+    emit("start", label=args.mode, detail="Adapter runner started", currentStep=0, totalSteps=6)
+    try:
+        if args.mode == "train":
+            train(config, rows, run_dir, checkpoint_dir)
+        else:
+            dry_run(config, rows, run_dir, checkpoint_dir)
+    except Exception as error:
+        failure = {
+            "schema": "modelforge.adapter_training_receipt.v1",
+            "ok": False,
+            "trained": False,
+            "adapterName": config.get("adapterName"),
+            "baseModel": config.get("baseModel"),
+            "method": config.get("method"),
+            "checkpointDir": str(checkpoint_dir),
+            "summary": str(error),
+            "traceback": traceback.format_exc()
+        }
+        write_json(run_dir / "training-receipt.json", failure)
+        emit("error", label="failed", detail=str(error), currentStep=0, totalSteps=6)
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`;
+}
+
 function adapterRunnerRecipeFor({ config, packageStatus, plan, executionMode, blockedReasons }) {
-  const command = [
-    pythonCommand,
-    "-m",
-    "accelerate.commands.launch",
-    "--num_processes",
-    "1",
-    "train_lora_qlora.py",
-    "--config",
-    config.files?.trainingConfig || "adapter-training-config.json"
-  ];
+  const runnerScript = config.files?.runnerScript || "adapter-runner.py";
+  const trainingConfig = config.files?.trainingConfig || "adapter-training-config.json";
+  const command = [pythonCommand, runnerScript, "--config", trainingConfig, "--run-dir", "<run-dir>", "--checkpoint-dir", "<checkpoint-dir>", "--mode", executionMode === "local-ready" ? "train" : "dry-run"];
   return {
     schema: "modelforge.adapter_runner_recipe.v1",
     createdAt: new Date().toISOString(),
@@ -4280,13 +4499,16 @@ function adapterRunnerRecipeFor({ config, packageStatus, plan, executionMode, bl
     baseModel: config.baseModel,
     datasetJsonl: config.dataset.jsonl,
     outputDir: config.outputDir,
+    runnerScript,
     command,
+    dryRunCommand: [pythonCommand, runnerScript, "--config", trainingConfig, "--run-dir", "<run-dir>", "--checkpoint-dir", "<checkpoint-dir>", "--mode", "dry-run"],
+    trainCommand: [pythonCommand, runnerScript, "--config", trainingConfig, "--run-dir", "<run-dir>", "--checkpoint-dir", "<checkpoint-dir>", "--mode", "train"],
     packageStatus,
     blockedReasons,
     runnerNotes: [
       "This recipe is intentionally source-scoped and receipt-backed.",
-      "Dry-run mode writes config, dataset, manifest, and checkpoint placeholders without claiming weights were trained.",
-      "Real training should be launched only after reviewing the config, disk budget, and dependency status."
+      "Dry-run mode validates the dataset/config and writes a dry-run checkpoint manifest without claiming adapter weights.",
+      "Real training runs only after reviewing the config, disk budget, dependency status, and Transformers base model id."
     ],
     expectedArtifacts: ["adapter_model.safetensors", "adapter_config.json", "training-receipt.json"],
     sourceBoundary: plan.trainingRoutePlan?.dataSignals?.sourceScope || config.dataset.sourceScope || null
@@ -4378,13 +4600,13 @@ async function buildBuilderAdapter(body = {}) {
   ].filter(Boolean);
   const canTrainNow = Boolean(explicitRun && dataset?.summary?.totalExamples && hardware.tier?.canTrainAdapter && packageStatus.ok);
   const executionMode = canTrainNow ? "local-ready" : "dry-run";
-  const runnerRecipe = adapterRunnerRecipeFor({ config, packageStatus, plan, executionMode, blockedReasons });
   const files = {
     latestDir,
     historyDir,
     trainingDatasetJsonl: join(latestDir, "training-dataset.jsonl"),
     trainingDatasetManifest: join(latestDir, "training-dataset-manifest.json"),
     trainingConfigJson: join(latestDir, "adapter-training-config.json"),
+    runnerScript: join(latestDir, "adapter-runner.py"),
     runnerRecipeJson: join(latestDir, "adapter-runner-recipe.json"),
     runnerRecipeMarkdown: join(latestDir, "adapter-runner-recipe.md"),
     adapterManifestJson: join(latestDir, "adapter-manifest.json"),
@@ -4394,6 +4616,7 @@ async function buildBuilderAdapter(body = {}) {
     historyTrainingDatasetJsonl: join(historyDir, "training-dataset.jsonl"),
     historyTrainingDatasetManifest: join(historyDir, "training-dataset-manifest.json"),
     historyTrainingConfigJson: join(historyDir, "adapter-training-config.json"),
+    historyRunnerScript: join(historyDir, "adapter-runner.py"),
     historyRunnerRecipeJson: join(historyDir, "adapter-runner-recipe.json"),
     historyRunnerRecipeMarkdown: join(historyDir, "adapter-runner-recipe.md"),
     historyAdapterManifestJson: join(historyDir, "adapter-manifest.json"),
@@ -4405,9 +4628,10 @@ async function buildBuilderAdapter(body = {}) {
     trainingConfig: files.trainingConfigJson,
     datasetJsonl: files.trainingDatasetJsonl,
     datasetManifest: files.trainingDatasetManifest,
-    checkpointDir: files.checkpointDir
+    checkpointDir: files.checkpointDir,
+    runnerScript: files.runnerScript
   };
-  runnerRecipe.command[runnerRecipe.command.length - 1] = files.trainingConfigJson;
+  const runnerRecipe = adapterRunnerRecipeFor({ config, packageStatus, plan, executionMode, blockedReasons });
 
   await copyIfExists(dataset.files?.jsonl, files.trainingDatasetJsonl);
   await copyIfExists(dataset.files?.manifest, files.trainingDatasetManifest);
@@ -4448,6 +4672,7 @@ async function buildBuilderAdapter(body = {}) {
   const outputs = [
     { label: "Training dataset", detail: `${dataset.summary.totalExamples.toLocaleString()} examples`, path: files.trainingDatasetJsonl },
     { label: "Training config", detail: `${config.method.toUpperCase()} config`, path: files.trainingConfigJson },
+    { label: "Runner script", detail: "Local Python runner", path: files.runnerScript },
     { label: "Runner recipe", detail: executionMode, path: files.runnerRecipeJson },
     { label: "Checkpoint folder", detail: executionMode === "dry-run" ? "Dry-run placeholder" : "Ready for trainer output", path: checkpointDir },
     { label: "Adapter manifest", detail: adapterManifest.status, path: files.adapterManifestJson }
@@ -4516,6 +4741,12 @@ async function buildBuilderAdapter(body = {}) {
         workspace: "setup"
       },
       {
+        id: "run-adapter-trainer",
+        label: "Run adapter trainer",
+        detail: "Execute the local runner with live logs; it will dry-run unless the machine and config are ready for real training.",
+        workspace: "builder"
+      },
+      {
         id: "test-adapter-ai",
         label: "Retest after training",
         detail: "After a real adapter checkpoint exists, run source-backed prompts before sharing claims.",
@@ -4546,13 +4777,15 @@ async function buildBuilderAdapter(body = {}) {
   ].join("\n");
 
   await writeJson(files.trainingConfigJson, config);
+  await writeFile(files.runnerScript, adapterRunnerScriptSource(), "utf-8");
   await writeJson(files.runnerRecipeJson, runnerRecipe);
   await writeFile(files.runnerRecipeMarkdown, runnerMarkdown, "utf-8");
   await writeJson(files.adapterManifestJson, adapterManifest);
   await writeJson(files.receiptJson, receipt);
   await writeFile(files.receiptMarkdown, adapterBuilderReceiptMarkdown(receipt), "utf-8");
-  await writeJson(files.historyTrainingConfigJson, { ...config, files: { ...config.files, trainingConfig: files.historyTrainingConfigJson, datasetJsonl: files.historyTrainingDatasetJsonl, datasetManifest: files.historyTrainingDatasetManifest, checkpointDir: files.historyCheckpointDir } });
-  await writeJson(files.historyRunnerRecipeJson, runnerRecipe);
+  await writeJson(files.historyTrainingConfigJson, { ...config, files: { ...config.files, trainingConfig: files.historyTrainingConfigJson, datasetJsonl: files.historyTrainingDatasetJsonl, datasetManifest: files.historyTrainingDatasetManifest, checkpointDir: files.historyCheckpointDir, runnerScript: files.historyRunnerScript } });
+  await writeFile(files.historyRunnerScript, adapterRunnerScriptSource(), "utf-8");
+  await writeJson(files.historyRunnerRecipeJson, { ...runnerRecipe, runnerScript: files.historyRunnerScript });
   await writeFile(files.historyRunnerRecipeMarkdown, runnerMarkdown, "utf-8");
   await writeJson(files.historyAdapterManifestJson, { ...adapterManifest, checkpointDir: files.historyCheckpointDir });
   await writeJson(files.historyReceiptJson, receipt);
@@ -4565,6 +4798,661 @@ async function buildBuilderAdapter(body = {}) {
     plan,
     project: await getProjectPayload()
   };
+}
+
+function adapterTrainingRunId() {
+  return `adapter-run-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function adapterPromotionId() {
+  return `adapter-promotion-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+async function getAdapterBuilderReceiptById(adapterBuildIdValue = "") {
+  const safeId = String(adapterBuildIdValue || "").trim();
+  const latest = await getLatestAdapterBuilderReceipt();
+  if (!safeId || latest?.adapterBuildId === safeId) return latest;
+  if (!/^adapter-build-\d{4}-\d{2}-\d{2}T/.test(safeId)) {
+    throw new Error("A valid adapter build id is required.");
+  }
+  return readJsonIfExists(join(dataRoot, "adapters", "history", safeId, "adapter-builder-receipt.json"));
+}
+
+async function getLatestAdapterTrainingRun() {
+  return readJsonIfExists(join(dataRoot, "adapters", "latest", "adapter-training-run.json"));
+}
+
+async function getLatestAdapterPromotionReceipt() {
+  return readJsonIfExists(join(dataRoot, "adapters", "latest", "adapter-promotion-receipt.json"));
+}
+
+function adapterTrainingRunMarkdown(run) {
+  const checkpoint = run.checkpoint || {};
+  return [
+    `# ${run.adapterName} Adapter Training Run`,
+    "",
+    `Run: ${run.runId}`,
+    `Adapter build: ${run.adapterBuildId}`,
+    `Status: ${run.status}`,
+    `Mode: ${run.mode}`,
+    `Started: ${run.startedAt}`,
+    `Ended: ${run.endedAt || ""}`,
+    "",
+    "## Summary",
+    "",
+    run.summary,
+    "",
+    "## Progress",
+    "",
+    `Step: ${run.progress?.currentStep || 0}/${run.progress?.totalSteps || 0}`,
+    `Label: ${run.progress?.label || ""}`,
+    `Detail: ${run.progress?.detail || ""}`,
+    "",
+    "## Checkpoint",
+    "",
+    `Detected: ${checkpoint.detected ? "yes" : "no"}`,
+    `Trained: ${checkpoint.trained ? "yes" : "no"}`,
+    `Dry-run: ${checkpoint.dryRun ? "yes" : "no"}`,
+    `Directory: ${checkpoint.dir || ""}`,
+    ...(checkpoint.files?.length ? checkpoint.files.map((file) => `- ${file}`) : ["- No checkpoint files detected."]),
+    "",
+    "## Logs",
+    "",
+    "```text",
+    [run.receipt?.stdoutTail, run.receipt?.stderrTail, run.receipt?.error].filter(Boolean).join("\n\n"),
+    "```",
+    ""
+  ].join("\n");
+}
+
+function adapterPromotionMarkdown(receipt) {
+  return [
+    `# ${receipt.adapterName} Adapter Promotion Receipt`,
+    "",
+    `Receipt: ${receipt.receiptId}`,
+    `Status: ${receipt.status}`,
+    `Model: ${receipt.modelName}`,
+    `Adapter build: ${receipt.adapterBuildId}`,
+    `Training run: ${receipt.trainingRunId || ""}`,
+    `Created: ${receipt.createdAt}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary,
+    "",
+    "## Command",
+    "",
+    "```text",
+    (receipt.command || []).join(" "),
+    "```",
+    "",
+    "## Files",
+    "",
+    `Modelfile: ${receipt.files?.modelfile || ""}`,
+    `Receipt JSON: ${receipt.files?.latestJson || ""}`,
+    ""
+  ].join("\n");
+}
+
+async function detectAdapterCheckpoint(dir = "") {
+  const checkpointDir = String(dir || "").trim();
+  const result = {
+    schema: "modelforge.adapter_checkpoint_detection.v1",
+    checkedAt: new Date().toISOString(),
+    dir: checkpointDir,
+    detected: false,
+    trained: false,
+    dryRun: false,
+    adapterModel: "",
+    adapterConfig: "",
+    trainingReceipt: "",
+    dryRunManifest: "",
+    files: [],
+    summary: "No checkpoint directory was provided."
+  };
+  if (!checkpointDir) return result;
+  try {
+    const entries = await readdir(checkpointDir, { withFileTypes: true });
+    result.files = entries.filter((entry) => entry.isFile()).map((entry) => join(checkpointDir, entry.name));
+    const modelFile = result.files.find((file) => /adapter_model\.(safetensors|bin)$/i.test(file));
+    const configFile = result.files.find((file) => /adapter_config\.json$/i.test(file));
+    const receiptFile = result.files.find((file) => /training-receipt\.json$/i.test(file)) || join(resolve(checkpointDir, ".."), "training-receipt.json");
+    const dryRunFile = result.files.find((file) => /DRY_RUN_CHECKPOINT\.json$/i.test(file));
+    result.adapterModel = modelFile || "";
+    result.adapterConfig = configFile || "";
+    result.trainingReceipt = existsSync(receiptFile) ? receiptFile : "";
+    result.dryRunManifest = dryRunFile || "";
+    result.detected = Boolean(result.files.length);
+    result.dryRun = Boolean(dryRunFile);
+    if (modelFile && configFile) {
+      const [modelStats, configStats] = await Promise.all([stat(modelFile), stat(configFile)]);
+      result.trained = modelStats.size > 0 && configStats.size > 0 && !result.dryRun;
+    }
+    result.summary = result.trained
+      ? "Adapter checkpoint files were detected."
+      : result.dryRun
+        ? "Dry-run checkpoint manifest detected; no trained weights are claimed."
+        : result.detected
+          ? "Checkpoint folder exists, but required adapter weight/config files are incomplete."
+          : "No checkpoint files detected.";
+  } catch {
+    result.summary = "Checkpoint directory does not exist yet.";
+  }
+  return result;
+}
+
+function adapterBaseModelBlocker(config = {}) {
+  const trainer = config.trainer || {};
+  const candidate = cleanSetting(trainer.transformersModelId || config.baseModel);
+  if (!candidate) return "No Transformers model id or local model path is configured.";
+  if (existsSync(candidate) || candidate.includes("/")) return "";
+  if (candidate.includes(":")) return `Base model ${candidate} looks like an Ollama tag; set trainer.transformersModelId to a Hugging Face id or local Transformers model path for real training.`;
+  return "";
+}
+
+async function persistAdapterTrainingRun(run) {
+  await writeJson(run.files.runJson, run);
+  await writeJson(run.files.latestJson, run);
+  await writeFile(run.files.receiptMarkdown, adapterTrainingRunMarkdown(run), "utf-8");
+}
+
+async function writeUpdatedAdapterReceipt(receipt) {
+  if (!receipt?.files?.receiptJson) return receipt;
+  await writeJson(receipt.files.receiptJson, receipt);
+  await writeFile(receipt.files.receiptMarkdown, adapterBuilderReceiptMarkdown(receipt), "utf-8");
+  if (receipt.files.historyReceiptJson) {
+    await writeJson(receipt.files.historyReceiptJson, receipt);
+  }
+  if (receipt.files.historyReceiptMarkdown) {
+    await writeFile(receipt.files.historyReceiptMarkdown, adapterBuilderReceiptMarkdown(receipt), "utf-8");
+  }
+  if (receipt.files.adapterManifestJson) {
+    const manifest = await readJsonIfExists(receipt.files.adapterManifestJson);
+    await writeJson(receipt.files.adapterManifestJson, {
+      ...(manifest || {}),
+      trained: Boolean(receipt.adapter?.trained),
+      dryRun: Boolean(receipt.adapter?.dryRun),
+      status: receipt.status,
+      checkpointDir: receipt.adapter?.checkpointDir || manifest?.checkpointDir || "",
+      latestTrainingRunId: receipt.runner?.latestRunId || ""
+    });
+  }
+  if (receipt.files.historyAdapterManifestJson) {
+    const manifest = await readJsonIfExists(receipt.files.historyAdapterManifestJson);
+    await writeJson(receipt.files.historyAdapterManifestJson, {
+      ...(manifest || {}),
+      trained: Boolean(receipt.adapter?.trained),
+      dryRun: Boolean(receipt.adapter?.dryRun),
+      status: receipt.status,
+      checkpointDir: receipt.adapter?.checkpointDir || manifest?.checkpointDir || "",
+      latestTrainingRunId: receipt.runner?.latestRunId || ""
+    });
+  }
+  return receipt;
+}
+
+async function syncAdapterReceiptAfterTrainingRun(run) {
+  const receipt = await getAdapterBuilderReceiptById(run.adapterBuildId);
+  if (!receipt?.adapterBuildId) return null;
+  const checkpoint = run.checkpoint || (await detectAdapterCheckpoint(run.checkpointDir));
+  const trained = Boolean(run.status === "pass" && run.mode === "train" && checkpoint.trained);
+  const dryRunPassed = Boolean(run.status === "pass" && run.mode === "dry-run");
+  const status = trained ? "trained" : dryRunPassed ? "ready" : run.status === "fail" ? "blocked" : receipt.status;
+  const summary = trained
+    ? `${receipt.adapter.name} has a detected LoRA/QLoRA checkpoint and is ready for promotion/testing.`
+    : dryRunPassed
+      ? `${receipt.adapter.name} passed the local runner dry-run; real training still needs a compatible Transformers base model and dependencies.`
+      : run.status === "fail"
+        ? `${receipt.adapter.name} training failed; review the adapter training run receipt.`
+        : receipt.summary;
+  const updated = {
+    ...receipt,
+    status,
+    summary,
+    adapter: {
+      ...receipt.adapter,
+      trained,
+      dryRun: !trained,
+      checkpointDir: run.checkpointDir || receipt.adapter.checkpointDir
+    },
+    runner: {
+      ...receipt.runner,
+      executionMode: trained ? "local-trained" : dryRunPassed ? "dry-run-passed" : receipt.runner?.executionMode || run.mode,
+      latestRunId: run.runId,
+      latestRunStatus: run.status,
+      latestRunSummary: run.summary,
+      checkpoint
+    },
+    files: {
+      ...receipt.files,
+      latestTrainingRunJson: run.files.latestJson,
+      latestTrainingRunMarkdown: run.files.receiptMarkdown,
+      latestTrainingRunLog: run.files.log,
+      latestTrainingCheckpointDir: run.checkpointDir
+    }
+  };
+  return writeUpdatedAdapterReceipt(updated);
+}
+
+function parseAdapterRunnerLine(job, line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed.startsWith("{")) return;
+  const event = parseJsonLoose(trimmed);
+  if (!event?.event) return;
+  const currentStep = Number(event.currentStep ?? job.run.progress.currentStep ?? 0);
+  const totalSteps = Number(event.totalSteps ?? job.run.progress.totalSteps ?? 0);
+  job.run.progress = {
+    currentStep: Number.isFinite(currentStep) ? currentStep : job.run.progress.currentStep,
+    totalSteps: Number.isFinite(totalSteps) && totalSteps > 0 ? totalSteps : job.run.progress.totalSteps,
+    label: cleanSetting(event.label || event.event),
+    detail: cleanSetting(event.detail),
+    event: cleanSetting(event.event),
+    updatedAt: new Date().toISOString()
+  };
+  job.run.summary = event.detail || job.run.summary;
+}
+
+function handleAdapterRunnerOutput(job, chunk, stream) {
+  const text = String(chunk || "");
+  if (stream === "stderr") job.stderr += text;
+  else job.stdout += text;
+  job.lineBuffer += text;
+  const lines = job.lineBuffer.split(/\r?\n/);
+  job.lineBuffer = lines.pop() || "";
+  for (const line of lines) parseAdapterRunnerLine(job, line);
+  job.run.updatedAt = new Date().toISOString();
+  job.run.receipt.stdoutTail = tail(job.stdout, 4000);
+  job.run.receipt.stderrTail = tail(job.stderr, 4000);
+}
+
+async function startAdapterTrainingRun(body = {}) {
+  await ensureDataRoot();
+  const existing = [...adapterTrainingRunJobs.values()].find((job) => job?.run?.status === "running");
+  if (existing) {
+    return existing.run;
+  }
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  if (!adapterReceipt?.adapterBuildId) {
+    throw new Error("Prepare an adapter before running the trainer.");
+  }
+  const config = await readJsonIfExists(adapterReceipt.files?.trainingConfigJson);
+  if (!config?.schema) {
+    throw new Error("Adapter training config was not found.");
+  }
+  if (!existsSync(adapterReceipt.files?.trainingDatasetJsonl || "")) {
+    throw new Error("Adapter training dataset was not found.");
+  }
+  const runnerScriptPath = adapterReceipt.files?.runnerScript || join(adapterReceipt.files?.latestDir || join(dataRoot, "adapters", "latest"), "adapter-runner.py");
+  if (!existsSync(runnerScriptPath)) {
+    await writeFile(runnerScriptPath, adapterRunnerScriptSource(), "utf-8");
+  }
+  if (!adapterReceipt.files?.runnerScript) {
+    adapterReceipt.files = { ...(adapterReceipt.files || {}), runnerScript: runnerScriptPath };
+    await writeUpdatedAdapterReceipt(adapterReceipt);
+  }
+  const hardware = await getHardwareProfile();
+  const packageStatus = await checkAdapterPythonPackages();
+  const runId = adapterTrainingRunId();
+  const startedAt = new Date().toISOString();
+  const runDir = join(dataRoot, "adapters", "runs", runId);
+  const checkpointDir = join(runDir, "checkpoint");
+  const realTrainingRequested = body.runTraining === true && body.allowLongRun === true;
+  const baseModelBlocker = adapterBaseModelBlocker(config);
+  const blockedReasons = [
+    !adapterReceipt.dataset?.examples ? "Adapter dataset has no examples." : "",
+    !hardware.tier?.canTrainAdapter ? "Hardware tier is not marked adapter-training capable." : "",
+    !packageStatus.ok ? packageStatus.summary : "",
+    baseModelBlocker,
+    !realTrainingRequested ? "Real training was not explicitly armed; running the safe local dry-run." : ""
+  ].filter(Boolean);
+  const canTrainNow = Boolean(realTrainingRequested && adapterReceipt.dataset?.examples && hardware.tier?.canTrainAdapter && packageStatus.ok && !baseModelBlocker);
+  const mode = canTrainNow ? "train" : "dry-run";
+  const files = {
+    runDir,
+    runJson: join(runDir, "adapter-training-run.json"),
+    latestJson: join(dataRoot, "adapters", "latest", "adapter-training-run.json"),
+    receiptMarkdown: join(runDir, "adapter-training-run.md"),
+    latestReceiptMarkdown: join(dataRoot, "adapters", "latest", "adapter-training-run.md"),
+    log: join(runDir, "adapter-training.log"),
+    trainingReceiptJson: join(runDir, "training-receipt.json"),
+    checkpointDir
+  };
+  await mkdir(runDir, { recursive: true });
+  await mkdir(checkpointDir, { recursive: true });
+  const command = [
+    pythonCommand,
+    runnerScriptPath,
+    "--config",
+    adapterReceipt.files.trainingConfigJson,
+    "--run-dir",
+    runDir,
+    "--checkpoint-dir",
+    checkpointDir,
+    "--mode",
+    mode
+  ];
+  const run = {
+    schema: "modelforge.adapter_training_run.v1",
+    runId,
+    adapterBuildId: adapterReceipt.adapterBuildId,
+    planId: adapterReceipt.planId,
+    adapterName: adapterReceipt.adapter.name,
+    baseModel: adapterReceipt.adapter.baseModel,
+    method: adapterReceipt.adapter.method,
+    ok: false,
+    status: "running",
+    mode,
+    requestedMode: realTrainingRequested ? "train" : "dry-run",
+    canTrainNow,
+    blockedReasons,
+    summary: mode === "train" ? `Running local ${adapterReceipt.adapter.method.toUpperCase()} training for ${adapterReceipt.adapter.name}.` : `Running adapter trainer dry-run for ${adapterReceipt.adapter.name}.`,
+    command,
+    startedAt,
+    endedAt: "",
+    updatedAt: startedAt,
+    progress: {
+      currentStep: 0,
+      totalSteps: 6,
+      label: "queued",
+      detail: "Adapter runner queued.",
+      event: "queued",
+      updatedAt: startedAt
+    },
+    checkpointDir,
+    checkpoint: await detectAdapterCheckpoint(checkpointDir),
+    receipt: {
+      name: "adapter_training_run",
+      ok: false,
+      status: "running",
+      command,
+      outputPath: files.trainingReceiptJson,
+      summary: "Adapter runner is running.",
+      stdoutTail: "",
+      stderrTail: "",
+      error: "",
+      startedAt,
+      endedAt: ""
+    },
+    files
+  };
+  await persistAdapterTrainingRun(run);
+  await writeFile(files.latestReceiptMarkdown, adapterTrainingRunMarkdown(run), "utf-8");
+  const job = {
+    run,
+    child: null,
+    stdout: "",
+    stderr: "",
+    lineBuffer: "",
+    cancelRequested: false
+  };
+  adapterTrainingRunJobs.set(runId, job);
+
+  try {
+    const child = spawn(command[0], command.slice(1), {
+      cwd: adapterReceipt.files.latestDir || projectRoot,
+      env: commandEnv(),
+      windowsHide: true
+    });
+    job.child = child;
+    child.stdout.on("data", (chunk) => {
+      handleAdapterRunnerOutput(job, chunk, "stdout");
+    });
+    child.stderr.on("data", (chunk) => {
+      handleAdapterRunnerOutput(job, chunk, "stderr");
+    });
+    child.on("error", async (error) => {
+      job.stderr += `\n${String(error?.message || error)}`;
+      await finishAdapterTrainingRun(runId, { code: 1, error: String(error?.message || error) });
+    });
+    child.on("close", async (code, signal) => {
+      await finishAdapterTrainingRun(runId, { code, signal });
+    });
+  } catch (error) {
+    job.stderr += `\n${String(error?.message || error)}`;
+    await finishAdapterTrainingRun(runId, { code: 1, error: String(error?.message || error) });
+  }
+
+  return run;
+}
+
+async function finishAdapterTrainingRun(runId, result = {}) {
+  const job = adapterTrainingRunJobs.get(runId);
+  if (!job || terminalRunStatus(job.run.status)) {
+    return job?.run || null;
+  }
+  if (job.lineBuffer) {
+    parseAdapterRunnerLine(job, job.lineBuffer);
+    job.lineBuffer = "";
+  }
+  const endedAt = new Date().toISOString();
+  const canceled = job.cancelRequested || result.signal === "SIGTERM";
+  const checkpoint = await detectAdapterCheckpoint(job.run.checkpointDir);
+  const dryRunOk = job.run.mode === "dry-run" && result.code === 0 && !result.error && checkpoint.dryRun;
+  const trainedOk = job.run.mode === "train" && result.code === 0 && !result.error && checkpoint.trained;
+  const ok = !canceled && Boolean(dryRunOk || trainedOk);
+  const status = canceled ? "canceled" : ok ? "pass" : "fail";
+  const summary = canceled
+    ? `Canceled adapter training run ${job.run.runId}.`
+    : trainedOk
+      ? `Trained adapter ${job.run.adapterName}; checkpoint files were detected.`
+      : dryRunOk
+        ? `Adapter trainer dry-run passed for ${job.run.adapterName}; no weights were claimed.`
+        : `Adapter training run failed or did not produce the required checkpoint files.`;
+  const receipt = commandReceipt({
+    name: "adapter_training_run",
+    ok,
+    status: canceled ? "canceled" : ok ? "ok" : "failed",
+    command: job.run.command,
+    outputPath: job.run.files.trainingReceiptJson,
+    summary,
+    stdout: job.stdout,
+    stderr: job.stderr,
+    error: result.error || "",
+    startedAt: job.run.startedAt,
+    endedAt
+  });
+  job.run.ok = ok;
+  job.run.status = status;
+  job.run.summary = summary;
+  job.run.endedAt = endedAt;
+  job.run.updatedAt = endedAt;
+  job.run.checkpoint = checkpoint;
+  job.run.receipt = receipt;
+  await writeFile(job.run.files.log, [job.stdout, job.stderr].filter(Boolean).join("\n\n"), "utf-8");
+  await writeJson(job.run.files.trainingReceiptJson, {
+    schema: "modelforge.adapter_training_receipt.v1",
+    ok,
+    status,
+    mode: job.run.mode,
+    summary,
+    checkpoint,
+    receipt,
+    endedAt
+  });
+  await persistAdapterTrainingRun(job.run);
+  await writeFile(job.run.files.latestReceiptMarkdown, adapterTrainingRunMarkdown(job.run), "utf-8");
+  await syncAdapterReceiptAfterTrainingRun(job.run);
+  adapterTrainingRunJobs.delete(runId);
+  return job.run;
+}
+
+async function getAdapterTrainingRun(runId = "") {
+  const safeRunId = String(runId || "").trim();
+  if (safeRunId && adapterTrainingRunJobs.has(safeRunId)) {
+    return adapterTrainingRunJobs.get(safeRunId).run;
+  }
+  if (safeRunId) {
+    if (!/^adapter-run-\d{4}-\d{2}-\d{2}T/.test(safeRunId)) {
+      throw new Error("A valid adapter training run id is required.");
+    }
+    return readJsonIfExists(join(dataRoot, "adapters", "runs", safeRunId, "adapter-training-run.json"));
+  }
+  return getLatestAdapterTrainingRun();
+}
+
+async function cancelAdapterTrainingRun(runId = "") {
+  const safeRunId = String(runId || "").trim();
+  if (!safeRunId) {
+    throw new Error("An adapter training run id is required.");
+  }
+  const job = adapterTrainingRunJobs.get(safeRunId);
+  if (!job) {
+    return getAdapterTrainingRun(safeRunId);
+  }
+  job.cancelRequested = true;
+  job.run.summary = `Cancel requested for adapter training run ${safeRunId}.`;
+  job.run.updatedAt = new Date().toISOString();
+  stopCommandProcess(job.child);
+  return job.run;
+}
+
+async function getAdapterTrainingRunHistory(limit = 8) {
+  const historyRoot = join(dataRoot, "adapters", "runs");
+  let entries = [];
+  try {
+    entries = await readdir(historyRoot, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const runs = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && /^adapter-run-\d{4}-\d{2}-\d{2}T/.test(entry.name))
+      .map((entry) => readJsonIfExists(join(historyRoot, entry.name, "adapter-training-run.json")))
+  );
+  const latest = await getLatestAdapterTrainingRun();
+  const byId = new Map();
+  for (const run of [...adapterTrainingRunJobs.values()].map((job) => job.run).concat(runs.filter(Boolean), latest ? [latest] : [])) {
+    byId.set(run.runId, run);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+    .slice(0, limit);
+}
+
+function quotedModelfilePath(path = "") {
+  return `"${String(path || "").replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
+}
+
+async function promoteAdapterToOllama(body = {}) {
+  await ensureDataRoot();
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  if (!adapterReceipt?.adapterBuildId) {
+    throw new Error("Prepare and train an adapter before promotion.");
+  }
+  const latestRun = body.runId ? await getAdapterTrainingRun(body.runId) : await getLatestAdapterTrainingRun();
+  const checkpointDir = latestRun?.checkpointDir || adapterReceipt.adapter?.checkpointDir || "";
+  const checkpoint = await detectAdapterCheckpoint(checkpointDir);
+  const createdAt = new Date().toISOString();
+  const receiptId = adapterPromotionId();
+  const promotionDir = join(dataRoot, "adapters", "latest", "promoted");
+  const historyDir = join(dataRoot, "adapters", "history", adapterReceipt.adapterBuildId, "promoted", receiptId);
+  const modelName = cleanSetting(body.modelName || `${adapterReceipt.adapter.name}:latest`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(modelName)) {
+    throw new Error("Adapter model name can only contain letters, numbers, '.', '-', '_', '/', and ':'.");
+  }
+  await mkdir(promotionDir, { recursive: true });
+  await mkdir(historyDir, { recursive: true });
+  const files = {
+    latestJson: join(dataRoot, "adapters", "latest", "adapter-promotion-receipt.json"),
+    latestMarkdown: join(dataRoot, "adapters", "latest", "adapter-promotion-receipt.md"),
+    historyJson: join(historyDir, "adapter-promotion-receipt.json"),
+    historyMarkdown: join(historyDir, "adapter-promotion-receipt.md"),
+    modelfile: join(promotionDir, "Modelfile"),
+    historyModelfile: join(historyDir, "Modelfile")
+  };
+  const command = [ollamaCommand(), "create", modelName, "-f", files.modelfile];
+  const blocked = !checkpoint.trained;
+  let runResult = { ok: false, stdout: "", stderr: "", error: blocked ? checkpoint.summary : "" };
+  if (!blocked) {
+    const systemPrompt = [
+      `You are ${adapterReceipt.aiName || adapterReceipt.adapter.name}.`,
+      "Use the trained adapter behavior, but keep answers source-backed and cite local evidence when claims depend on project files.",
+      "If the answer needs sources outside the selected ModelForge scope, say so."
+    ].join(" ");
+    const modelfile = [
+      `FROM ${adapterReceipt.adapter.baseModel}`,
+      `ADAPTER ${quotedModelfilePath(checkpoint.adapterModel)}`,
+      "PARAMETER temperature 0.2",
+      "SYSTEM \"\"\"",
+      systemPrompt,
+      "\"\"\"",
+      ""
+    ].join("\n");
+    await writeFile(files.modelfile, modelfile, "utf-8");
+    await writeFile(files.historyModelfile, modelfile, "utf-8");
+    runResult = await runCommand(command[0], command.slice(1), { timeout: 20 * 60 * 1000, cwd: promotionDir, maxBuffer: 20 * 1024 * 1024 });
+  }
+  const ollama = await getOllamaStatus({ force: true });
+  const installed = Boolean((ollama.models || []).some((model) => model.name === modelName));
+  const ok = Boolean(!blocked && runResult.ok && installed);
+  const status = blocked ? "blocked" : ok ? "created" : "failed";
+  const summary = blocked
+    ? `Promotion blocked: ${checkpoint.summary}`
+    : ok
+      ? `Promoted ${adapterReceipt.adapter.name} to Ollama model ${modelName}.`
+      : `Ollama promotion did not complete for ${modelName}.`;
+  const receipt = {
+    schema: "modelforge.adapter_promotion_receipt.v1",
+    receiptId,
+    createdAt,
+    adapterBuildId: adapterReceipt.adapterBuildId,
+    trainingRunId: latestRun?.runId || "",
+    ok,
+    status,
+    summary,
+    adapterName: adapterReceipt.adapter.name,
+    modelName,
+    baseModel: adapterReceipt.adapter.baseModel,
+    checkpoint,
+    command,
+    ollama: {
+      ok: ollama.ok,
+      installed,
+      selectedModel: ollama.selectedModel || "",
+      error: ollama.error || ""
+    },
+    receipt: commandReceipt({
+      name: "adapter_promote_ollama_create",
+      ok,
+      status: blocked ? "blocked" : ok ? "ok" : "failed",
+      command,
+      outputPath: files.latestJson,
+      summary,
+      stdout: runResult.stdout,
+      stderr: runResult.stderr,
+      error: runResult.error,
+      startedAt: createdAt,
+      endedAt: new Date().toISOString()
+    }),
+    files
+  };
+  await writeJson(files.latestJson, receipt);
+  await writeFile(files.latestMarkdown, adapterPromotionMarkdown(receipt), "utf-8");
+  await writeJson(files.historyJson, receipt);
+  await writeFile(files.historyMarkdown, adapterPromotionMarkdown(receipt), "utf-8");
+  if (ok) {
+    const updated = {
+      ...adapterReceipt,
+      status: "trained",
+      adapter: {
+        ...adapterReceipt.adapter,
+        promotedModelName: modelName
+      },
+      runner: {
+        ...adapterReceipt.runner,
+        promotionReceiptId: receiptId,
+        promotedModelName: modelName
+      },
+      files: {
+        ...adapterReceipt.files,
+        latestPromotionReceiptJson: files.latestJson,
+        latestPromotionReceiptMarkdown: files.latestMarkdown,
+        promotedModelfile: files.modelfile
+      }
+    };
+    await writeUpdatedAdapterReceipt(updated);
+  }
+  return { ok, receipt, adapter: await getAdapterBuilderReceiptById(adapterReceipt.adapterBuildId), project: await getProjectPayload(), ollama };
 }
 
 async function buildAiBuildPlan(body = {}) {
@@ -7728,6 +8616,8 @@ async function buildModelLibrary() {
     latestBuilderAiCreateReceipt,
     latestTrainingRoutePlan,
     latestAdapterBuild,
+    latestAdapterTrainingRun,
+    latestAdapterPromotion,
     recipeRunHistory,
     recipeHistory
   ] = await Promise.all([
@@ -7744,6 +8634,8 @@ async function buildModelLibrary() {
     getLatestBuilderAiCreateReceipt(),
     getLatestTrainingRoutePlan(),
     getLatestAdapterBuilderReceipt(),
+    getLatestAdapterTrainingRun(),
+    getLatestAdapterPromotionReceipt(),
     getRecipeRunHistory(),
     getForgeRecipeHistory()
   ]);
@@ -7769,7 +8661,10 @@ async function buildModelLibrary() {
     libraryReceipt("Training route plan", latestTrainingRoutePlan?.files?.trainingRouteJson || latestTrainingRoutePlan?.files?.json || join(dataRoot, "builder", "latest", "training-route-plan.json"), "receipt"),
     libraryReceipt("Adapter build receipt", latestAdapterBuild?.files?.receiptJson, "receipt"),
     libraryReceipt("Adapter training config", latestAdapterBuild?.files?.trainingConfigJson, "artifact"),
+    libraryReceipt("Adapter runner script", latestAdapterBuild?.files?.runnerScript, "artifact"),
     libraryReceipt("Adapter runner recipe", latestAdapterBuild?.files?.runnerRecipeJson, "artifact"),
+    libraryReceipt("Adapter training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
+    libraryReceipt("Adapter promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
     libraryReceipt("Modelfile", latestModelExport?.modelfilePath || latestRecipe?.evidence?.modelfilePath, "model"),
     libraryReceipt("System prompt", latestModelExport?.promptPath, "model"),
@@ -7844,19 +8739,24 @@ async function buildModelLibrary() {
   }
 
   if (latestAdapterBuild?.adapter?.name) {
+    const adapterPromoted = Boolean(latestAdapterPromotion?.ok && latestAdapterPromotion.modelName && installedNames.has(latestAdapterPromotion.modelName));
+    const adapterTrained = Boolean(latestAdapterBuild.adapter?.trained || latestAdapterTrainingRun?.checkpoint?.trained);
+    const adapterRunnableName = latestAdapterPromotion?.modelName || latestAdapterBuild.adapter.name;
     items.push({
       id: "adapter-current",
       name: latestAdapterBuild.adapter.name,
       kind: "adapter",
-      status: latestAdapterBuild.status || "dry-run",
-      statusLabel: latestAdapterBuild.status === "trained" ? "Adapter ready" : latestAdapterBuild.status === "ready" ? "Ready to train" : "Dry-run ready",
-      modelName: latestAdapterBuild.adapter.name,
+      status: adapterPromoted ? "created" : latestAdapterBuild.status || "dry-run",
+      statusLabel: adapterPromoted ? "Runnable" : latestAdapterBuild.status === "trained" ? "Adapter ready" : latestAdapterBuild.status === "ready" ? "Ready to train" : "Dry-run ready",
+      modelName: adapterRunnableName,
       baseModel: latestAdapterBuild.adapter.baseModel || baseModel,
       description:
-        latestAdapterBuild.status === "trained"
+        adapterPromoted
+          ? "Adapter-built Ollama target is available with promotion and training receipts attached."
+          : adapterTrained
           ? "LoRA/QLoRA adapter checkpoint exists with Builder receipts attached."
           : "Adapter training dataset, config, runner recipe, and checkpoint folder are prepared without claiming trained weights.",
-      canChat: false,
+      canChat: Boolean(adapterPromoted && ollama.ok),
       canRunPack: false,
       createdAt: latestAdapterBuild.createdAt || "",
       metrics: {
@@ -7864,12 +8764,17 @@ async function buildModelLibrary() {
         tokens: latestAdapterBuild.dataset?.estimatedTokens || latestDataset?.summary?.estimatedTokens || 0,
         sourceFiles: latestAdapterBuild.dataset?.sourceScope?.includedFiles || sources.totalFiles,
         dryRun: Boolean(latestAdapterBuild.adapter?.dryRun),
-        trained: Boolean(latestAdapterBuild.adapter?.trained)
+        trained: adapterTrained,
+        promoted: adapterPromoted,
+        latestRun: latestAdapterTrainingRun?.status || "not run"
       },
       receipts: [
         libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
         libraryReceipt("Training config", latestAdapterBuild.files?.trainingConfigJson, "artifact"),
+        libraryReceipt("Runner script", latestAdapterBuild.files?.runnerScript, "artifact"),
         libraryReceipt("Runner recipe", latestAdapterBuild.files?.runnerRecipeJson, "artifact"),
+        libraryReceipt("Training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
+        libraryReceipt("Promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
         libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
         libraryReceipt("Training dataset", latestAdapterBuild.files?.trainingDatasetJsonl, "dataset")
       ].filter(Boolean),
@@ -7881,6 +8786,20 @@ async function buildModelLibrary() {
           kind: "builder-adapter",
           workspace: "builder",
           detail: "Regenerate the source-scoped adapter dataset, config, runner recipe, and receipt."
+        },
+        {
+          id: "builder-run-adapter-training",
+          label: adapterTrained ? "Rerun Trainer" : latestAdapterTrainingRun?.status === "running" ? "Training" : "Run Trainer",
+          kind: "builder-adapter-run",
+          workspace: "builder",
+          detail: "Run the local adapter trainer; ModelForge dry-runs unless hardware, dependencies, and model config are ready."
+        },
+        {
+          id: "builder-promote-adapter",
+          label: adapterPromoted ? "Promoted" : "Promote AI",
+          kind: "builder-adapter-promote",
+          workspace: "builder",
+          detail: "Create an Ollama target from the trained adapter checkpoint when real adapter files are detected."
         },
         {
           id: "builder-retest-ai",
@@ -8330,6 +9249,9 @@ async function getProjectPayload() {
     latestBuilderAiCreateReceipt,
     latestTrainingRoutePlan,
     latestAdapterBuild,
+    latestAdapterTrainingRun,
+    latestAdapterPromotion,
+    adapterTrainingRunHistory,
     builderRunHistory
   ] = await Promise.all([
     getToolStatus(),
@@ -8350,6 +9272,9 @@ async function getProjectPayload() {
     getLatestBuilderAiCreateReceipt(),
     getLatestTrainingRoutePlan(),
     getLatestAdapterBuilderReceipt(),
+    getLatestAdapterTrainingRun(),
+    getLatestAdapterPromotionReceipt(),
+    getAdapterTrainingRunHistory(),
     getBuilderRunHistory()
   ]);
   const dataset = estimateDatasetMetrics(sources);
@@ -8389,6 +9314,9 @@ async function getProjectPayload() {
     latestBuilderAiCreateReceipt,
     latestTrainingRoutePlan,
     latestAdapterBuild,
+    latestAdapterTrainingRun,
+    latestAdapterPromotion,
+    adapterTrainingRunHistory,
     builderRunHistory,
     pipeline: [
       {
@@ -8756,6 +9684,35 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/builder/adapter/build") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await buildBuilderAdapter(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/training/run") {
+      const body = await readJsonBody(request);
+      const run = await startAdapterTrainingRun(body);
+      sendJson(response, 202, { ok: true, run, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/adapter/training/run") {
+      sendJson(response, 200, { ok: true, run: await getAdapterTrainingRun(url.searchParams.get("runId") || "") });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/adapter/training/runs") {
+      sendJson(response, 200, { ok: true, runs: await getAdapterTrainingRunHistory() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/training/cancel") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { ok: true, run: await cancelAdapterTrainingRun(body.runId) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/promote") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, await promoteAdapterToOllama(body));
       return;
     }
 

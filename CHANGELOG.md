@@ -31,6 +31,11 @@ forge cockpit.
   training dataset, writes a LoRA/QLoRA config, prepares a runner recipe,
   creates checkpoint/adapter folders, writes a receipt, and registers the
   adapter pack in Your AIs.
+- Added Adapter Training Run receipts so Run Trainer executes the local runner,
+  streams progress/log tails, supports cancellation, detects dry-run versus real
+  checkpoints, and updates the adapter status.
+- Added Adapter Promotion receipts so trained checkpoints can become Ollama
+  targets while dry-run-only adapters are blocked with a clear receipt.
 - Added First-Run Doctor checks for launch readiness, D-drive storage, Ollama,
   Python, disk space, CPU/RAM, and GPU/VRAM.
 - Added Build From Plan as a guided local job that builds source receipts,

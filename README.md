@@ -60,6 +60,10 @@ artifacts from code and project folders.
   source-scope training dataset, writes a LoRA/QLoRA config, prepares a runner
   recipe, creates checkpoint/adapter folders, writes an adapter build receipt,
   and registers the adapter pack in **Your AIs**.
+- Runs that adapter runner with live progress, cancellation, checkpoint
+  detection, and receipts. ModelForge dry-runs when hardware, dependencies, or
+  the base-model config are not ready, and only enables promotion after real
+  adapter weight files are detected.
 - Provides **Apply Hardware Recipe** in Builder: checks whether the recommended
   base model is installed, pulls it through Ollama when needed, writes the
   recipe-aware model profile and Modelfile metadata, saves an applied-recipe
@@ -186,6 +190,12 @@ The plan records:
   training JSONL, creates the LoRA/QLoRA training config, prepares the runner
   recipe, writes checkpoint placeholders or trained-output locations, and stores
   the adapter manifest.
+- An **Adapter Training Run** receipt after Run Trainer executes the local
+  runner, captures stdout/stderr tails, records dry-run or train mode, scans for
+  checkpoint files, and updates the adapter status.
+- An **Adapter Promotion** receipt when a trained adapter checkpoint is promoted
+  into an Ollama target. Promotion is blocked, with a receipt, when only a
+  dry-run checkpoint exists.
 - The recommended route, such as Dataset Pack, Recipe Export, or LoRA/QLoRA
   prep when the hardware makes that realistic.
 - Ordered next steps mapped back to the app: Setup, Sources, Dataset Forge,
@@ -228,15 +238,17 @@ The library shows:
 - Which models are runnable in Ollama.
 - Which forged target was built from the current recipe/profile.
 - Which adapter pack was prepared, including dry-run/trained status, dataset
-  size, training config, runner recipe, and adapter manifest.
+  size, training config, runner script, runner recipe, latest training run,
+  promotion receipt, and adapter manifest.
 - Dataset rows, token estimates, source-file counts, proof freshness, and eval
   freshness.
 - Receipts behind the build, including Modelfiles, model profiles, Dataset
   Forge artifacts, export manifests, proof bundles, Builder create/update
   receipts, and Ollama create receipts.
 - Source evidence previews with local paths and hashes.
-- Rebuild AI, Prepare Adapter, and Retest AI actions, so the library can
-  create/update the local Ollama target, refresh the adapter pack, and rerun the
+- Rebuild AI, Prepare Adapter, Run Trainer, Promote AI, and Retest AI actions,
+  so the library can create/update the local Ollama target, refresh the adapter
+  pack, execute the guarded trainer, promote real checkpoints, and rerun the
   guided source-backed test.
 
 The same workspace includes a **Test side by side** playground. It sends one
@@ -443,7 +455,8 @@ Release docs:
 - `.modelforge-data/knowledge/` - ignored local retrieval snippets for Model Lab
   chat
 - `.modelforge-data/adapters/` - ignored local adapter datasets, configs,
-  runner recipes, checkpoint folders, and receipts
+  runner scripts, runner recipes, training runs, promotion receipts, checkpoint
+  folders, and adapter manifests
 - `scripts/dev.mjs` - D-drive-friendly local dev runner
 - `scripts/build-release.mjs` - portable v1 Windows release zip builder
 - `scripts/qa-first-run.mjs` - clean-machine First-Run Doctor scenario QA
@@ -455,7 +468,9 @@ Release docs:
 
 ## Roadmap
 
-- Real local LoRA/QLoRA execution from the generated Adapter Builder runner
+- Broader real LoRA/QLoRA execution coverage from the generated Adapter Builder
+  runner, including dependency install guidance and compatible base-model
+  selection
   recipe when dependencies, hardware, and explicit long-run approval are ready.
 - Tiny from-scratch lab runner for educational experiments, clearly separated
   from foundation-model claims.

@@ -567,6 +567,12 @@ export type AdapterBuilderReceipt = {
     packageStatus: AdapterPackageStatus;
     blockedReasons: string[];
     recipe: Record<string, unknown>;
+    latestRunId?: string;
+    latestRunStatus?: string;
+    latestRunSummary?: string;
+    checkpoint?: AdapterCheckpointDetection;
+    promotionReceiptId?: string;
+    promotedModelName?: string;
   };
   outputs: Array<{
     label: string;
@@ -585,6 +591,7 @@ export type AdapterBuilderReceipt = {
     trainingDatasetJsonl: string;
     trainingDatasetManifest: string;
     trainingConfigJson: string;
+    runnerScript?: string;
     runnerRecipeJson: string;
     runnerRecipeMarkdown: string;
     adapterManifestJson: string;
@@ -594,12 +601,120 @@ export type AdapterBuilderReceipt = {
     historyTrainingDatasetJsonl: string;
     historyTrainingDatasetManifest: string;
     historyTrainingConfigJson: string;
+    historyRunnerScript?: string;
     historyRunnerRecipeJson: string;
     historyRunnerRecipeMarkdown: string;
     historyAdapterManifestJson: string;
     historyReceiptJson: string;
     historyReceiptMarkdown: string;
     historyCheckpointDir: string;
+    latestTrainingRunJson?: string;
+    latestTrainingRunMarkdown?: string;
+    latestTrainingRunLog?: string;
+    latestTrainingCheckpointDir?: string;
+    latestPromotionReceiptJson?: string;
+    latestPromotionReceiptMarkdown?: string;
+    promotedModelfile?: string;
+  };
+};
+
+export type AdapterCheckpointDetection = {
+  schema: string;
+  checkedAt: string;
+  dir: string;
+  detected: boolean;
+  trained: boolean;
+  dryRun: boolean;
+  adapterModel: string;
+  adapterConfig: string;
+  trainingReceipt: string;
+  dryRunManifest: string;
+  files: string[];
+  summary: string;
+};
+
+export type AdapterTrainingRun = {
+  schema: string;
+  runId: string;
+  adapterBuildId: string;
+  planId: string;
+  adapterName: string;
+  baseModel: string;
+  method: string;
+  ok: boolean;
+  status: "running" | "pass" | "fail" | "canceled" | string;
+  mode: "dry-run" | "train" | string;
+  requestedMode: "dry-run" | "train" | string;
+  canTrainNow: boolean;
+  blockedReasons: string[];
+  summary: string;
+  command: string[];
+  startedAt: string;
+  endedAt: string;
+  updatedAt: string;
+  progress: {
+    currentStep: number;
+    totalSteps: number;
+    label: string;
+    detail: string;
+    event: string;
+    updatedAt: string;
+  };
+  checkpointDir: string;
+  checkpoint: AdapterCheckpointDetection;
+  receipt: {
+    name: string;
+    ok: boolean;
+    status: string;
+    command: string[];
+    outputPath: string;
+    summary: string;
+    stdoutTail: string;
+    stderrTail: string;
+    error: string;
+    startedAt: string;
+    endedAt: string;
+  };
+  files: {
+    runDir: string;
+    runJson: string;
+    latestJson: string;
+    receiptMarkdown: string;
+    latestReceiptMarkdown: string;
+    log: string;
+    trainingReceiptJson: string;
+    checkpointDir: string;
+  };
+};
+
+export type AdapterPromotionReceipt = {
+  schema: string;
+  receiptId: string;
+  createdAt: string;
+  adapterBuildId: string;
+  trainingRunId: string;
+  ok: boolean;
+  status: "created" | "blocked" | "failed" | string;
+  summary: string;
+  adapterName: string;
+  modelName: string;
+  baseModel: string;
+  checkpoint: AdapterCheckpointDetection;
+  command: string[];
+  ollama: {
+    ok: boolean;
+    installed: boolean;
+    selectedModel: string;
+    error: string;
+  };
+  receipt: Record<string, unknown>;
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+    modelfile: string;
+    historyModelfile: string;
   };
 };
 
@@ -1511,6 +1626,9 @@ export type ProjectPayload = {
   latestBuilderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   latestTrainingRoutePlan?: TrainingRoutePlan | null;
   latestAdapterBuild?: AdapterBuilderReceipt | null;
+  latestAdapterTrainingRun?: AdapterTrainingRun | null;
+  latestAdapterPromotion?: AdapterPromotionReceipt | null;
+  adapterTrainingRunHistory?: AdapterTrainingRun[];
   builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];
   sources: SourceSummary;

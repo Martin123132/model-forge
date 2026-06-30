@@ -1,6 +1,8 @@
 import type {
-  BuilderAiCreateReceipt,
   AdapterBuilderReceipt,
+  AdapterPromotionReceipt,
+  AdapterTrainingRun,
+  BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
   BuilderPlan,
@@ -144,6 +146,42 @@ export function buildBuilderAdapter(planId?: string, runTraining = false) {
   }>("/api/builder/adapter/build", {
     method: "POST",
     body: JSON.stringify({ planId, runTraining, allowLongRun: false })
+  });
+}
+
+export function startAdapterTrainingRun(adapterBuildId?: string, runTraining = true) {
+  return requestJson<{
+    ok: boolean;
+    run: AdapterTrainingRun;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/training/run", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, runTraining, allowLongRun: runTraining })
+  });
+}
+
+export function getAdapterTrainingRun(runId?: string) {
+  const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+  return requestJson<{ ok: boolean; run: AdapterTrainingRun | null }>(`/api/builder/adapter/training/run${query}`);
+}
+
+export function cancelAdapterTrainingRun(runId: string) {
+  return requestJson<{ ok: boolean; run: AdapterTrainingRun | null }>("/api/builder/adapter/training/cancel", {
+    method: "POST",
+    body: JSON.stringify({ runId })
+  });
+}
+
+export function promoteAdapterToOllama(adapterBuildId?: string, runId?: string, modelName?: string) {
+  return requestJson<{
+    ok: boolean;
+    receipt: AdapterPromotionReceipt;
+    adapter: AdapterBuilderReceipt | null;
+    project: ProjectPayload;
+    ollama: OllamaStatus;
+  }>("/api/builder/adapter/promote", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, runId, modelName })
   });
 }
 
