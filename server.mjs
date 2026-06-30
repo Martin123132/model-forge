@@ -26,6 +26,7 @@ const port = Number(process.env.PORT || process.env.MODEL_FORGE_PORT || (apiOnly
 const recipeRunJobs = new Map();
 const builderRunJobs = new Map();
 const adapterTrainingRunJobs = new Map();
+const adapterOperationJobs = new Map();
 
 const skippedDirs = new Set([
   ".git",
@@ -106,6 +107,7 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "adapters", "latest"), { recursive: true });
   await mkdir(join(root, "adapters", "history"), { recursive: true });
   await mkdir(join(root, "adapters", "runs"), { recursive: true });
+  await mkdir(join(root, "adapters", "operations"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness", "history"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
@@ -4728,6 +4730,616 @@ async function installAdapterTrainingDependencies(body = {}) {
   };
 }
 
+function adapterOperationKindSlug(kind = "") {
+  return String(kind || "operation").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+}
+
+function adapterOperationJobId(kind = "operation") {
+  return `adapter-op-${adapterOperationKindSlug(kind)}-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+}
+
+function adapterOperationLabel(kind = "") {
+  if (kind === "dependency-install") return "Dependency install";
+  if (kind === "base-cache-warmup") return "Base model cache warmup";
+  return "Adapter operation";
+}
+
+function adapterOperationEstimates(kind, readiness = {}) {
+  const baseEstimate = Number(readiness.recommendedBaseModel?.estimatedDownloadGb || 0);
+  if (kind === "base-cache-warmup") {
+    return {
+      disk: baseEstimate ? `${Math.ceil(baseEstimate + 1)} GB cache budget` : "Model-dependent cache budget",
+      time: baseEstimate >= 10 ? "20-90 minutes" : "5-45 minutes",
+      detail: readiness.recommendedBaseModel?.modelId
+        ? `Warms ${readiness.recommendedBaseModel.modelId} into ${readiness.cachePlan?.dirs?.hfHub || readiness.cachePlan?.root || "the configured cache"}.`
+        : "Warms the recommended Transformers base model into the configured cache."
+    };
+  }
+  return {
+    disk: "3-8 GB package cache budget",
+    time: "10-45 minutes",
+    detail: "Installs PyTorch, Transformers, datasets, PEFT, accelerate, and supporting trainer packages through pip."
+  };
+}
+
+function adapterOperationFiles(jobId, kind) {
+  const safeKind = adapterOperationKindSlug(kind);
+  const runDir = join(dataRoot, "adapters", "operations", jobId);
+  return {
+    runDir,
+    runJson: join(runDir, "adapter-operation-job.json"),
+    latestJson: join(dataRoot, "adapters", "operations", "latest-operation-job.json"),
+    latestKindJson: join(dataRoot, "adapters", "operations", `latest-${safeKind}.json`),
+    receiptJson: join(runDir, "adapter-operation-receipt.json"),
+    receiptMarkdown: join(runDir, "adapter-operation-receipt.md"),
+    latestReceiptJson: join(dataRoot, "adapters", "operations", `latest-${safeKind}-receipt.json`),
+    latestReceiptMarkdown: join(dataRoot, "adapters", "operations", `latest-${safeKind}-receipt.md`),
+    log: join(runDir, "adapter-operation.log"),
+    cacheWarmupScript: join(runDir, "cache-warmup.py")
+  };
+}
+
+function adapterOperationMarkdown(job) {
+  return [
+    `# ${job.label}`,
+    "",
+    `Job: ${job.jobId}`,
+    `Kind: ${job.kind}`,
+    `Status: ${job.status}`,
+    `Adapter build: ${job.adapterBuildId || ""}`,
+    `Started: ${job.startedAt || ""}`,
+    `Ended: ${job.endedAt || ""}`,
+    "",
+    "## Summary",
+    "",
+    job.summary || "",
+    "",
+    "## Progress",
+    "",
+    `Step: ${job.progress?.currentStep || 0}/${job.progress?.totalSteps || 0}`,
+    `Label: ${job.progress?.label || ""}`,
+    `Detail: ${job.progress?.detail || ""}`,
+    "",
+    "## Estimates",
+    "",
+    `Disk: ${job.estimates?.disk || ""}`,
+    `Time: ${job.estimates?.time || ""}`,
+    `Detail: ${job.estimates?.detail || ""}`,
+    "",
+    "## Commands",
+    "",
+    ...(job.commands?.length ? job.commands.map((item) => `- ${item.label || item.id}: ${item.status || "queued"} (${(item.command || []).join(" ")})`) : ["- No command recorded."]),
+    "",
+    "## Logs",
+    "",
+    "```text",
+    job.logs?.combinedTail || "",
+    "```",
+    ""
+  ].join("\n");
+}
+
+function publicAdapterOperationJob(job) {
+  if (!job) return null;
+  const { child, lineBuffer, stdout, stderr, ...safeJob } = job;
+  return safeJob;
+}
+
+async function persistAdapterOperationJob(job) {
+  const safeJob = publicAdapterOperationJob(job);
+  await mkdir(job.files.runDir, { recursive: true });
+  await writeJson(job.files.runJson, safeJob);
+  await writeJson(job.files.latestJson, safeJob);
+  await writeJson(job.files.latestKindJson, safeJob);
+  if (job.logs?.combinedTail || terminalRunStatus(job.status)) {
+    await writeFile(job.files.log, [job.stdout || "", job.stderr || ""].filter(Boolean).join("\n\n"), "utf-8");
+  }
+  if (terminalRunStatus(job.status)) {
+    await writeJson(job.files.receiptJson, job.receipt || job);
+    await writeJson(job.files.latestReceiptJson, job.receipt || job);
+    await writeFile(job.files.receiptMarkdown, adapterOperationMarkdown(job), "utf-8");
+    await writeFile(job.files.latestReceiptMarkdown, adapterOperationMarkdown(job), "utf-8");
+  }
+}
+
+function parseAdapterOperationLine(job, line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed.startsWith("{")) return;
+  const event = parseJsonLoose(trimmed);
+  if (!event?.event) return;
+  const currentStep = Number(event.currentStep ?? job.progress.currentStep ?? 0);
+  const totalSteps = Number(event.totalSteps ?? job.progress.totalSteps ?? 0);
+  job.progress = {
+    currentStep: Number.isFinite(currentStep) ? currentStep : job.progress.currentStep,
+    totalSteps: Number.isFinite(totalSteps) && totalSteps > 0 ? totalSteps : job.progress.totalSteps,
+    label: cleanSetting(event.label || event.event),
+    detail: cleanSetting(event.detail),
+    event: cleanSetting(event.event),
+    updatedAt: new Date().toISOString()
+  };
+  job.summary = event.detail || job.summary;
+}
+
+function handleAdapterOperationOutput(job, chunk, stream) {
+  const text = String(chunk || "");
+  if (stream === "stderr") job.stderr += text;
+  else job.stdout += text;
+  job.lineBuffer += text;
+  const lines = job.lineBuffer.split(/\r?\n/);
+  job.lineBuffer = lines.pop() || "";
+  for (const line of lines) parseAdapterOperationLine(job, line);
+  job.updatedAt = new Date().toISOString();
+  job.logs = {
+    stdoutTail: tail(job.stdout || "", 5000),
+    stderrTail: tail(job.stderr || "", 5000),
+    combinedTail: tail([job.stdout || "", job.stderr || ""].filter(Boolean).join("\n\n"), 9000)
+  };
+}
+
+function runAdapterOperationCommand(job, commandSpec, stepIndex, totalSteps) {
+  return new Promise((resolveCommand) => {
+    if (job.cancelRequested) {
+      resolveCommand({ ok: false, canceled: true, code: "CANCELED", error: "Operation was canceled." });
+      return;
+    }
+    const command = commandSpec.command?.[0];
+    const args = commandSpec.command?.slice(1) || [];
+    const startedAt = new Date().toISOString();
+    commandSpec.status = "running";
+    commandSpec.startedAt = startedAt;
+    job.progress = {
+      currentStep: stepIndex,
+      totalSteps,
+      label: commandSpec.label || commandSpec.id,
+      detail: commandSpec.summary || (commandSpec.command || []).join(" "),
+      event: "command-start",
+      updatedAt: startedAt
+    };
+    job.summary = `${adapterOperationLabel(job.kind)}: ${commandSpec.label || commandSpec.id}.`;
+    job.updatedAt = startedAt;
+    void persistAdapterOperationJob(job);
+    const child = spawn(command, args, {
+      cwd: commandSpec.cwd || job.files.runDir,
+      env: commandEnv(commandSpec.env || {}),
+      windowsHide: true
+    });
+    job.child = child;
+    child.stdout.on("data", (chunk) => {
+      handleAdapterOperationOutput(job, chunk, "stdout");
+    });
+    child.stderr.on("data", (chunk) => {
+      handleAdapterOperationOutput(job, chunk, "stderr");
+    });
+    child.on("error", (error) => {
+      commandSpec.status = "failed";
+      commandSpec.ok = false;
+      commandSpec.error = String(error?.message || error);
+      commandSpec.endedAt = new Date().toISOString();
+      job.child = null;
+      resolveCommand({ ok: false, code: 1, error: commandSpec.error });
+    });
+    child.on("close", (code, signal) => {
+      const canceled = job.cancelRequested || signal === "SIGTERM";
+      const ok = !canceled && code === 0;
+      commandSpec.status = canceled ? "canceled" : ok ? "ok" : "failed";
+      commandSpec.ok = ok;
+      commandSpec.code = code;
+      commandSpec.signal = signal || "";
+      commandSpec.error = ok || canceled ? "" : `Command exited with code ${code}.`;
+      commandSpec.stdoutTail = tail(job.stdout || "", 2000);
+      commandSpec.stderrTail = tail(job.stderr || "", 2000);
+      commandSpec.endedAt = new Date().toISOString();
+      job.child = null;
+      resolveCommand({ ok, canceled, code, signal, error: commandSpec.error });
+    });
+  });
+}
+
+function adapterCacheWarmupScriptSource() {
+  return `#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+import traceback
+
+
+def emit(event, label, detail, current_step, total_steps):
+    print(json.dumps({
+        "event": event,
+        "label": label,
+        "detail": detail,
+        "currentStep": current_step,
+        "totalSteps": total_steps
+    }, ensure_ascii=True), flush=True)
+
+
+def folder_size(path):
+    total = 0
+    root = Path(path)
+    if not root.exists():
+        return 0
+    for item in root.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-id", required=True)
+    parser.add_argument("--receipt", required=True)
+    args = parser.parse_args()
+    model_id = args.model_id.strip()
+    receipt_path = Path(args.receipt)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    total_steps = 5
+    emit("start", "cache", "Starting base model cache warmup", 0, total_steps)
+    try:
+        if Path(model_id).exists():
+            emit("stage", "local-model", model_id, 1, total_steps)
+            size_bytes = folder_size(model_id)
+            receipt = {
+                "schema": "modelforge.adapter_base_cache_receipt.v1",
+                "ok": True,
+                "modelId": model_id,
+                "localPath": model_id,
+                "downloaded": False,
+                "cacheDir": "",
+                "sizeBytes": size_bytes,
+                "summary": "Local Transformers model path is already present."
+            }
+            receipt_path.write_text(json.dumps(receipt, indent=2, ensure_ascii=True) + "\\n", encoding="utf-8")
+            emit("complete", "cache", receipt["summary"], total_steps, total_steps)
+            return 0
+
+        emit("stage", "imports", "Loading Hugging Face cache helpers", 1, total_steps)
+        from huggingface_hub import snapshot_download
+
+        cache_dir = os.environ.get("HUGGINGFACE_HUB_CACHE") or None
+        emit("stage", "download", model_id, 2, total_steps)
+        local_dir = snapshot_download(
+            repo_id=model_id,
+            cache_dir=cache_dir,
+            resume_download=True,
+            ignore_patterns=["*.h5", "*.msgpack", "*.ot", "*.onnx"]
+        )
+        emit("stage", "inspect", local_dir, 4, total_steps)
+        size_bytes = folder_size(local_dir)
+        receipt = {
+            "schema": "modelforge.adapter_base_cache_receipt.v1",
+            "ok": True,
+            "modelId": model_id,
+            "localPath": local_dir,
+            "downloaded": True,
+            "cacheDir": cache_dir or "",
+            "sizeBytes": size_bytes,
+            "summary": "Transformers base model files are warm in the Hugging Face cache."
+        }
+        receipt_path.write_text(json.dumps(receipt, indent=2, ensure_ascii=True) + "\\n", encoding="utf-8")
+        emit("complete", "cache", receipt["summary"], total_steps, total_steps)
+        return 0
+    except Exception as error:
+        receipt = {
+            "schema": "modelforge.adapter_base_cache_receipt.v1",
+            "ok": False,
+            "modelId": model_id,
+            "summary": str(error),
+            "traceback": traceback.format_exc()
+        }
+        receipt_path.write_text(json.dumps(receipt, indent=2, ensure_ascii=True) + "\\n", encoding="utf-8")
+        emit("error", "cache", str(error), total_steps, total_steps)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`;
+}
+
+async function createAdapterOperationJob(kind, body = {}) {
+  await ensureDataRoot();
+  await ensureAdapterTrainingCacheDirs();
+  const existing = [...adapterOperationJobs.values()].find((job) => job.kind === kind && job.status === "running");
+  if (existing && body.reuseRunning !== false) return publicAdapterOperationJob(existing);
+  const readiness = await buildAdapterTrainingReadiness({ adapterBuildId: body.adapterBuildId || "" }, { write: true });
+  const jobId = adapterOperationJobId(kind);
+  const files = adapterOperationFiles(jobId, kind);
+  await mkdir(files.runDir, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const estimates = adapterOperationEstimates(kind, readiness);
+  const adapterReceipt = readiness.adapterBuildId ? await getAdapterBuilderReceiptById(readiness.adapterBuildId) : null;
+  const dryRun = body.dryRun === true;
+  const job = {
+    schema: "modelforge.adapter_operation_job.v1",
+    jobId,
+    kind,
+    label: adapterOperationLabel(kind),
+    adapterBuildId: readiness.adapterBuildId || "",
+    planId: readiness.planId || "",
+    adapterName: readiness.adapterName || "",
+    status: "queued",
+    ok: false,
+    dryRun,
+    retryOf: cleanSetting(body.retryOf || ""),
+    modelId: cleanSetting(body.modelId || adapterReceipt?.config?.trainer?.transformersModelId || readiness.recommendedBaseModel?.modelId || ""),
+    summary: `${adapterOperationLabel(kind)} queued.`,
+    estimates,
+    readinessBefore: readiness,
+    readinessAfter: null,
+    progress: {
+      currentStep: 0,
+      totalSteps: 1,
+      label: "queued",
+      detail: `${adapterOperationLabel(kind)} queued.`,
+      event: "queued",
+      updatedAt: startedAt
+    },
+    commands: [],
+    logs: {
+      stdoutTail: "",
+      stderrTail: "",
+      combinedTail: ""
+    },
+    stdout: "",
+    stderr: "",
+    lineBuffer: "",
+    child: null,
+    cancelRequested: false,
+    startedAt,
+    endedAt: "",
+    updatedAt: startedAt,
+    receipt: null,
+    files
+  };
+  if (kind === "dependency-install") {
+    job.commands = (readiness.installPlan?.commands || [])
+      .filter((item) => item.required || body.includeOptional)
+      .map((item) => ({ ...item, status: dryRun ? "queued-dry-run" : "queued", ok: false }));
+    if (!job.commands.length) {
+      job.commands = [{ id: "readiness", label: "Dependencies already ready", required: true, command: [pythonCommand, "--version"], summary: readiness.packageStatus?.summary || "No install commands required.", status: "queued", ok: false }];
+    }
+    job.progress.totalSteps = job.commands.length;
+  } else if (kind === "base-cache-warmup") {
+    await writeFile(files.cacheWarmupScript, adapterCacheWarmupScriptSource(), "utf-8");
+    job.commands = [{
+      id: "cache-warmup",
+      label: "Warm Transformers cache",
+      required: true,
+      command: [pythonCommand, "-u", files.cacheWarmupScript, "--model-id", job.modelId, "--receipt", files.receiptJson],
+      summary: `Download/cache ${job.modelId} under ${readiness.cachePlan?.dirs?.hfHub || readiness.cachePlan?.root || "the configured cache"}.`,
+      status: dryRun ? "queued-dry-run" : "queued",
+      ok: false
+    }];
+    job.progress.totalSteps = 5;
+  }
+  await persistAdapterOperationJob(job);
+  adapterOperationJobs.set(jobId, job);
+  if (kind === "dependency-install") {
+    void runAdapterDependencyInstallOperation(job);
+  } else if (kind === "base-cache-warmup") {
+    void runAdapterBaseCacheWarmupOperation(job);
+  }
+  return publicAdapterOperationJob(job);
+}
+
+async function finishAdapterOperationJob(job, { ok, status, summary, receiptExtra = {} } = {}) {
+  if (job.lineBuffer) {
+    parseAdapterOperationLine(job, job.lineBuffer);
+    job.lineBuffer = "";
+  }
+  const endedAt = new Date().toISOString();
+  job.ok = Boolean(ok);
+  job.status = status || (ok ? "pass" : "fail");
+  job.summary = summary || job.summary;
+  job.endedAt = endedAt;
+  job.updatedAt = endedAt;
+  job.logs = {
+    stdoutTail: tail(job.stdout || "", 5000),
+    stderrTail: tail(job.stderr || "", 5000),
+    combinedTail: tail([job.stdout || "", job.stderr || ""].filter(Boolean).join("\n\n"), 9000)
+  };
+  job.receipt = {
+    schema: "modelforge.adapter_operation_receipt.v1",
+    receiptId: `${job.jobId}-receipt`,
+    jobId: job.jobId,
+    kind: job.kind,
+    ok: job.ok,
+    status: job.status,
+    summary: job.summary,
+    adapterBuildId: job.adapterBuildId,
+    modelId: job.modelId,
+    estimates: job.estimates,
+    readinessBefore: job.readinessBefore,
+    readinessAfter: job.readinessAfter,
+    commands: job.commands,
+    logs: job.logs,
+    startedAt: job.startedAt,
+    endedAt,
+    files: job.files,
+    ...receiptExtra
+  };
+  await persistAdapterOperationJob(job);
+  adapterOperationJobs.delete(job.jobId);
+  return publicAdapterOperationJob(job);
+}
+
+async function runAdapterDependencyInstallOperation(job) {
+  try {
+    job.status = "running";
+    job.summary = job.dryRun ? "Dependency install dry-run is recording commands." : "Installing adapter training dependencies.";
+    job.updatedAt = new Date().toISOString();
+    await persistAdapterOperationJob(job);
+    if (job.dryRun) {
+      job.commands = job.commands.map((item, index) => ({
+        ...item,
+        status: "dry-run",
+        ok: true,
+        startedAt: job.startedAt,
+        endedAt: new Date().toISOString(),
+        stdoutTail: "",
+        stderrTail: "",
+        error: ""
+      }));
+      job.progress = {
+        currentStep: job.commands.length,
+        totalSteps: job.commands.length,
+        label: "dry-run",
+        detail: "Dependency install commands were recorded without running pip.",
+        event: "complete",
+        updatedAt: new Date().toISOString()
+      };
+      job.readinessAfter = job.readinessBefore;
+      await finishAdapterOperationJob(job, { ok: true, status: "pass", summary: "Dependency installer dry-run wrote the commands ModelForge would execute." });
+      return;
+    }
+    let ok = true;
+    for (let index = 0; index < job.commands.length; index += 1) {
+      const result = await runAdapterOperationCommand(job, job.commands[index], index + 1, job.commands.length);
+      await persistAdapterOperationJob(job);
+      if (result.canceled || job.cancelRequested) {
+        await finishAdapterOperationJob(job, { ok: false, status: "canceled", summary: `Canceled ${job.label}.` });
+        return;
+      }
+      if (!result.ok) {
+        ok = false;
+        break;
+      }
+    }
+    job.readinessAfter = await buildAdapterTrainingReadiness({ adapterBuildId: job.adapterBuildId }, { write: true });
+    await finishAdapterOperationJob(job, {
+      ok,
+      status: ok ? "pass" : "fail",
+      summary: ok ? `Dependency install completed. Readiness is now ${job.readinessAfter.status}.` : "Dependency install failed; review the operation logs."
+    });
+  } catch (error) {
+    job.stderr += `\n${String(error?.message || error)}`;
+    await finishAdapterOperationJob(job, { ok: false, status: "fail", summary: String(error?.message || error) });
+  }
+}
+
+async function runAdapterBaseCacheWarmupOperation(job) {
+  try {
+    job.status = "running";
+    job.summary = job.dryRun ? "Base model cache warmup dry-run is recording the command." : `Warming Transformers cache for ${job.modelId}.`;
+    job.updatedAt = new Date().toISOString();
+    await persistAdapterOperationJob(job);
+    if (job.dryRun) {
+      job.commands = job.commands.map((item) => ({
+        ...item,
+        status: "dry-run",
+        ok: true,
+        startedAt: job.startedAt,
+        endedAt: new Date().toISOString(),
+        stdoutTail: "",
+        stderrTail: "",
+        error: ""
+      }));
+      job.progress = {
+        currentStep: 1,
+        totalSteps: 1,
+        label: "dry-run",
+        detail: `Would warm ${job.modelId} into the Hugging Face cache.`,
+        event: "complete",
+        updatedAt: new Date().toISOString()
+      };
+      job.readinessAfter = job.readinessBefore;
+      await finishAdapterOperationJob(job, { ok: true, status: "pass", summary: `Cache warmup dry-run recorded ${job.modelId}.` });
+      return;
+    }
+    const result = await runAdapterOperationCommand(job, job.commands[0], 1, 5);
+    if (result.canceled || job.cancelRequested) {
+      await finishAdapterOperationJob(job, { ok: false, status: "canceled", summary: `Canceled ${job.label}.` });
+      return;
+    }
+    const cacheReceipt = await readJsonIfExists(job.files.receiptJson);
+    job.readinessAfter = await buildAdapterTrainingReadiness({ adapterBuildId: job.adapterBuildId }, { write: true });
+    await finishAdapterOperationJob(job, {
+      ok: Boolean(result.ok && cacheReceipt?.ok),
+      status: result.ok && cacheReceipt?.ok ? "pass" : "fail",
+      summary: cacheReceipt?.summary || (result.ok ? "Base cache warmup completed." : "Base cache warmup failed."),
+      receiptExtra: { cacheReceipt: cacheReceipt || null }
+    });
+  } catch (error) {
+    job.stderr += `\n${String(error?.message || error)}`;
+    await finishAdapterOperationJob(job, { ok: false, status: "fail", summary: String(error?.message || error) });
+  }
+}
+
+async function getAdapterOperationJob(jobId = "") {
+  const safeJobId = String(jobId || "").trim();
+  if (safeJobId && adapterOperationJobs.has(safeJobId)) return publicAdapterOperationJob(adapterOperationJobs.get(safeJobId));
+  if (safeJobId) {
+    if (!/^adapter-op-[a-z0-9-]+-\d{4}-\d{2}-\d{2}T/.test(safeJobId)) {
+      throw new Error("A valid adapter operation job id is required.");
+    }
+    return readJsonIfExists(join(dataRoot, "adapters", "operations", safeJobId, "adapter-operation-job.json"));
+  }
+  return getLatestAdapterOperationJob();
+}
+
+async function getLatestAdapterOperationJob(kind = "") {
+  const safeKind = adapterOperationKindSlug(kind || "");
+  const running = [...adapterOperationJobs.values()]
+    .filter((job) => !kind || job.kind === kind)
+    .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))[0];
+  if (running) return publicAdapterOperationJob(running);
+  const path = kind ? join(dataRoot, "adapters", "operations", `latest-${safeKind}.json`) : join(dataRoot, "adapters", "operations", "latest-operation-job.json");
+  return readJsonIfExists(path);
+}
+
+async function getAdapterOperationHistory(limit = 10) {
+  const historyRoot = join(dataRoot, "adapters", "operations");
+  let entries = [];
+  try {
+    entries = await readdir(historyRoot, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const jobs = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && /^adapter-op-[a-z0-9-]+-\d{4}-\d{2}-\d{2}T/.test(entry.name))
+      .map((entry) => readJsonIfExists(join(historyRoot, entry.name, "adapter-operation-job.json")))
+  );
+  const byId = new Map();
+  for (const job of [...adapterOperationJobs.values()].map(publicAdapterOperationJob).concat(jobs.filter(Boolean))) {
+    byId.set(job.jobId, job);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+    .slice(0, limit);
+}
+
+async function cancelAdapterOperationJob(jobId = "") {
+  const safeJobId = String(jobId || "").trim();
+  if (!safeJobId) throw new Error("An adapter operation job id is required.");
+  const job = adapterOperationJobs.get(safeJobId);
+  if (!job) return getAdapterOperationJob(safeJobId);
+  job.cancelRequested = true;
+  job.status = "running";
+  job.summary = `Cancel requested for ${job.label}.`;
+  job.updatedAt = new Date().toISOString();
+  stopCommandProcess(job.child);
+  await persistAdapterOperationJob(job);
+  return publicAdapterOperationJob(job);
+}
+
+async function retryAdapterOperationJob(body = {}) {
+  const previous = await getAdapterOperationJob(body.jobId || "");
+  if (!previous?.kind) throw new Error("A previous adapter operation job is required.");
+  return createAdapterOperationJob(previous.kind, {
+    adapterBuildId: body.adapterBuildId || previous.adapterBuildId,
+    modelId: body.modelId || previous.modelId,
+    includeOptional: body.includeOptional,
+    dryRun: body.dryRun === true,
+    retryOf: previous.jobId,
+    reuseRunning: false
+  });
+}
+
 async function applyRecommendedAdapterBaseModel(body = {}) {
   await ensureDataRoot();
   const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
@@ -9246,6 +9858,7 @@ async function buildModelLibrary() {
     latestTrainingRoutePlan,
     latestAdapterBuild,
     latestAdapterReadiness,
+    latestAdapterOperationJob,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     recipeRunHistory,
@@ -9265,6 +9878,7 @@ async function buildModelLibrary() {
     getLatestTrainingRoutePlan(),
     getLatestAdapterBuilderReceipt(),
     getLatestAdapterTrainingReadiness(),
+    getLatestAdapterOperationJob(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getRecipeRunHistory(),
@@ -9295,6 +9909,7 @@ async function buildModelLibrary() {
     libraryReceipt("Adapter runner script", latestAdapterBuild?.files?.runnerScript, "artifact"),
     libraryReceipt("Adapter runner recipe", latestAdapterBuild?.files?.runnerRecipeJson, "artifact"),
     libraryReceipt("Adapter readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
+    libraryReceipt("Adapter operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
     libraryReceipt("Adapter training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
     libraryReceipt("Adapter promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
@@ -9399,7 +10014,8 @@ async function buildModelLibrary() {
         trained: adapterTrained,
         promoted: adapterPromoted,
         latestRun: latestAdapterTrainingRun?.status || "not run",
-        readiness: latestAdapterReadiness?.status || "not checked"
+        readiness: latestAdapterReadiness?.status || "not checked",
+        operation: latestAdapterOperationJob?.status || "not run"
       },
       receipts: [
         libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
@@ -9407,6 +10023,7 @@ async function buildModelLibrary() {
         libraryReceipt("Runner script", latestAdapterBuild.files?.runnerScript, "artifact"),
         libraryReceipt("Runner recipe", latestAdapterBuild.files?.runnerRecipeJson, "artifact"),
         libraryReceipt("Readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
+        libraryReceipt("Operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
         libraryReceipt("Training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
         libraryReceipt("Promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
         libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
@@ -9884,8 +10501,10 @@ async function getProjectPayload() {
     latestTrainingRoutePlan,
     latestAdapterBuild,
     latestAdapterReadiness,
+    latestAdapterOperationJob,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
+    adapterOperationHistory,
     adapterTrainingRunHistory,
     builderRunHistory
   ] = await Promise.all([
@@ -9908,8 +10527,10 @@ async function getProjectPayload() {
     getLatestTrainingRoutePlan(),
     getLatestAdapterBuilderReceipt(),
     getLatestAdapterTrainingReadiness(),
+    getLatestAdapterOperationJob(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
+    getAdapterOperationHistory(),
     getAdapterTrainingRunHistory(),
     getBuilderRunHistory()
   ]);
@@ -9951,8 +10572,10 @@ async function getProjectPayload() {
     latestTrainingRoutePlan,
     latestAdapterBuild,
     latestAdapterReadiness,
+    latestAdapterOperationJob,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
+    adapterOperationHistory,
     adapterTrainingRunHistory,
     builderRunHistory,
     pipeline: [
@@ -10340,6 +10963,43 @@ async function handleApi(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/builder/adapter/readiness/apply-base-model") {
       const body = await readJsonBody(request);
       sendJson(response, 200, await applyRecommendedAdapterBaseModel(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/operation/deps/start") {
+      const body = await readJsonBody(request);
+      const job = await createAdapterOperationJob("dependency-install", body);
+      sendJson(response, 202, { ok: true, job, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/operation/cache-warmup/start") {
+      const body = await readJsonBody(request);
+      const job = await createAdapterOperationJob("base-cache-warmup", body);
+      sendJson(response, 202, { ok: true, job, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/adapter/operation/job") {
+      sendJson(response, 200, { ok: true, job: await getAdapterOperationJob(url.searchParams.get("jobId") || "") });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/adapter/operation/jobs") {
+      sendJson(response, 200, { ok: true, jobs: await getAdapterOperationHistory() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/operation/cancel") {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, { ok: true, job: await cancelAdapterOperationJob(body.jobId) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/operation/retry") {
+      const body = await readJsonBody(request);
+      const job = await retryAdapterOperationJob(body);
+      sendJson(response, 202, { ok: true, job, project: await getProjectPayload() });
       return;
     }
 

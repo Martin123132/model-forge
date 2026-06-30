@@ -2427,6 +2427,33 @@ h2 {
   background: rgba(239, 246, 255, 0.72);
 }
 
+.adapter-operation-console {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(79, 70, 229, 0.18);
+  border-radius: 7px;
+  background: rgba(245, 243, 255, 0.68);
+}
+
+.adapter-operation-console.pass {
+  border-color: rgba(22, 163, 74, 0.2);
+  background: rgba(240, 253, 244, 0.76);
+}
+
+.adapter-operation-console.fail,
+.adapter-operation-console.canceled {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(254, 242, 242, 0.82);
+}
+
+.adapter-operation-console.running,
+.adapter-operation-console.queued {
+  border-color: rgba(202, 138, 4, 0.25);
+  background: rgba(254, 252, 232, 0.82);
+}
+
 .adapter-readiness-mini {
   display: grid;
   gap: 7px;
@@ -2508,6 +2535,55 @@ h2 {
   border-radius: inherit;
   background: linear-gradient(90deg, #2563eb, #14b8a6);
   transition: width 180ms ease;
+}
+
+.adapter-operation-commands,
+.adapter-operation-history {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.adapter-operation-commands span,
+.adapter-operation-history span {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.adapter-operation-commands em,
+.adapter-operation-history em {
+  overflow: hidden;
+  min-width: 0;
+  color: #314158;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-operation-log {
+  overflow: auto;
+  max-height: 180px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 7px;
+  background: #0f172a;
+  color: #e5eefc;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .adapter-builder-actions {

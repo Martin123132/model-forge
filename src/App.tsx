@@ -10,6 +10,7 @@ import {
   applyBuilderHardwareRecipe,
   applyRecommendedAdapterBaseModel,
   archiveProject,
+  cancelAdapterOperationJob,
   cancelAdapterTrainingRun,
   cancelBuilderRun,
   cancelRecipePackRun,
@@ -21,6 +22,7 @@ import {
   deleteProject,
   exportModelProfile,
   getBuilderRun,
+  getAdapterOperationJob,
   getAdapterTrainingRun,
   getRecipePackRun,
   getLatestExportPack,
@@ -31,7 +33,6 @@ import {
   getProjectRegistry,
   getSetupState,
   getSources,
-  installAdapterTrainingDependencies,
   runFirstSetup,
   runSetupDoctorAction,
   runBuilderGuidedTest,
@@ -43,12 +44,16 @@ import {
   selectProject,
   resetProjectData,
   sendChat,
+  retryAdapterOperationJob,
+  startAdapterBaseCacheWarmupJob,
+  startAdapterDependencyInstallJob,
   startAdapterTrainingRun,
   startBuilderRun,
   promoteAdapterToOllama
 } from "./lib/api";
 import type {
   AdapterBuilderReceipt,
+  AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
   AdapterTrainingRun,
@@ -186,6 +191,10 @@ type GuidedAction = NextAction & {
   kind: GuidedActionKind;
 };
 
+function isAdapterOperationActive(job?: AdapterOperationJob | null) {
+  return job?.status === "queued" || job?.status === "running";
+}
+
 function App() {
   const [project, setProject] = useState<ProjectPayload | null>(null);
   const [sources, setSources] = useState<SourceSummary | null>(null);
@@ -204,6 +213,8 @@ function App() {
   const [builderRun, setBuilderRun] = useState<BuilderRun | null>(null);
   const [adapterBuild, setAdapterBuild] = useState<AdapterBuilderReceipt | null>(null);
   const [adapterReadiness, setAdapterReadiness] = useState<AdapterTrainingReadiness | null>(null);
+  const [adapterOperationJob, setAdapterOperationJob] = useState<AdapterOperationJob | null>(null);
+  const [adapterOperationHistory, setAdapterOperationHistory] = useState<AdapterOperationJob[]>([]);
   const [adapterTrainingRun, setAdapterTrainingRun] = useState<AdapterTrainingRun | null>(null);
   const [adapterPromotion, setAdapterPromotion] = useState<AdapterPromotionReceipt | null>(null);
   const [adapterTrainingRunHistory, setAdapterTrainingRunHistory] = useState<AdapterTrainingRun[]>([]);
@@ -217,6 +228,7 @@ function App() {
   const [projectRegistry, setProjectRegistry] = useState<ProjectRegistry | null>(null);
   const packRunMonitorRef = useRef<Set<string>>(new Set());
   const builderRunMonitorRef = useRef<Set<string>>(new Set());
+  const adapterOperationMonitorRef = useRef<Set<string>>(new Set());
   const adapterRunMonitorRef = useRef<Set<string>>(new Set());
   const focusedWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const previousWorkspaceRef = useRef<WorkspaceView | null>(null);
@@ -249,6 +261,7 @@ function App() {
   const [adapterBusy, setAdapterBusy] = useState(false);
   const [adapterReadinessBusy, setAdapterReadinessBusy] = useState(false);
   const [adapterDepsBusy, setAdapterDepsBusy] = useState(false);
+  const [adapterCacheBusy, setAdapterCacheBusy] = useState(false);
   const [adapterBaseModelBusy, setAdapterBaseModelBusy] = useState(false);
   const [adapterTrainingBusy, setAdapterTrainingBusy] = useState(false);
   const [adapterPromoteBusy, setAdapterPromoteBusy] = useState(false);
@@ -290,6 +303,8 @@ function App() {
       setBuilderRunHistory(projectPayload.builderRunHistory || []);
       setAdapterBuild(projectPayload.latestAdapterBuild || null);
       setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
+      setAdapterOperationJob(projectPayload.latestAdapterOperationJob || null);
+      setAdapterOperationHistory(projectPayload.adapterOperationHistory || []);
       setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || null);
       setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -337,6 +352,8 @@ function App() {
     setBuilderRunHistory(result.project.builderRunHistory || []);
     setAdapterBuild(result.project.latestAdapterBuild || null);
     setAdapterReadiness(result.project.latestAdapterReadiness || null);
+    setAdapterOperationJob(result.project.latestAdapterOperationJob || null);
+    setAdapterOperationHistory(result.project.adapterOperationHistory || []);
     setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
     setAdapterPromotion(result.project.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -824,6 +841,8 @@ function App() {
       setGuidedBuilderTest(result.project.latestGuidedBuilderTest || null);
       setBuilderRunHistory(result.project.builderRunHistory || []);
       setAdapterReadiness(result.project.latestAdapterReadiness || null);
+      setAdapterOperationJob(result.project.latestAdapterOperationJob || null);
+      setAdapterOperationHistory(result.project.adapterOperationHistory || []);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -847,6 +866,8 @@ function App() {
       setSources(result.project.sources);
       setBuildPlan(result.project.latestBuildPlan || null);
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterOperationJob(result.project.latestAdapterOperationJob || null);
+      setAdapterOperationHistory(result.project.adapterOperationHistory || []);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -858,30 +879,172 @@ function App() {
     }
   }, [adapterBuild, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
 
+  const refreshAfterAdapterOperation = useCallback(async (fallbackJob?: AdapterOperationJob | null) => {
+    const [projectPayload, modelLibraryPayload] = await Promise.all([
+      getProject(),
+      getModelLibrary()
+    ]);
+    const operationHistory = projectPayload.adapterOperationHistory || [];
+    setProject(projectPayload);
+    setSources(projectPayload.sources);
+    setBuildPlan(projectPayload.latestBuildPlan || null);
+    setAdapterBuild(projectPayload.latestAdapterBuild || null);
+    setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
+    setAdapterOperationJob(projectPayload.latestAdapterOperationJob || fallbackJob || null);
+    setAdapterOperationHistory(operationHistory.length ? operationHistory : fallbackJob ? [fallbackJob] : []);
+    setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || null);
+    setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
+    setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
+    setModelLibrary(modelLibraryPayload.library);
+  }, []);
+
+  const monitorAdapterOperationJob = useCallback(async (jobId: string) => {
+    if (!jobId || adapterOperationMonitorRef.current.has(jobId)) return;
+    adapterOperationMonitorRef.current.add(jobId);
+    try {
+      for (let index = 0; index < 3600; index += 1) {
+        const result = await getAdapterOperationJob(jobId);
+        if (!result.job) break;
+        const nextJob = result.job;
+        setAdapterOperationJob(nextJob);
+        setAdapterOperationHistory((history) => [nextJob, ...history.filter((job) => job.jobId !== nextJob.jobId)].slice(0, 8));
+        if (!isAdapterOperationActive(nextJob)) {
+          if (nextJob.kind === "dependency-install") setAdapterDepsBusy(false);
+          if (nextJob.kind === "base-cache-warmup") setAdapterCacheBusy(false);
+          await refreshAfterAdapterOperation(nextJob);
+          if (!nextJob.ok && nextJob.status !== "canceled") {
+            setError(nextJob.summary || `${nextJob.label} did not complete.`);
+          }
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+    } catch (pollError) {
+      setError(pollError instanceof Error ? pollError.message : String(pollError));
+      setAdapterDepsBusy(false);
+      setAdapterCacheBusy(false);
+    } finally {
+      adapterOperationMonitorRef.current.delete(jobId);
+    }
+  }, [refreshAfterAdapterOperation]);
+
   const handleInstallAdapterDeps = useCallback(async () => {
     const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    if (!adapterBuildId) return;
     setAdapterDepsBusy(true);
     setError("");
     try {
-      const result = await installAdapterTrainingDependencies(adapterBuildId, false);
-      setAdapterReadiness(result.readiness || result.project.latestAdapterReadiness || null);
+      const result = await startAdapterDependencyInstallJob(adapterBuildId, false);
+      setAdapterOperationJob(result.job);
+      setAdapterOperationHistory((history) => [result.job, ...history.filter((job) => job.jobId !== result.job.jobId)].slice(0, 8));
       setProject(result.project);
       setSources(result.project.sources);
       setBuildPlan(result.project.latestBuildPlan || null);
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterReadiness(result.project.latestAdapterReadiness || adapterReadiness || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
-      await refreshModelLibrary();
-      if (!result.ok) {
-        setError(result.receipt.summary || "Adapter dependency install did not unlock real training yet.");
+      setActiveWorkspace("builder");
+      if (isAdapterOperationActive(result.job)) {
+        void monitorAdapterOperationJob(result.job.jobId);
+      } else {
+        setAdapterDepsBusy(false);
+        await refreshAfterAdapterOperation(result.job);
       }
     } catch (installError) {
       setError(installError instanceof Error ? installError.message : String(installError));
-    } finally {
       setAdapterDepsBusy(false);
     }
-  }, [adapterBuild, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
+  }, [adapterBuild, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, refreshAfterAdapterOperation]);
+
+  const handleWarmAdapterBaseCache = useCallback(async () => {
+    const currentAdapter = project?.latestAdapterBuild || adapterBuild;
+    const adapterBuildId = currentAdapter?.adapterBuildId;
+    if (!adapterBuildId) return;
+    const currentReadiness = project?.latestAdapterReadiness || adapterReadiness || currentAdapter.runner?.readiness || null;
+    const modelId =
+      currentReadiness?.recommendedBaseModel?.modelId ||
+      currentAdapter.config?.trainer?.transformersModelId ||
+      currentAdapter.config?.trainer?.recommendedTransformersModelId ||
+      currentAdapter.adapter?.transformersModelId ||
+      "";
+    setAdapterCacheBusy(true);
+    setError("");
+    try {
+      const result = await startAdapterBaseCacheWarmupJob(adapterBuildId, modelId, false);
+      setAdapterOperationJob(result.job);
+      setAdapterOperationHistory((history) => [result.job, ...history.filter((job) => job.jobId !== result.job.jobId)].slice(0, 8));
+      setProject(result.project);
+      setSources(result.project.sources);
+      setBuildPlan(result.project.latestBuildPlan || null);
+      setAdapterBuild(result.project.latestAdapterBuild || currentAdapter);
+      setAdapterReadiness(result.project.latestAdapterReadiness || currentReadiness);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      setActiveWorkspace("builder");
+      if (isAdapterOperationActive(result.job)) {
+        void monitorAdapterOperationJob(result.job.jobId);
+      } else {
+        setAdapterCacheBusy(false);
+        await refreshAfterAdapterOperation(result.job);
+      }
+    } catch (cacheError) {
+      setError(cacheError instanceof Error ? cacheError.message : String(cacheError));
+      setAdapterCacheBusy(false);
+    }
+  }, [adapterBuild, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, project?.latestAdapterReadiness, refreshAfterAdapterOperation]);
+
+  const handleCancelAdapterOperation = useCallback(async (jobId: string) => {
+    if (!jobId) return;
+    try {
+      const result = await cancelAdapterOperationJob(jobId);
+      if (result.job) {
+        setAdapterOperationJob(result.job);
+        setAdapterOperationHistory((history) => [result.job as AdapterOperationJob, ...history.filter((job) => job.jobId !== result.job?.jobId)].slice(0, 8));
+        if (!isAdapterOperationActive(result.job)) {
+          if (result.job.kind === "dependency-install") setAdapterDepsBusy(false);
+          if (result.job.kind === "base-cache-warmup") setAdapterCacheBusy(false);
+        } else {
+          void monitorAdapterOperationJob(result.job.jobId);
+        }
+      }
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : String(cancelError));
+    }
+  }, [monitorAdapterOperationJob]);
+
+  const handleRetryAdapterOperation = useCallback(async (jobId: string) => {
+    const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    if (!jobId || !adapterBuildId) return;
+    setError("");
+    try {
+      const result = await retryAdapterOperationJob(jobId, adapterBuildId, false);
+      setAdapterOperationJob(result.job);
+      setAdapterOperationHistory((history) => [result.job, ...history.filter((job) => job.jobId !== result.job.jobId)].slice(0, 8));
+      setProject(result.project);
+      setSources(result.project.sources);
+      setBuildPlan(result.project.latestBuildPlan || null);
+      setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterReadiness(result.project.latestAdapterReadiness || adapterReadiness || null);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      if (result.job.kind === "dependency-install") setAdapterDepsBusy(isAdapterOperationActive(result.job));
+      if (result.job.kind === "base-cache-warmup") setAdapterCacheBusy(isAdapterOperationActive(result.job));
+      setActiveWorkspace("builder");
+      if (isAdapterOperationActive(result.job)) {
+        void monitorAdapterOperationJob(result.job.jobId);
+      } else {
+        await refreshAfterAdapterOperation(result.job);
+      }
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : String(retryError));
+      setAdapterDepsBusy(false);
+      setAdapterCacheBusy(false);
+    }
+  }, [adapterBuild, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, refreshAfterAdapterOperation]);
 
   const handleApplyRecommendedAdapterBaseModel = useCallback(async () => {
     const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
@@ -898,6 +1061,8 @@ function App() {
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
+      setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
       await refreshModelLibrary();
       if (!result.ok) {
         setError(result.readiness?.summary || "Recommended base model was applied, but other readiness blockers remain.");
@@ -907,7 +1072,7 @@ function App() {
     } finally {
       setAdapterBaseModelBusy(false);
     }
-  }, [adapterBuild, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
+  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
 
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
@@ -1247,6 +1412,8 @@ function App() {
     setBuildPlan(projectPayload.latestBuildPlan || null);
     setAdapterBuild(projectPayload.latestAdapterBuild || null);
     setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
+    setAdapterOperationJob(projectPayload.latestAdapterOperationJob || null);
+    setAdapterOperationHistory(projectPayload.adapterOperationHistory || []);
     setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || fallbackRun || null);
     setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -1289,6 +1456,8 @@ function App() {
       setProject(result.project);
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
       setAdapterReadiness(result.project.latestAdapterReadiness || null);
+      setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
+      setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
       setAdapterPromotion(result.project.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory((history) => [result.run, ...history.filter((run) => run.runId !== result.run.runId)].slice(0, 8));
       setActiveWorkspace("builder");
@@ -1299,7 +1468,7 @@ function App() {
       setError(runError instanceof Error ? runError.message : String(runError));
       setAdapterTrainingBusy(false);
     }
-  }, [adapterBuild, monitorAdapterTrainingRun, project?.latestAdapterBuild]);
+  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, monitorAdapterTrainingRun, project?.latestAdapterBuild]);
 
   const handleCancelAdapterTraining = useCallback(async (runId: string) => {
     if (!runId) return;
@@ -1327,6 +1496,8 @@ function App() {
       setSources(result.project.sources);
       setOllama(result.ollama);
       setAdapterReadiness(result.project.latestAdapterReadiness || null);
+      setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
+      setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
       await refreshModelLibrary();
@@ -1338,7 +1509,7 @@ function App() {
     } finally {
       setAdapterPromoteBusy(false);
     }
-  }, [adapterBuild, adapterTrainingRun, project?.latestAdapterBuild, project?.latestAdapterTrainingRun, refreshModelLibrary]);
+  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterTrainingRun, project?.latestAdapterBuild, project?.latestAdapterTrainingRun, refreshModelLibrary]);
 
   useEffect(() => {
     const runId = adapterTrainingRun?.runId;
@@ -1347,6 +1518,14 @@ function App() {
       void monitorAdapterTrainingRun(runId);
     }
   }, [adapterTrainingRun?.runId, adapterTrainingRun?.status, monitorAdapterTrainingRun]);
+
+  useEffect(() => {
+    const job = adapterOperationJob;
+    if (!job || !isAdapterOperationActive(job)) return;
+    if (job.kind === "dependency-install") setAdapterDepsBusy(true);
+    if (job.kind === "base-cache-warmup") setAdapterCacheBusy(true);
+    void monitorAdapterOperationJob(job.jobId);
+  }, [adapterOperationJob?.jobId, adapterOperationJob?.kind, adapterOperationJob?.status, monitorAdapterOperationJob]);
 
   const handleSendChat = useCallback(async (prompt: string, modelName: string) => {
     const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", content: prompt, createdAt: new Date().toISOString() }];
@@ -1749,6 +1928,8 @@ function App() {
                     builderAiCreateReceipt={project?.latestBuilderAiCreateReceipt || null}
                     adapterBuild={project?.latestAdapterBuild || adapterBuild}
                     adapterReadiness={project?.latestAdapterReadiness || adapterReadiness}
+                    adapterOperationJob={project?.latestAdapterOperationJob || adapterOperationJob}
+                    adapterOperationHistory={project?.adapterOperationHistory?.length ? project.adapterOperationHistory : adapterOperationHistory}
                     adapterTrainingRun={project?.latestAdapterTrainingRun || adapterTrainingRun}
                     adapterPromotion={project?.latestAdapterPromotion || adapterPromotion}
                     builderRun={builderRun}
@@ -1760,6 +1941,7 @@ function App() {
                     adapterBusy={adapterBusy}
                     adapterReadinessBusy={adapterReadinessBusy}
                     adapterDepsBusy={adapterDepsBusy}
+                    adapterCacheBusy={adapterCacheBusy}
                     adapterBaseModelBusy={adapterBaseModelBusy}
                     adapterTrainingBusy={adapterTrainingBusy}
                     adapterPromoteBusy={adapterPromoteBusy}
@@ -1773,6 +1955,9 @@ function App() {
                     onBuildAdapter={handleBuildAdapter}
                     onCheckAdapterReadiness={handleCheckAdapterReadiness}
                     onInstallAdapterDeps={handleInstallAdapterDeps}
+                    onWarmAdapterBaseCache={handleWarmAdapterBaseCache}
+                    onCancelAdapterOperation={handleCancelAdapterOperation}
+                    onRetryAdapterOperation={handleRetryAdapterOperation}
                     onApplyRecommendedAdapterBaseModel={handleApplyRecommendedAdapterBaseModel}
                     onRunAdapterTraining={handleRunAdapterTraining}
                     onCancelAdapterTraining={handleCancelAdapterTraining}

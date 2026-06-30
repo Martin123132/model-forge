@@ -35,6 +35,10 @@ forge cockpit.
   check Python, CUDA, required packages, D-drive cache roots, compatible
   Transformers base model selection, and dependency install commands before
   real LoRA/QLoRA training is unlocked.
+- Added the Adapter Training Operations Console so dependency install and
+  Transformers base-model cache warmup run as receipt-backed jobs with live
+  logs, progress, disk/time estimates, cancel/retry controls, and clear Builder
+  status.
 - Added Adapter Training Run receipts so Run Trainer executes the local runner,
   streams progress/log tails, supports cancellation, detects dry-run versus real
   checkpoints, and updates the adapter status.

@@ -1,6 +1,7 @@
 import type {
   AdapterBuilderReceipt,
   AdapterDependencyInstallReceipt,
+  AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
   AdapterTrainingRun,
@@ -183,6 +184,55 @@ export function applyRecommendedAdapterBaseModel(adapterBuildId?: string, modelI
   }>("/api/builder/adapter/readiness/apply-base-model", {
     method: "POST",
     body: JSON.stringify({ adapterBuildId, modelId })
+  });
+}
+
+export function startAdapterDependencyInstallJob(adapterBuildId?: string, dryRun = false) {
+  return requestJson<{
+    ok: boolean;
+    job: AdapterOperationJob;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/operation/deps/start", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, dryRun })
+  });
+}
+
+export function startAdapterBaseCacheWarmupJob(adapterBuildId?: string, modelId?: string, dryRun = false) {
+  return requestJson<{
+    ok: boolean;
+    job: AdapterOperationJob;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/operation/cache-warmup/start", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, modelId, dryRun })
+  });
+}
+
+export function getAdapterOperationJob(jobId?: string) {
+  const query = jobId ? `?jobId=${encodeURIComponent(jobId)}` : "";
+  return requestJson<{ ok: boolean; job: AdapterOperationJob | null }>(`/api/builder/adapter/operation/job${query}`);
+}
+
+export function getAdapterOperationJobs() {
+  return requestJson<{ ok: boolean; jobs: AdapterOperationJob[] }>("/api/builder/adapter/operation/jobs");
+}
+
+export function cancelAdapterOperationJob(jobId: string) {
+  return requestJson<{ ok: boolean; job: AdapterOperationJob | null }>("/api/builder/adapter/operation/cancel", {
+    method: "POST",
+    body: JSON.stringify({ jobId })
+  });
+}
+
+export function retryAdapterOperationJob(jobId: string, adapterBuildId?: string, dryRun = false) {
+  return requestJson<{
+    ok: boolean;
+    job: AdapterOperationJob;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/operation/retry", {
+    method: "POST",
+    body: JSON.stringify({ jobId, adapterBuildId, dryRun })
   });
 }
 

@@ -50,6 +50,16 @@ function formatCheck(item) {
   return `${icon} ${item.label}: ${item.detail}`;
 }
 
+async function pollAdapterOperation(job) {
+  let current = job || null;
+  for (let index = 0; index < 40 && current && ["queued", "running"].includes(String(current.status || "").toLowerCase()); index += 1) {
+    await sleep(250);
+    const polled = await getJson(`/api/builder/adapter/operation/job?jobId=${encodeURIComponent(current.jobId)}`);
+    current = polled.job || current;
+  }
+  return current;
+}
+
 async function main() {
   let [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorStartDryRun, doctorRepairDryRun] = await Promise.all([
     getJson("/api/project"),
@@ -78,8 +88,12 @@ async function main() {
   const trainingRoutePlan = project.latestBuildPlan?.trainingRoutePlan || project.latestTrainingRoutePlan || null;
   let latestAdapterBuild = project.latestAdapterBuild || null;
   let latestAdapterReadiness = project.latestAdapterReadiness || null;
+  let latestAdapterOperationJob = project.latestAdapterOperationJob || null;
+  let adapterOperationHistory = project.adapterOperationHistory || [];
   let latestAdapterTrainingRun = project.latestAdapterTrainingRun || null;
   let adapterDepsDryRun = null;
+  let adapterDepsOperationDryRun = null;
+  let adapterCacheOperationDryRun = null;
   const builderStages = latestBuilderRun?.stages || [];
   const planScope = project.latestBuildPlan?.request?.sourceScope || "";
   const scopePreviewOptions = project.latestBuildPlan?.sourceScopePreview?.options || [];
@@ -107,6 +121,22 @@ async function main() {
       adapterBuildId: latestAdapterBuild.adapterBuildId,
       dryRun: true
     });
+    const depsOperationStarted = await postJson("/api/builder/adapter/operation/deps/start", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      dryRun: true,
+      reuseRunning: false
+    });
+    adapterDepsOperationDryRun = await pollAdapterOperation(depsOperationStarted.job);
+    const cacheOperationStarted = await postJson("/api/builder/adapter/operation/cache-warmup/start", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      modelId:
+        latestAdapterReadiness?.recommendedBaseModel?.modelId ||
+        latestAdapterBuild.config?.trainer?.transformersModelId ||
+        latestAdapterBuild.config?.trainer?.recommendedTransformersModelId,
+      dryRun: true,
+      reuseRunning: false
+    });
+    adapterCacheOperationDryRun = await pollAdapterOperation(cacheOperationStarted.job);
     const started = await postJson("/api/builder/adapter/training/run", {
       adapterBuildId: latestAdapterBuild.adapterBuildId,
       runTraining: false,
@@ -122,6 +152,8 @@ async function main() {
     project = refreshedProject;
     latestAdapterBuild = project.latestAdapterBuild || latestAdapterBuild;
     latestAdapterReadiness = project.latestAdapterReadiness || latestAdapterReadiness;
+    latestAdapterOperationJob = project.latestAdapterOperationJob || adapterCacheOperationDryRun || adapterDepsOperationDryRun || latestAdapterOperationJob;
+    adapterOperationHistory = project.adapterOperationHistory || adapterOperationHistory;
     latestAdapterTrainingRun = project.latestAdapterTrainingRun || latestAdapterTrainingRun;
     modelLibrary = refreshedModelLibraryResponse.library || modelLibrary;
   }
@@ -351,6 +383,51 @@ async function main() {
         : "no dependency installer dry-run receipt"
     ),
     check(
+      "Adapter dependency operation job",
+      Boolean(
+        adapterDepsOperationDryRun?.schema === "modelforge.adapter_operation_job.v1" &&
+          adapterDepsOperationDryRun.kind === "dependency-install" &&
+          adapterDepsOperationDryRun.dryRun === true &&
+          adapterDepsOperationDryRun.status === "pass" &&
+          adapterDepsOperationDryRun.receipt?.schema === "modelforge.adapter_operation_receipt.v1" &&
+          adapterDepsOperationDryRun.commands?.some((item) => item.id === "adapter-core" && item.status === "dry-run") &&
+          adapterDepsOperationDryRun.files?.latestReceiptJson &&
+          existsSync(adapterDepsOperationDryRun.files.latestReceiptJson)
+      ),
+      adapterDepsOperationDryRun
+        ? `${adapterDepsOperationDryRun.status}: ${adapterDepsOperationDryRun.commands?.length || 0} commands; receipt=${adapterDepsOperationDryRun.files?.latestReceiptJson || "none"}`
+        : "no dependency operation job"
+    ),
+    check(
+      "Adapter base-cache operation job",
+      Boolean(
+        adapterCacheOperationDryRun?.schema === "modelforge.adapter_operation_job.v1" &&
+          adapterCacheOperationDryRun.kind === "base-cache-warmup" &&
+          adapterCacheOperationDryRun.dryRun === true &&
+          adapterCacheOperationDryRun.status === "pass" &&
+          adapterCacheOperationDryRun.receipt?.schema === "modelforge.adapter_operation_receipt.v1" &&
+          adapterCacheOperationDryRun.commands?.some((item) => item.id === "cache-warmup" && item.status === "dry-run") &&
+          adapterCacheOperationDryRun.files?.cacheWarmupScript &&
+          existsSync(adapterCacheOperationDryRun.files.cacheWarmupScript) &&
+          adapterCacheOperationDryRun.files?.latestReceiptJson &&
+          existsSync(adapterCacheOperationDryRun.files.latestReceiptJson)
+      ),
+      adapterCacheOperationDryRun
+        ? `${adapterCacheOperationDryRun.status}: ${adapterCacheOperationDryRun.modelId || "no model"}; estimate=${adapterCacheOperationDryRun.estimates?.time || "none"}`
+        : "no base-cache operation job"
+    ),
+    check(
+      "Adapter operation history",
+      Boolean(
+        latestAdapterOperationJob?.schema === "modelforge.adapter_operation_job.v1" &&
+          adapterOperationHistory?.some((job) => job.jobId === adapterDepsOperationDryRun?.jobId) &&
+          adapterOperationHistory?.some((job) => job.jobId === adapterCacheOperationDryRun?.jobId)
+      ),
+      latestAdapterOperationJob
+        ? `${latestAdapterOperationJob.kind}: ${latestAdapterOperationJob.status}; history=${adapterOperationHistory?.length || 0}`
+        : "no adapter operation history"
+    ),
+    check(
       "Adapter Training Run receipt",
       Boolean(
         latestAdapterTrainingRun?.schema === "modelforge.adapter_training_run.v1" &&
@@ -446,6 +523,7 @@ async function main() {
           adapterLibraryItem?.kind === "adapter" &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Adapter receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Readiness receipt" && receipt.exists) &&
+          adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Operation receipt" && receipt.exists) &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-run-adapter-training" && action.kind === "builder-adapter-run") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-promote-adapter" && action.kind === "builder-adapter-promote")

@@ -637,6 +637,94 @@ export type AdapterDependencyInstallReceipt = {
   };
 };
 
+export type AdapterOperationJob = {
+  schema: string;
+  jobId: string;
+  kind: "dependency-install" | "base-cache-warmup" | string;
+  label: string;
+  adapterBuildId: string;
+  planId: string;
+  adapterName: string;
+  status: "queued" | "running" | "pass" | "fail" | "canceled" | string;
+  ok: boolean;
+  dryRun: boolean;
+  retryOf: string;
+  modelId: string;
+  summary: string;
+  estimates: {
+    disk: string;
+    time: string;
+    detail: string;
+  };
+  readinessBefore?: AdapterTrainingReadiness | null;
+  readinessAfter?: AdapterTrainingReadiness | null;
+  progress: {
+    currentStep: number;
+    totalSteps: number;
+    label: string;
+    detail: string;
+    event: string;
+    updatedAt: string;
+  };
+  commands: Array<{
+    id: string;
+    label: string;
+    required: boolean;
+    command: string[];
+    summary: string;
+    status: string;
+    ok: boolean;
+    startedAt?: string;
+    endedAt?: string;
+    stdoutTail?: string;
+    stderrTail?: string;
+    error?: string;
+    code?: number | string | null;
+    signal?: string;
+  }>;
+  logs: {
+    stdoutTail: string;
+    stderrTail: string;
+    combinedTail: string;
+  };
+  cancelRequested: boolean;
+  startedAt: string;
+  endedAt: string;
+  updatedAt: string;
+  receipt?: {
+    schema: string;
+    receiptId: string;
+    jobId: string;
+    kind: string;
+    ok: boolean;
+    status: string;
+    summary: string;
+    adapterBuildId: string;
+    modelId: string;
+    estimates: AdapterOperationJob["estimates"];
+    readinessBefore?: AdapterTrainingReadiness | null;
+    readinessAfter?: AdapterTrainingReadiness | null;
+    commands: AdapterOperationJob["commands"];
+    logs: AdapterOperationJob["logs"];
+    startedAt: string;
+    endedAt: string;
+    files: AdapterOperationJob["files"];
+    cacheReceipt?: Record<string, unknown> | null;
+  } | null;
+  files: {
+    runDir: string;
+    runJson: string;
+    latestJson: string;
+    latestKindJson: string;
+    receiptJson: string;
+    receiptMarkdown: string;
+    latestReceiptJson: string;
+    latestReceiptMarkdown: string;
+    log: string;
+    cacheWarmupScript: string;
+  };
+};
+
 export type AdapterBuilderReceipt = {
   schema: string;
   adapterBuildId: string;
@@ -1780,8 +1868,10 @@ export type ProjectPayload = {
   latestTrainingRoutePlan?: TrainingRoutePlan | null;
   latestAdapterBuild?: AdapterBuilderReceipt | null;
   latestAdapterReadiness?: AdapterTrainingReadiness | null;
+  latestAdapterOperationJob?: AdapterOperationJob | null;
   latestAdapterTrainingRun?: AdapterTrainingRun | null;
   latestAdapterPromotion?: AdapterPromotionReceipt | null;
+  adapterOperationHistory?: AdapterOperationJob[];
   adapterTrainingRunHistory?: AdapterTrainingRun[];
   builderRunHistory?: BuilderRun[];
   pipeline: PipelineStep[];

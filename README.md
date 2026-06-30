@@ -64,6 +64,9 @@ artifacts from code and project folders.
   checks Python, CUDA, required packages, QLoRA bitsandbytes needs, D-drive
   cache roots for pip/Hugging Face/Torch, dataset examples, and the compatible
   Transformers base model.
+- Provides an **Adapter Training Operations Console** for dependency install
+  and Transformers base-cache warmup jobs, with live logs, progress, estimates,
+  cancel/retry controls, and operation receipts before the trainer runs.
 - Runs that adapter runner with live progress, cancellation, checkpoint
   detection, and receipts. ModelForge dry-runs when hardware, dependencies, or
   the base-model config are not ready, and only enables promotion after real
@@ -199,6 +202,10 @@ The plan records:
   receipt records D-drive cache locations, package/CUDA state, recommended
   Hugging Face/Transformers model id, blockers, warnings, and whether real
   training is unlocked.
+- An **Adapter Operation** receipt after the Operations Console installs/checks
+  training dependencies or warms the Transformers base-model cache. The receipt
+  records the job kind, dry-run flag, commands, live log tails, disk/time
+  estimates, cancel/retry status, and the latest readiness snapshot.
 - An **Adapter Training Run** receipt after Run Trainer executes the local
   runner, captures stdout/stderr tails, records dry-run or train mode, scans for
   checkpoint files, and updates the adapter status.
@@ -248,7 +255,7 @@ The library shows:
 - Which forged target was built from the current recipe/profile.
 - Which adapter pack was prepared, including dry-run/trained status, dataset
   size, training config, runner script, runner recipe, readiness receipt, latest
-  training run, promotion receipt, and adapter manifest.
+  operation receipt, training run, promotion receipt, and adapter manifest.
 - Dataset rows, token estimates, source-file counts, proof freshness, and eval
   freshness.
 - Receipts behind the build, including Modelfiles, model profiles, Dataset
@@ -258,7 +265,8 @@ The library shows:
 - Rebuild AI, Prepare Adapter, Run Trainer, Promote AI, and Retest AI actions,
   so the library can create/update the local Ollama target, refresh the adapter
   pack, execute the guarded trainer, promote real checkpoints, and rerun the
-  guided source-backed test.
+  guided source-backed test. Builder also exposes operation controls for
+  Install deps, Warm cache, Cancel op, and Retry op.
 
 The same workspace includes a **Test side by side** playground. It sends one
 prompt to the base model and the forged target, then shows both answers plus any

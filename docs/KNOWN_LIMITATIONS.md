@@ -19,6 +19,10 @@ model trainer.
   paths, dataset examples, and a recommended Transformers base model. The
   dependency installer uses pip and can still fail because of platform wheels,
   driver/CUDA mismatches, network outages, or package resolver changes.
+- The Adapter Training Operations Console turns dependency install and
+  Transformers base-cache warmup into jobs with logs, estimates, receipts,
+  cancel, and retry. It still depends on local disk space, package indexes,
+  Hugging Face availability, and compatible model access.
 - Dry-run adapter receipts prove the dataset/config/runner path executed, but
   they do not claim trained weights. Promotion into an Ollama target is blocked
   until real adapter weight and config files are detected.
@@ -52,7 +56,8 @@ model trainer.
 ## Operations
 
 - Long jobs can be canceled where supported, but full resume across restarts is
-  still limited.
+  still limited. Canceling dependency installs or cache downloads is best effort
+  because child tools decide how quickly they exit.
 - Project registry actions keep generated data separated, but users should still
   keep their own backups before deleting or resetting data.
 - External trainer and cloud-runner integrations should not be treated as safe

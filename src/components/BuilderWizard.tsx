@@ -25,6 +25,7 @@ import {
 import { useMemo, useState } from "react";
 import type {
   AdapterBuilderReceipt,
+  AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
   AdapterTrainingRun,
@@ -59,6 +60,8 @@ type BuilderWizardProps = {
   builderAiCreateReceipt?: BuilderAiCreateReceipt | null;
   adapterBuild?: AdapterBuilderReceipt | null;
   adapterReadiness?: AdapterTrainingReadiness | null;
+  adapterOperationJob?: AdapterOperationJob | null;
+  adapterOperationHistory?: AdapterOperationJob[];
   adapterTrainingRun?: AdapterTrainingRun | null;
   adapterPromotion?: AdapterPromotionReceipt | null;
   builderRun?: BuilderRun | null;
@@ -70,6 +73,7 @@ type BuilderWizardProps = {
   adapterBusy: boolean;
   adapterReadinessBusy: boolean;
   adapterDepsBusy: boolean;
+  adapterCacheBusy: boolean;
   adapterBaseModelBusy: boolean;
   adapterTrainingBusy: boolean;
   adapterPromoteBusy: boolean;
@@ -83,6 +87,9 @@ type BuilderWizardProps = {
   onBuildAdapter: () => void;
   onCheckAdapterReadiness: () => void;
   onInstallAdapterDeps: () => void;
+  onWarmAdapterBaseCache: () => void;
+  onCancelAdapterOperation: (jobId: string) => void;
+  onRetryAdapterOperation: (jobId: string) => void;
   onApplyRecommendedAdapterBaseModel: () => void;
   onRunAdapterTraining: () => void;
   onCancelAdapterTraining: (runId: string) => void;
@@ -547,6 +554,40 @@ function adapterRunPercent(run?: AdapterTrainingRun | null) {
   return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
 }
 
+function adapterOperationTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "pass") return "pass";
+  if (status === "running" || status === "queued") return "warn";
+  if (status === "fail" || status === "canceled") return "fail";
+  return "neutral";
+}
+
+function adapterOperationKindLabel(kind?: string) {
+  if (kind === "dependency-install") return "Dependencies";
+  if (kind === "base-cache-warmup") return "Base cache";
+  return kind || "Operation";
+}
+
+function adapterOperationLabel(job?: AdapterOperationJob | null) {
+  if (!job) return "Idle";
+  if (job.status === "queued") return "Queued";
+  if (job.status === "running") return job.cancelRequested ? "Canceling" : "Running";
+  if (job.status === "pass") return "Passed";
+  if (job.status === "fail") return "Failed";
+  if (job.status === "canceled") return "Canceled";
+  return job.status || "Idle";
+}
+
+function adapterOperationPercent(job?: AdapterOperationJob | null) {
+  const current = Number(job?.progress?.currentStep || 0);
+  const total = Number(job?.progress?.totalSteps || 0);
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+}
+
+function adapterOperationIsActive(job?: AdapterOperationJob | null) {
+  return job?.status === "queued" || job?.status === "running";
+}
+
 function optionLabel(options: Array<{ id: string; label: string }>, id?: string) {
   return options.find((option) => option.id === id)?.label || options[0]?.label || "Auto";
 }
@@ -992,6 +1033,8 @@ export function BuilderWizard({
   builderAiCreateReceipt,
   adapterBuild,
   adapterReadiness,
+  adapterOperationJob,
+  adapterOperationHistory = [],
   adapterTrainingRun,
   adapterPromotion,
   builderRun,
@@ -1003,6 +1046,7 @@ export function BuilderWizard({
   adapterBusy,
   adapterReadinessBusy,
   adapterDepsBusy,
+  adapterCacheBusy,
   adapterBaseModelBusy,
   adapterTrainingBusy,
   adapterPromoteBusy,
@@ -1016,6 +1060,9 @@ export function BuilderWizard({
   onBuildAdapter,
   onCheckAdapterReadiness,
   onInstallAdapterDeps,
+  onWarmAdapterBaseCache,
+  onCancelAdapterOperation,
+  onRetryAdapterOperation,
   onApplyRecommendedAdapterBaseModel,
   onRunAdapterTraining,
   onCancelAdapterTraining,
@@ -1170,6 +1217,26 @@ export function BuilderWizard({
   const adapterActionLabel = adapterBusy ? "Preparing" : adapterReceipt ? "Rebuild Adapter" : "Prepare Adapter";
   const adapterReadinessMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterReadiness?.adapterBuildId === adapterReceipt.adapterBuildId);
   const currentAdapterReadiness = adapterReadinessMatchesReceipt ? adapterReadiness : adapterReceipt?.runner?.readiness || null;
+  const adapterOperationMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterOperationJob?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterOperation = adapterOperationMatchesReceipt ? adapterOperationJob : null;
+  const adapterOperationProgress = adapterOperationPercent(currentAdapterOperation);
+  const adapterOperationActive = adapterOperationIsActive(currentAdapterOperation);
+  const adapterOperationReceiptPath =
+    currentAdapterOperation?.files.latestReceiptJson ||
+    currentAdapterOperation?.files.receiptJson ||
+    currentAdapterOperation?.files.latestJson ||
+    "";
+  const adapterOperationLog = currentAdapterOperation?.logs?.combinedTail || "";
+  const adapterOperationHistoryForReceipt = adapterReceipt?.adapterBuildId
+    ? adapterOperationHistory.filter((job) => job.adapterBuildId === adapterReceipt.adapterBuildId).slice(0, 4)
+    : [];
+  const canWarmAdapterCache = Boolean(
+    adapterReceipt?.adapterBuildId &&
+      (currentAdapterReadiness?.recommendedBaseModel?.modelId ||
+        adapterReceipt.config?.trainer?.transformersModelId ||
+        adapterReceipt.config?.trainer?.recommendedTransformersModelId ||
+        adapterReceipt.adapter?.transformersModelId)
+  );
   const adapterRunMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterTrainingRun?.adapterBuildId === adapterReceipt.adapterBuildId);
   const currentAdapterRun = adapterRunMatchesReceipt ? adapterTrainingRun : null;
   const adapterRunProgress = adapterRunPercent(currentAdapterRun);
@@ -1983,6 +2050,66 @@ export function BuilderWizard({
                 </div>
               ) : null}
               {adapterReceipt ? (
+                <div className={`adapter-operation-console ${currentAdapterOperation?.status || "idle"}`}>
+                  <div className="adapter-runner-head">
+                    <div>
+                      <strong>Operations Console</strong>
+                      <span>
+                        {currentAdapterOperation?.summary ||
+                          "Install training packages, warm the Transformers base model cache, and keep receipts before training."}
+                      </span>
+                    </div>
+                    <StatusPill status={adapterOperationTone(currentAdapterOperation?.status)} label={adapterOperationLabel(currentAdapterOperation)} />
+                  </div>
+                  <div className="adapter-runner-meter" aria-label="Adapter operation progress">
+                    <span style={{ width: `${adapterOperationProgress}%` }} />
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Operation</strong>
+                      <em>{adapterOperationKindLabel(currentAdapterOperation?.kind)}</em>
+                    </span>
+                    <span>
+                      <strong>Estimate</strong>
+                      <em>{currentAdapterOperation?.estimates?.time || "not estimated"}</em>
+                    </span>
+                    <span>
+                      <strong>Disk</strong>
+                      <em>{currentAdapterOperation?.estimates?.disk || "not estimated"}</em>
+                    </span>
+                    <span>
+                      <strong>Receipt</strong>
+                      <em title={adapterOperationReceiptPath}>{compactPath(adapterOperationReceiptPath)}</em>
+                    </span>
+                  </div>
+                  {currentAdapterOperation?.commands?.length ? (
+                    <div className="adapter-operation-commands">
+                      {currentAdapterOperation.commands.slice(0, 4).map((command) => (
+                        <span key={command.id}>
+                          <StatusPill status={adapterOperationTone(command.status)} label={command.status || "pending"} />
+                          <em title={command.summary}>{command.label}</em>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {adapterOperationLog ? (
+                    <pre className="adapter-operation-log" aria-label="Adapter operation log">
+                      {adapterOperationLog}
+                    </pre>
+                  ) : null}
+                  {adapterOperationHistoryForReceipt.length ? (
+                    <div className="adapter-operation-history">
+                      {adapterOperationHistoryForReceipt.map((job) => (
+                        <span key={job.jobId}>
+                          <StatusPill status={adapterOperationTone(job.status)} label={adapterOperationKindLabel(job.kind)} />
+                          <em>{job.summary || adapterOperationLabel(job)}</em>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {adapterReceipt ? (
                 <div className="adapter-runner-panel">
                   <div className="adapter-runner-head">
                     <div>
@@ -2026,15 +2153,33 @@ export function BuilderWizard({
                   </button>
                 ) : null}
                 {adapterReceipt ? (
-                  <button className="plain-button small" type="button" onClick={onInstallAdapterDeps} disabled={adapterDepsBusy}>
+                  <button className="plain-button small" type="button" onClick={onInstallAdapterDeps} disabled={adapterDepsBusy || adapterOperationActive}>
                     {adapterDepsBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Download size={14} />}
-                    <span>{adapterDepsBusy ? "Installing" : "Deps"}</span>
+                    <span>{adapterDepsBusy ? "Installing" : "Install deps"}</span>
+                  </button>
+                ) : null}
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onWarmAdapterBaseCache} disabled={adapterCacheBusy || adapterOperationActive || !canWarmAdapterCache}>
+                    {adapterCacheBusy ? <LoaderCircle className="spin-icon" size={14} /> : <HardDrive size={14} />}
+                    <span>{adapterCacheBusy ? "Warming" : "Warm cache"}</span>
                   </button>
                 ) : null}
                 {adapterReceipt ? (
                   <button className="plain-button small" type="button" onClick={onApplyRecommendedAdapterBaseModel} disabled={adapterBaseModelBusy || currentAdapterReadiness?.recommendedBaseModel.applied}>
                     {adapterBaseModelBusy ? <LoaderCircle className="spin-icon" size={14} /> : <PackageCheck size={14} />}
                     <span>{adapterBaseModelBusy ? "Applying" : currentAdapterReadiness?.recommendedBaseModel.applied ? "Base set" : "Use base"}</span>
+                  </button>
+                ) : null}
+                {currentAdapterOperation && adapterOperationActive ? (
+                  <button className="plain-button small" type="button" onClick={() => onCancelAdapterOperation(currentAdapterOperation.jobId)} disabled={currentAdapterOperation.cancelRequested}>
+                    <CircleStop size={14} />
+                    <span>{currentAdapterOperation.cancelRequested ? "Canceling" : "Cancel op"}</span>
+                  </button>
+                ) : null}
+                {currentAdapterOperation && !adapterOperationActive ? (
+                  <button className="plain-button small" type="button" onClick={() => onRetryAdapterOperation(currentAdapterOperation.jobId)}>
+                    <RefreshCw size={14} />
+                    <span>Retry op</span>
                   </button>
                 ) : null}
                 {adapterReceipt ? (
@@ -2044,7 +2189,7 @@ export function BuilderWizard({
                       <span>Cancel</span>
                     </button>
                   ) : (
-                    <button className="plain-button small" type="button" onClick={onRunAdapterTraining} disabled={adapterTrainingBusy}>
+                    <button className="plain-button small" type="button" onClick={onRunAdapterTraining} disabled={adapterTrainingBusy || adapterOperationActive}>
                       {adapterTrainingBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Play size={14} />}
                       <span>{adapterTrainingBusy ? "Starting" : adapterCheckpoint?.trained ? "Rerun Trainer" : "Run Trainer"}</span>
                     </button>
