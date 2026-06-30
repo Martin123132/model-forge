@@ -108,6 +108,7 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "adapters", "history"), { recursive: true });
   await mkdir(join(root, "adapters", "runs"), { recursive: true });
   await mkdir(join(root, "adapters", "operations"), { recursive: true });
+  await mkdir(join(root, "adapters", "preflight"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness", "history"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
@@ -4628,6 +4629,254 @@ async function getLatestAdapterTrainingReadiness() {
   return readJsonIfExists(join(dataRoot, "adapters", "readiness", "latest-readiness.json"));
 }
 
+function adapterTrainerPreflightFiles(preflightId) {
+  const latestDir = join(dataRoot, "adapters", "preflight");
+  const historyDir = join(latestDir, "history", preflightId);
+  return {
+    latestJson: join(latestDir, "latest-preflight.json"),
+    latestMarkdown: join(latestDir, "latest-preflight.md"),
+    historyJson: join(historyDir, "preflight.json"),
+    historyMarkdown: join(historyDir, "preflight.md")
+  };
+}
+
+function adapterTrainerPreflightMarkdown(receipt) {
+  return [
+    "# Adapter Trainer Preflight",
+    "",
+    `Preflight: ${receipt.preflightId}`,
+    `Created: ${receipt.createdAt}`,
+    `Status: ${receipt.status}`,
+    `Adapter build: ${receipt.adapterBuildId || ""}`,
+    `Requested mode: ${receipt.requestedMode}`,
+    `Will run: ${receipt.guard?.willRunMode || ""}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary || "",
+    "",
+    "## Checks",
+    "",
+    ...(receipt.checks?.length ? receipt.checks.map((item) => `- ${item.label}: ${item.status} - ${item.detail}${item.actionLabel ? ` (${item.actionLabel})` : ""}`) : ["- No checks recorded."]),
+    "",
+    "## Guardrail",
+    "",
+    `Dry-run allowed: ${receipt.guard?.dryRunAllowed ? "yes" : "no"}`,
+    `Real training allowed: ${receipt.guard?.realTrainingAllowed ? "yes" : "no"}`,
+    `Reason: ${receipt.guard?.reason || ""}`,
+    "",
+    "## Estimates",
+    "",
+    `Disk: ${receipt.estimates?.disk || ""}`,
+    `Time: ${receipt.estimates?.time || ""}`,
+    "",
+    "## Suggested Actions",
+    "",
+    ...(receipt.suggestedActions?.length ? receipt.suggestedActions.map((item) => `- ${item.label}: ${item.detail}`) : ["- No suggested actions."]),
+    ""
+  ].join("\n");
+}
+
+async function buildAdapterTrainerPreflight(body = {}, options = {}) {
+  await ensureDataRoot();
+  const writeReceipt = options.write !== false;
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  const preflightId = `adapter-preflight-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+  const files = adapterTrainerPreflightFiles(preflightId);
+  await mkdir(dirname(files.historyJson), { recursive: true });
+  const readiness = await buildAdapterTrainingReadiness({ adapterBuildId: adapterReceipt?.adapterBuildId || body.adapterBuildId || "" }, { write: true });
+  const requestedMode = body.runTraining === true && body.allowLongRun === true ? "train" : "dry-run";
+  const modelId = cleanSetting(
+    readiness.recommendedBaseModel?.configuredModelId ||
+      adapterReceipt?.config?.trainer?.transformersModelId ||
+      adapterReceipt?.config?.trainer?.recommendedTransformersModelId ||
+      readiness.recommendedBaseModel?.modelId ||
+      ""
+  );
+  const [latestDepsJob, latestCacheJob] = await Promise.all([
+    getLatestAdapterOperationJob("dependency-install"),
+    getLatestAdapterOperationJob("base-cache-warmup")
+  ]);
+  const depsJobMatches = Boolean(latestDepsJob?.adapterBuildId && latestDepsJob.adapterBuildId === readiness.adapterBuildId);
+  const cacheJobMatches = Boolean(
+    latestCacheJob?.adapterBuildId &&
+      latestCacheJob.adapterBuildId === readiness.adapterBuildId &&
+      (!modelId || !latestCacheJob.modelId || latestCacheJob.modelId === modelId)
+  );
+  const dependencyReady = Boolean(readiness.packageStatus?.ok);
+  const baseModelApplied = Boolean(readiness.recommendedBaseModel?.applied);
+  const localModelPathReady = Boolean(modelId && existsSync(modelId));
+  const cacheWarmupReady = Boolean(localModelPathReady || (cacheJobMatches && latestCacheJob?.ok && latestCacheJob.dryRun !== true));
+  const datasetReady = Boolean(readiness.dataset?.examples > 0 && existsSync(readiness.dataset?.jsonl || ""));
+  const hardwareReady = Boolean(readiness.hardware?.tier?.canTrainAdapter && readiness.cuda?.available);
+  const dryRunAllowed = Boolean(readiness.unlock?.dryRun && adapterReceipt?.adapterBuildId && datasetReady);
+  const realTrainingAllowed = Boolean(readiness.unlock?.realTraining && cacheWarmupReady);
+  const willRunMode = requestedMode === "train" && realTrainingAllowed ? "train" : "dry-run";
+  const blockingChecks = [];
+  const checks = [
+    {
+      id: "adapter-build",
+      label: "Adapter pack",
+      status: adapterReceipt?.adapterBuildId ? "pass" : "fail",
+      detail: adapterReceipt?.adapterBuildId ? `${adapterReceipt.adapter?.name || "Adapter"} is prepared.` : "Prepare Adapter before running any trainer.",
+      actionId: "build-adapter",
+      actionLabel: "Prepare Adapter",
+      blocking: true
+    },
+    {
+      id: "dataset",
+      label: "Training dataset",
+      status: datasetReady ? "pass" : "fail",
+      detail: datasetReady ? `${readiness.dataset.examples.toLocaleString()} examples are available.` : "The adapter dataset is missing or empty.",
+      actionId: "build-adapter",
+      actionLabel: "Prepare Adapter",
+      blocking: true
+    },
+    {
+      id: "dependencies",
+      label: "Trainer dependencies",
+      status: dependencyReady ? "pass" : "fail",
+      detail: dependencyReady ? "Required Python trainer packages are importable." : readiness.packageStatus?.summary || "Install the trainer dependency stack.",
+      actionId: "install-deps",
+      actionLabel: "Install deps",
+      blocking: true,
+      receiptPath: depsJobMatches ? latestDepsJob?.files?.latestReceiptJson || latestDepsJob?.files?.receiptJson || "" : ""
+    },
+    {
+      id: "base-model",
+      label: "Transformers base",
+      status: baseModelApplied ? "pass" : "fail",
+      detail: baseModelApplied ? `Trainer config points at ${modelId}.` : readiness.recommendedBaseModel?.summary || "Apply a Hugging Face or local Transformers base model.",
+      actionId: "apply-base",
+      actionLabel: "Use base",
+      blocking: true
+    },
+    {
+      id: "base-cache",
+      label: "Base cache",
+      status: cacheWarmupReady ? "pass" : "warn",
+      detail: cacheWarmupReady
+        ? localModelPathReady
+          ? "Configured local model path is already present."
+          : `Cache warmup receipt exists for ${modelId || "the selected model"}.`
+        : "Warm the base model cache before real training so a long run does not start with an unplanned download.",
+      actionId: "warm-cache",
+      actionLabel: "Warm cache",
+      blocking: true,
+      receiptPath: cacheJobMatches ? latestCacheJob?.files?.latestReceiptJson || latestCacheJob?.files?.receiptJson || "" : ""
+    },
+    {
+      id: "hardware",
+      label: "Hardware and CUDA",
+      status: hardwareReady ? "pass" : "warn",
+      detail: hardwareReady ? readiness.cuda?.summary || "CUDA is available for training." : "Real training is locked to dry-run until hardware and torch CUDA are ready.",
+      actionId: "check-readiness",
+      actionLabel: "Check",
+      blocking: true
+    },
+    {
+      id: "mode",
+      label: "Run mode guard",
+      status: requestedMode === "train" ? (realTrainingAllowed ? "pass" : "warn") : "pass",
+      detail:
+        requestedMode === "train"
+          ? realTrainingAllowed
+            ? "Real training is explicitly armed and all real-train checks passed."
+            : "Real training was requested, but ModelForge will fall back to dry-run until every blocking check passes."
+          : "Dry-run mode is selected, so no trained weights will be claimed.",
+      actionId: realTrainingAllowed ? "run-trainer" : "run-dry-run",
+      actionLabel: realTrainingAllowed ? "Start real run" : "Run dry-run",
+      blocking: false
+    }
+  ];
+  for (const check of checks) {
+    if (check.blocking && check.status !== "pass") blockingChecks.push(check);
+  }
+  const suggestedActions = checks
+    .filter((item) => item.status !== "pass" && item.actionId)
+    .map((item) => ({
+      id: item.actionId,
+      label: item.actionLabel,
+      detail: item.detail,
+      status: item.status,
+      primary: item.id === blockingChecks[0]?.id,
+      workspace: "builder"
+    }));
+  if (!suggestedActions.length) {
+    suggestedActions.push({
+      id: realTrainingAllowed ? "run-trainer" : "run-dry-run",
+      label: realTrainingAllowed ? "Start real run" : "Run dry-run",
+      detail: realTrainingAllowed ? "The trainer can start in real training mode when you click Run Trainer." : "The safe trainer dry-run can execute and write receipts.",
+      status: "pass",
+      primary: true,
+      workspace: "builder"
+    });
+  }
+  const status = realTrainingAllowed
+    ? "ready"
+    : dryRunAllowed
+      ? requestedMode === "train"
+        ? "dry-run-guarded"
+        : "dry-run-ready"
+      : "blocked";
+  const summary = realTrainingAllowed
+    ? `Preflight passed for real ${readiness.method?.toUpperCase() || "adapter"} training.`
+    : dryRunAllowed
+      ? `Preflight will keep this trainer in dry-run mode until ${blockingChecks[0]?.detail || "all real-training checks pass"}`
+      : `Trainer is blocked until ${blockingChecks[0]?.detail || "the adapter pack and dataset are ready"}`;
+  const receipt = {
+    schema: "modelforge.adapter_trainer_preflight.v1",
+    preflightId,
+    createdAt: new Date().toISOString(),
+    ok: requestedMode === "train" ? realTrainingAllowed : dryRunAllowed,
+    status,
+    adapterBuildId: readiness.adapterBuildId || "",
+    planId: readiness.planId || "",
+    adapterName: readiness.adapterName || "",
+    method: readiness.method || "",
+    requestedMode,
+    recommendedMode: willRunMode,
+    summary,
+    checks,
+    blockers: blockingChecks.map((item) => item.detail),
+    warnings: readiness.warnings || [],
+    suggestedActions,
+    estimates: {
+      disk: readiness.recommendedBaseModel?.estimatedDownloadGb
+        ? `${Math.ceil(Number(readiness.recommendedBaseModel.estimatedDownloadGb) + 1)} GB model cache plus 3-8 GB package cache`
+        : "Model cache plus 3-8 GB package cache",
+      time: realTrainingAllowed ? "Training time depends on examples, steps, and GPU speed" : "Dry-run usually finishes in under a minute",
+      detail: "Preflight keeps real training locked until dependencies, base model, cache, CUDA, and dataset checks pass."
+    },
+    guard: {
+      dryRunAllowed,
+      realTrainingRequested: requestedMode === "train",
+      realTrainingAllowed,
+      willRunMode,
+      reason: realTrainingAllowed ? "Every blocking preflight check passed." : blockingChecks[0]?.detail || "Real training is not unlocked yet."
+    },
+    readiness,
+    latestOperations: {
+      dependencyInstall: depsJobMatches ? latestDepsJob : null,
+      baseCacheWarmup: cacheJobMatches ? latestCacheJob : null
+    },
+    files
+  };
+  if (writeReceipt) {
+    await mkdir(dirname(files.latestJson), { recursive: true });
+    await mkdir(dirname(files.historyJson), { recursive: true });
+    await writeJson(files.latestJson, receipt);
+    await writeFile(files.latestMarkdown, adapterTrainerPreflightMarkdown(receipt), "utf-8");
+    await writeJson(files.historyJson, receipt);
+    await writeFile(files.historyMarkdown, adapterTrainerPreflightMarkdown(receipt), "utf-8");
+  }
+  return receipt;
+}
+
+async function getLatestAdapterTrainerPreflight() {
+  return readJsonIfExists(join(dataRoot, "adapters", "preflight", "latest-preflight.json"));
+}
+
 function adapterDependencyInstallMarkdown(receipt) {
   return [
     "# Adapter Dependency Install Receipt",
@@ -6078,6 +6327,12 @@ function adapterTrainingRunMarkdown(run) {
     `Real training: ${run.readiness?.unlock?.realTraining ? "unlocked" : "locked"}`,
     ...(run.blockedReasons?.length ? run.blockedReasons.map((item) => `- ${item}`) : ["- No readiness blockers recorded."]),
     "",
+    "## Preflight",
+    "",
+    `Status: ${run.preflight?.status || "not checked"}`,
+    `Will run: ${run.preflight?.guard?.willRunMode || run.mode || ""}`,
+    `Reason: ${run.preflight?.guard?.reason || ""}`,
+    "",
     "## Progress",
     "",
     `Step: ${run.progress?.currentStep || 0}/${run.progress?.totalSteps || 0}`,
@@ -6334,17 +6589,22 @@ async function startAdapterTrainingRun(body = {}) {
     await writeUpdatedAdapterReceipt(adapterReceipt);
   }
   await ensureAdapterTrainingCacheDirs();
-  const readiness = await buildAdapterTrainingReadiness({ adapterBuildId: adapterReceipt.adapterBuildId }, { write: true });
+  const realTrainingRequested = body.runTraining === true && body.allowLongRun === true;
+  const preflight = await buildAdapterTrainerPreflight({
+    adapterBuildId: adapterReceipt.adapterBuildId,
+    runTraining: body.runTraining,
+    allowLongRun: body.allowLongRun
+  }, { write: true });
+  const readiness = preflight.readiness || await buildAdapterTrainingReadiness({ adapterBuildId: adapterReceipt.adapterBuildId }, { write: true });
   const runId = adapterTrainingRunId();
   const startedAt = new Date().toISOString();
   const runDir = join(dataRoot, "adapters", "runs", runId);
   const checkpointDir = join(runDir, "checkpoint");
-  const realTrainingRequested = body.runTraining === true && body.allowLongRun === true;
   const blockedReasons = [
-    ...((readiness.blockers || []).length ? readiness.blockers : []),
+    ...((preflight.blockers || []).length ? preflight.blockers : readiness.blockers || []),
     !realTrainingRequested ? "Real training was not explicitly armed; running the safe local dry-run." : ""
   ].filter(Boolean);
-  const canTrainNow = Boolean(realTrainingRequested && readiness.unlock?.realTraining);
+  const canTrainNow = Boolean(realTrainingRequested && preflight.guard?.realTrainingAllowed);
   const mode = canTrainNow ? "train" : "dry-run";
   const files = {
     runDir,
@@ -6400,6 +6660,7 @@ async function startAdapterTrainingRun(body = {}) {
     checkpointDir,
     checkpoint: await detectAdapterCheckpoint(checkpointDir),
     readiness,
+    preflight,
     receipt: {
       name: "adapter_training_run",
       ok: false,
@@ -6507,6 +6768,7 @@ async function finishAdapterTrainingRun(runId, result = {}) {
     summary,
     checkpoint,
     readiness: job.run.readiness || null,
+    preflight: job.run.preflight || null,
     receipt,
     endedAt
   });
@@ -9859,6 +10121,7 @@ async function buildModelLibrary() {
     latestAdapterBuild,
     latestAdapterReadiness,
     latestAdapterOperationJob,
+    latestAdapterPreflight,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     recipeRunHistory,
@@ -9879,6 +10142,7 @@ async function buildModelLibrary() {
     getLatestAdapterBuilderReceipt(),
     getLatestAdapterTrainingReadiness(),
     getLatestAdapterOperationJob(),
+    getLatestAdapterTrainerPreflight(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getRecipeRunHistory(),
@@ -9910,6 +10174,7 @@ async function buildModelLibrary() {
     libraryReceipt("Adapter runner recipe", latestAdapterBuild?.files?.runnerRecipeJson, "artifact"),
     libraryReceipt("Adapter readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
     libraryReceipt("Adapter operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
+    libraryReceipt("Adapter preflight receipt", latestAdapterPreflight?.files?.latestJson, "receipt"),
     libraryReceipt("Adapter training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
     libraryReceipt("Adapter promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
@@ -10015,7 +10280,8 @@ async function buildModelLibrary() {
         promoted: adapterPromoted,
         latestRun: latestAdapterTrainingRun?.status || "not run",
         readiness: latestAdapterReadiness?.status || "not checked",
-        operation: latestAdapterOperationJob?.status || "not run"
+        operation: latestAdapterOperationJob?.status || "not run",
+        preflight: latestAdapterPreflight?.status || "not checked"
       },
       receipts: [
         libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
@@ -10024,6 +10290,7 @@ async function buildModelLibrary() {
         libraryReceipt("Runner recipe", latestAdapterBuild.files?.runnerRecipeJson, "artifact"),
         libraryReceipt("Readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
         libraryReceipt("Operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
+        libraryReceipt("Preflight receipt", latestAdapterPreflight?.files?.latestJson, "receipt"),
         libraryReceipt("Training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
         libraryReceipt("Promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
         libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
@@ -10502,6 +10769,7 @@ async function getProjectPayload() {
     latestAdapterBuild,
     latestAdapterReadiness,
     latestAdapterOperationJob,
+    latestAdapterPreflight,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterOperationHistory,
@@ -10528,6 +10796,7 @@ async function getProjectPayload() {
     getLatestAdapterBuilderReceipt(),
     getLatestAdapterTrainingReadiness(),
     getLatestAdapterOperationJob(),
+    getLatestAdapterTrainerPreflight(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getAdapterOperationHistory(),
@@ -10573,6 +10842,7 @@ async function getProjectPayload() {
     latestAdapterBuild,
     latestAdapterReadiness,
     latestAdapterOperationJob,
+    latestAdapterPreflight,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterOperationHistory,
@@ -11000,6 +11270,13 @@ async function handleApi(request, response, url) {
       const body = await readJsonBody(request);
       const job = await retryAdapterOperationJob(body);
       sendJson(response, 202, { ok: true, job, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/training/preflight") {
+      const body = await readJsonBody(request);
+      const preflight = await buildAdapterTrainerPreflight(body, { write: true });
+      sendJson(response, 200, { ok: preflight.ok, preflight, project: await getProjectPayload() });
       return;
     }
 

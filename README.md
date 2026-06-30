@@ -67,6 +67,10 @@ artifacts from code and project folders.
 - Provides an **Adapter Training Operations Console** for dependency install
   and Transformers base-cache warmup jobs, with live logs, progress, estimates,
   cancel/retry controls, and operation receipts before the trainer runs.
+- Adds a **Trainer Preflight** guardrail before LoRA/QLoRA runs: checks the
+  adapter pack, dataset, dependencies, Transformers base, cache warmup, CUDA,
+  and requested mode, then explains whether ModelForge will start a real run or
+  safely fall back to dry-run.
 - Runs that adapter runner with live progress, cancellation, checkpoint
   detection, and receipts. ModelForge dry-runs when hardware, dependencies, or
   the base-model config are not ready, and only enables promotion after real
@@ -206,6 +210,10 @@ The plan records:
   training dependencies or warms the Transformers base-model cache. The receipt
   records the job kind, dry-run flag, commands, live log tails, disk/time
   estimates, cancel/retry status, and the latest readiness snapshot.
+- An **Adapter Trainer Preflight** receipt before Run Trainer starts. It records
+  the requested mode, the mode ModelForge will actually run, pass/warn/fail
+  checks, suggested fix actions, estimates, and the guardrail reason that keeps
+  real training locked until every blocking check passes.
 - An **Adapter Training Run** receipt after Run Trainer executes the local
   runner, captures stdout/stderr tails, records dry-run or train mode, scans for
   checkpoint files, and updates the adapter status.
@@ -255,7 +263,8 @@ The library shows:
 - Which forged target was built from the current recipe/profile.
 - Which adapter pack was prepared, including dry-run/trained status, dataset
   size, training config, runner script, runner recipe, readiness receipt, latest
-  operation receipt, training run, promotion receipt, and adapter manifest.
+  operation receipt, preflight receipt, training run, promotion receipt, and
+  adapter manifest.
 - Dataset rows, token estimates, source-file counts, proof freshness, and eval
   freshness.
 - Receipts behind the build, including Modelfiles, model profiles, Dataset

@@ -23,6 +23,10 @@ model trainer.
   Transformers base-cache warmup into jobs with logs, estimates, receipts,
   cancel, and retry. It still depends on local disk space, package indexes,
   Hugging Face availability, and compatible model access.
+- Trainer Preflight blocks real LoRA/QLoRA starts unless dependencies, base
+  model, warmed cache, CUDA, hardware tier, dataset, and requested mode checks
+  pass. It can still allow a dry-run receipt so users can test the runner path
+  without claiming trained weights.
 - Dry-run adapter receipts prove the dataset/config/runner path executed, but
   they do not claim trained weights. Promotion into an Ollama target is blocked
   until real adapter weight and config files are detected.

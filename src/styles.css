@@ -2454,6 +2454,32 @@ h2 {
   background: rgba(254, 252, 232, 0.82);
 }
 
+.adapter-preflight-panel {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(14, 165, 233, 0.18);
+  border-radius: 7px;
+  background: rgba(240, 249, 255, 0.72);
+}
+
+.adapter-preflight-panel.ready {
+  border-color: rgba(22, 163, 74, 0.2);
+  background: rgba(240, 253, 244, 0.76);
+}
+
+.adapter-preflight-panel.dry-run-guarded,
+.adapter-preflight-panel.dry-run-ready {
+  border-color: rgba(202, 138, 4, 0.25);
+  background: rgba(254, 252, 232, 0.82);
+}
+
+.adapter-preflight-panel.blocked {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(254, 242, 242, 0.82);
+}
+
 .adapter-readiness-mini {
   display: grid;
   gap: 7px;
@@ -2538,14 +2564,16 @@ h2 {
 }
 
 .adapter-operation-commands,
-.adapter-operation-history {
+.adapter-operation-history,
+.adapter-preflight-checks {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
 .adapter-operation-commands span,
-.adapter-operation-history span {
+.adapter-operation-history span,
+.adapter-preflight-checks span {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -2558,7 +2586,8 @@ h2 {
 }
 
 .adapter-operation-commands em,
-.adapter-operation-history em {
+.adapter-operation-history em,
+.adapter-preflight-checks em {
   overflow: hidden;
   min-width: 0;
   color: #314158;

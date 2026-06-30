@@ -725,6 +725,64 @@ export type AdapterOperationJob = {
   };
 };
 
+export type AdapterTrainerPreflightReceipt = {
+  schema: string;
+  preflightId: string;
+  createdAt: string;
+  ok: boolean;
+  status: "ready" | "dry-run-guarded" | "dry-run-ready" | "blocked" | string;
+  adapterBuildId: string;
+  planId: string;
+  adapterName: string;
+  method: string;
+  requestedMode: "train" | "dry-run" | string;
+  recommendedMode: "train" | "dry-run" | string;
+  summary: string;
+  checks: Array<{
+    id: string;
+    label: string;
+    status: "pass" | "warn" | "fail" | string;
+    detail: string;
+    actionId?: string;
+    actionLabel?: string;
+    blocking?: boolean;
+    receiptPath?: string;
+  }>;
+  blockers: string[];
+  warnings: string[];
+  suggestedActions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    status: string;
+    primary: boolean;
+    workspace: string;
+  }>;
+  estimates: {
+    disk: string;
+    time: string;
+    detail: string;
+  };
+  guard: {
+    dryRunAllowed: boolean;
+    realTrainingRequested: boolean;
+    realTrainingAllowed: boolean;
+    willRunMode: "train" | "dry-run" | string;
+    reason: string;
+  };
+  readiness: AdapterTrainingReadiness;
+  latestOperations: {
+    dependencyInstall?: AdapterOperationJob | null;
+    baseCacheWarmup?: AdapterOperationJob | null;
+  };
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
+};
+
 export type AdapterBuilderReceipt = {
   schema: string;
   adapterBuildId: string;
@@ -903,6 +961,7 @@ export type AdapterTrainingRun = {
   checkpointDir: string;
   checkpoint: AdapterCheckpointDetection;
   readiness?: AdapterTrainingReadiness | null;
+  preflight?: AdapterTrainerPreflightReceipt | null;
   receipt: {
     name: string;
     ok: boolean;
@@ -1869,6 +1928,7 @@ export type ProjectPayload = {
   latestAdapterBuild?: AdapterBuilderReceipt | null;
   latestAdapterReadiness?: AdapterTrainingReadiness | null;
   latestAdapterOperationJob?: AdapterOperationJob | null;
+  latestAdapterPreflight?: AdapterTrainerPreflightReceipt | null;
   latestAdapterTrainingRun?: AdapterTrainingRun | null;
   latestAdapterPromotion?: AdapterPromotionReceipt | null;
   adapterOperationHistory?: AdapterOperationJob[];

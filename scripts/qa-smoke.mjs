@@ -90,6 +90,7 @@ async function main() {
   let latestAdapterReadiness = project.latestAdapterReadiness || null;
   let latestAdapterOperationJob = project.latestAdapterOperationJob || null;
   let adapterOperationHistory = project.adapterOperationHistory || [];
+  let latestAdapterPreflight = project.latestAdapterPreflight || null;
   let latestAdapterTrainingRun = project.latestAdapterTrainingRun || null;
   let adapterDepsDryRun = null;
   let adapterDepsOperationDryRun = null;
@@ -137,6 +138,12 @@ async function main() {
       reuseRunning: false
     });
     adapterCacheOperationDryRun = await pollAdapterOperation(cacheOperationStarted.job);
+    const preflightResponse = await postJson("/api/builder/adapter/training/preflight", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      runTraining: true,
+      allowLongRun: true
+    });
+    latestAdapterPreflight = preflightResponse.preflight || latestAdapterPreflight;
     const started = await postJson("/api/builder/adapter/training/run", {
       adapterBuildId: latestAdapterBuild.adapterBuildId,
       runTraining: false,
@@ -154,6 +161,7 @@ async function main() {
     latestAdapterReadiness = project.latestAdapterReadiness || latestAdapterReadiness;
     latestAdapterOperationJob = project.latestAdapterOperationJob || adapterCacheOperationDryRun || adapterDepsOperationDryRun || latestAdapterOperationJob;
     adapterOperationHistory = project.adapterOperationHistory || adapterOperationHistory;
+    latestAdapterPreflight = project.latestAdapterPreflight || latestAdapterPreflight;
     latestAdapterTrainingRun = project.latestAdapterTrainingRun || latestAdapterTrainingRun;
     modelLibrary = refreshedModelLibraryResponse.library || modelLibrary;
   }
@@ -428,6 +436,23 @@ async function main() {
         : "no adapter operation history"
     ),
     check(
+      "Adapter trainer preflight receipt",
+      Boolean(
+        latestAdapterPreflight?.schema === "modelforge.adapter_trainer_preflight.v1" &&
+          latestAdapterPreflight.adapterBuildId === latestAdapterBuild?.adapterBuildId &&
+          ["train", "dry-run"].includes(String(latestAdapterPreflight.requestedMode || "")) &&
+          ["train", "dry-run"].includes(String(latestAdapterPreflight.guard?.willRunMode || "")) &&
+          latestAdapterPreflight.checks?.some((item) => item.id === "dependencies") &&
+          latestAdapterPreflight.checks?.some((item) => item.id === "base-cache") &&
+          latestAdapterPreflight.suggestedActions?.length &&
+          latestAdapterPreflight.files?.latestJson &&
+          existsSync(latestAdapterPreflight.files.latestJson)
+      ),
+      latestAdapterPreflight
+        ? `${latestAdapterPreflight.status}: will=${latestAdapterPreflight.guard?.willRunMode}; next=${latestAdapterPreflight.suggestedActions?.[0]?.label || "none"}`
+        : "no adapter trainer preflight receipt"
+    ),
+    check(
       "Adapter Training Run receipt",
       Boolean(
         latestAdapterTrainingRun?.schema === "modelforge.adapter_training_run.v1" &&
@@ -439,6 +464,7 @@ async function main() {
           latestAdapterTrainingRun.files?.trainingReceiptJson &&
           existsSync(latestAdapterTrainingRun.files.trainingReceiptJson) &&
           latestAdapterTrainingRun.readiness?.schema === "modelforge.adapter_training_readiness.v1" &&
+          latestAdapterTrainingRun.preflight?.schema === "modelforge.adapter_trainer_preflight.v1" &&
           latestAdapterTrainingRun.checkpoint?.dryRun === true &&
           latestAdapterTrainingRun.checkpoint?.trained === false
       ),
@@ -524,6 +550,7 @@ async function main() {
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Adapter receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Readiness receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Operation receipt" && receipt.exists) &&
+          adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Preflight receipt" && receipt.exists) &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-run-adapter-training" && action.kind === "builder-adapter-run") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-promote-adapter" && action.kind === "builder-adapter-promote")

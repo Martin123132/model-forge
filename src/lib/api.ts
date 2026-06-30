@@ -4,6 +4,7 @@ import type {
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
+  AdapterTrainerPreflightReceipt,
   AdapterTrainingRun,
   BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
@@ -233,6 +234,17 @@ export function retryAdapterOperationJob(jobId: string, adapterBuildId?: string,
   }>("/api/builder/adapter/operation/retry", {
     method: "POST",
     body: JSON.stringify({ jobId, adapterBuildId, dryRun })
+  });
+}
+
+export function runAdapterTrainerPreflight(adapterBuildId?: string, runTraining = true) {
+  return requestJson<{
+    ok: boolean;
+    preflight: AdapterTrainerPreflightReceipt;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/training/preflight", {
+    method: "POST",
+    body: JSON.stringify({ adapterBuildId, runTraining, allowLongRun: runTraining })
   });
 }
 

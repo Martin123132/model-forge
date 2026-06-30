@@ -28,6 +28,7 @@ import type {
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
+  AdapterTrainerPreflightReceipt,
   AdapterTrainingRun,
   BuilderAiCreateReceipt,
   BuilderAppliedHardwareRecipe,
@@ -62,6 +63,7 @@ type BuilderWizardProps = {
   adapterReadiness?: AdapterTrainingReadiness | null;
   adapterOperationJob?: AdapterOperationJob | null;
   adapterOperationHistory?: AdapterOperationJob[];
+  adapterPreflight?: AdapterTrainerPreflightReceipt | null;
   adapterTrainingRun?: AdapterTrainingRun | null;
   adapterPromotion?: AdapterPromotionReceipt | null;
   builderRun?: BuilderRun | null;
@@ -75,6 +77,7 @@ type BuilderWizardProps = {
   adapterDepsBusy: boolean;
   adapterCacheBusy: boolean;
   adapterBaseModelBusy: boolean;
+  adapterPreflightBusy: boolean;
   adapterTrainingBusy: boolean;
   adapterPromoteBusy: boolean;
   chatBusy: boolean;
@@ -91,6 +94,7 @@ type BuilderWizardProps = {
   onCancelAdapterOperation: (jobId: string) => void;
   onRetryAdapterOperation: (jobId: string) => void;
   onApplyRecommendedAdapterBaseModel: () => void;
+  onRunAdapterPreflight: () => void;
   onRunAdapterTraining: () => void;
   onCancelAdapterTraining: (runId: string) => void;
   onPromoteAdapter: () => void;
@@ -588,6 +592,21 @@ function adapterOperationIsActive(job?: AdapterOperationJob | null) {
   return job?.status === "queued" || job?.status === "running";
 }
 
+function adapterPreflightTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "ready" || status === "pass") return "pass";
+  if (status === "blocked" || status === "fail") return "fail";
+  if (status) return "warn";
+  return "neutral";
+}
+
+function adapterPreflightLabel(preflight?: AdapterTrainerPreflightReceipt | null) {
+  if (!preflight) return "Not checked";
+  if (preflight.guard?.willRunMode === "train") return "Real ready";
+  if (preflight.status === "blocked") return "Blocked";
+  if (preflight.guard?.dryRunAllowed) return "Dry-run";
+  return preflight.status || "Preflight";
+}
+
 function optionLabel(options: Array<{ id: string; label: string }>, id?: string) {
   return options.find((option) => option.id === id)?.label || options[0]?.label || "Auto";
 }
@@ -1035,6 +1054,7 @@ export function BuilderWizard({
   adapterReadiness,
   adapterOperationJob,
   adapterOperationHistory = [],
+  adapterPreflight,
   adapterTrainingRun,
   adapterPromotion,
   builderRun,
@@ -1048,6 +1068,7 @@ export function BuilderWizard({
   adapterDepsBusy,
   adapterCacheBusy,
   adapterBaseModelBusy,
+  adapterPreflightBusy,
   adapterTrainingBusy,
   adapterPromoteBusy,
   chatBusy,
@@ -1064,6 +1085,7 @@ export function BuilderWizard({
   onCancelAdapterOperation,
   onRetryAdapterOperation,
   onApplyRecommendedAdapterBaseModel,
+  onRunAdapterPreflight,
   onRunAdapterTraining,
   onCancelAdapterTraining,
   onPromoteAdapter,
@@ -1237,6 +1259,11 @@ export function BuilderWizard({
         adapterReceipt.config?.trainer?.recommendedTransformersModelId ||
         adapterReceipt.adapter?.transformersModelId)
   );
+  const adapterPreflightMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterPreflight?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterPreflight = adapterPreflightMatchesReceipt ? adapterPreflight : null;
+  const adapterPreflightReceiptPath = currentAdapterPreflight?.files?.latestJson || currentAdapterPreflight?.files?.historyJson || "";
+  const adapterPreflightNextAction = currentAdapterPreflight?.suggestedActions?.find((action) => action.primary) || currentAdapterPreflight?.suggestedActions?.[0] || null;
+  const adapterWillRunRealTraining = Boolean(currentAdapterPreflight?.guard?.willRunMode === "train");
   const adapterRunMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterTrainingRun?.adapterBuildId === adapterReceipt.adapterBuildId);
   const currentAdapterRun = adapterRunMatchesReceipt ? adapterTrainingRun : null;
   const adapterRunProgress = adapterRunPercent(currentAdapterRun);
@@ -2110,6 +2137,48 @@ export function BuilderWizard({
                 </div>
               ) : null}
               {adapterReceipt ? (
+                <div className={`adapter-preflight-panel ${currentAdapterPreflight?.status || "pending"}`}>
+                  <div className="adapter-runner-head">
+                    <div>
+                      <strong>Trainer Preflight</strong>
+                      <span>
+                        {currentAdapterPreflight?.summary ||
+                          "Run a final guardrail check before the trainer starts. Real training stays locked until dependencies, cache, CUDA, base model, and dataset checks pass."}
+                      </span>
+                    </div>
+                    <StatusPill status={adapterPreflightTone(currentAdapterPreflight?.status)} label={adapterPreflightLabel(currentAdapterPreflight)} />
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Will run</strong>
+                      <em>{currentAdapterPreflight?.guard?.willRunMode || "not checked"}</em>
+                    </span>
+                    <span>
+                      <strong>Real train</strong>
+                      <em>{currentAdapterPreflight?.guard?.realTrainingAllowed ? "allowed" : "locked"}</em>
+                    </span>
+                    <span>
+                      <strong>Next fix</strong>
+                      <em>{adapterPreflightNextAction?.label || "Preflight"}</em>
+                    </span>
+                    <span>
+                      <strong>Receipt</strong>
+                      <em title={adapterPreflightReceiptPath}>{compactPath(adapterPreflightReceiptPath)}</em>
+                    </span>
+                  </div>
+                  {currentAdapterPreflight?.checks?.length ? (
+                    <div className="adapter-preflight-checks">
+                      {currentAdapterPreflight.checks.slice(0, 6).map((check) => (
+                        <span key={check.id}>
+                          <StatusPill status={adapterPreflightTone(check.status)} label={check.status} />
+                          <em title={check.detail}>{check.label}</em>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {adapterReceipt ? (
                 <div className="adapter-runner-panel">
                   <div className="adapter-runner-head">
                     <div>
@@ -2183,6 +2252,12 @@ export function BuilderWizard({
                   </button>
                 ) : null}
                 {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onRunAdapterPreflight} disabled={adapterPreflightBusy || adapterOperationActive}>
+                    {adapterPreflightBusy ? <LoaderCircle className="spin-icon" size={14} /> : <ListChecks size={14} />}
+                    <span>{adapterPreflightBusy ? "Checking" : "Preflight"}</span>
+                  </button>
+                ) : null}
+                {adapterReceipt ? (
                   currentAdapterRun?.status === "running" ? (
                     <button className="plain-button small" type="button" onClick={() => onCancelAdapterTraining(currentAdapterRun.runId)}>
                       <CircleStop size={14} />
@@ -2191,7 +2266,7 @@ export function BuilderWizard({
                   ) : (
                     <button className="plain-button small" type="button" onClick={onRunAdapterTraining} disabled={adapterTrainingBusy || adapterOperationActive}>
                       {adapterTrainingBusy ? <LoaderCircle className="spin-icon" size={14} /> : <Play size={14} />}
-                      <span>{adapterTrainingBusy ? "Starting" : adapterCheckpoint?.trained ? "Rerun Trainer" : "Run Trainer"}</span>
+                      <span>{adapterTrainingBusy ? "Starting" : adapterWillRunRealTraining ? "Start Real Run" : adapterCheckpoint?.trained ? "Rerun Dry-run" : "Run Dry-run"}</span>
                     </button>
                   )
                 ) : null}

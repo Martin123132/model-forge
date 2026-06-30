@@ -36,6 +36,7 @@ import {
   runFirstSetup,
   runSetupDoctorAction,
   runBuilderGuidedTest,
+  runAdapterTrainerPreflight,
   runEvalGates,
   runRecipePack,
   runPipeline,
@@ -56,6 +57,7 @@ import type {
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
+  AdapterTrainerPreflightReceipt,
   AdapterTrainingRun,
   BuilderAppliedHardwareRecipe,
   BuilderGuidedTestReceipt,
@@ -215,6 +217,7 @@ function App() {
   const [adapterReadiness, setAdapterReadiness] = useState<AdapterTrainingReadiness | null>(null);
   const [adapterOperationJob, setAdapterOperationJob] = useState<AdapterOperationJob | null>(null);
   const [adapterOperationHistory, setAdapterOperationHistory] = useState<AdapterOperationJob[]>([]);
+  const [adapterPreflight, setAdapterPreflight] = useState<AdapterTrainerPreflightReceipt | null>(null);
   const [adapterTrainingRun, setAdapterTrainingRun] = useState<AdapterTrainingRun | null>(null);
   const [adapterPromotion, setAdapterPromotion] = useState<AdapterPromotionReceipt | null>(null);
   const [adapterTrainingRunHistory, setAdapterTrainingRunHistory] = useState<AdapterTrainingRun[]>([]);
@@ -263,6 +266,7 @@ function App() {
   const [adapterDepsBusy, setAdapterDepsBusy] = useState(false);
   const [adapterCacheBusy, setAdapterCacheBusy] = useState(false);
   const [adapterBaseModelBusy, setAdapterBaseModelBusy] = useState(false);
+  const [adapterPreflightBusy, setAdapterPreflightBusy] = useState(false);
   const [adapterTrainingBusy, setAdapterTrainingBusy] = useState(false);
   const [adapterPromoteBusy, setAdapterPromoteBusy] = useState(false);
   const [hardwareBusy, setHardwareBusy] = useState(false);
@@ -305,6 +309,7 @@ function App() {
       setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
       setAdapterOperationJob(projectPayload.latestAdapterOperationJob || null);
       setAdapterOperationHistory(projectPayload.adapterOperationHistory || []);
+      setAdapterPreflight(projectPayload.latestAdapterPreflight || null);
       setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || null);
       setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -354,6 +359,7 @@ function App() {
     setAdapterReadiness(result.project.latestAdapterReadiness || null);
     setAdapterOperationJob(result.project.latestAdapterOperationJob || null);
     setAdapterOperationHistory(result.project.adapterOperationHistory || []);
+    setAdapterPreflight(result.project.latestAdapterPreflight || null);
     setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
     setAdapterPromotion(result.project.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -843,6 +849,7 @@ function App() {
       setAdapterReadiness(result.project.latestAdapterReadiness || null);
       setAdapterOperationJob(result.project.latestAdapterOperationJob || null);
       setAdapterOperationHistory(result.project.adapterOperationHistory || []);
+      setAdapterPreflight(result.project.latestAdapterPreflight || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -868,6 +875,7 @@ function App() {
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
       setAdapterOperationJob(result.project.latestAdapterOperationJob || null);
       setAdapterOperationHistory(result.project.adapterOperationHistory || []);
+      setAdapterPreflight(result.project.latestAdapterPreflight || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -892,6 +900,7 @@ function App() {
     setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
     setAdapterOperationJob(projectPayload.latestAdapterOperationJob || fallbackJob || null);
     setAdapterOperationHistory(operationHistory.length ? operationHistory : fallbackJob ? [fallbackJob] : []);
+    setAdapterPreflight(projectPayload.latestAdapterPreflight || null);
     setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || null);
     setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -942,6 +951,7 @@ function App() {
       setBuildPlan(result.project.latestBuildPlan || null);
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
       setAdapterReadiness(result.project.latestAdapterReadiness || adapterReadiness || null);
+      setAdapterPreflight(result.project.latestAdapterPreflight || adapterPreflight || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -956,7 +966,7 @@ function App() {
       setError(installError instanceof Error ? installError.message : String(installError));
       setAdapterDepsBusy(false);
     }
-  }, [adapterBuild, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, refreshAfterAdapterOperation]);
+  }, [adapterBuild, adapterPreflight, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, refreshAfterAdapterOperation]);
 
   const handleWarmAdapterBaseCache = useCallback(async () => {
     const currentAdapter = project?.latestAdapterBuild || adapterBuild;
@@ -980,6 +990,7 @@ function App() {
       setBuildPlan(result.project.latestBuildPlan || null);
       setAdapterBuild(result.project.latestAdapterBuild || currentAdapter);
       setAdapterReadiness(result.project.latestAdapterReadiness || currentReadiness);
+      setAdapterPreflight(result.project.latestAdapterPreflight || adapterPreflight || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -994,7 +1005,7 @@ function App() {
       setError(cacheError instanceof Error ? cacheError.message : String(cacheError));
       setAdapterCacheBusy(false);
     }
-  }, [adapterBuild, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, project?.latestAdapterReadiness, refreshAfterAdapterOperation]);
+  }, [adapterBuild, adapterPreflight, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, project?.latestAdapterReadiness, refreshAfterAdapterOperation]);
 
   const handleCancelAdapterOperation = useCallback(async (jobId: string) => {
     if (!jobId) return;
@@ -1028,6 +1039,7 @@ function App() {
       setBuildPlan(result.project.latestBuildPlan || null);
       setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
       setAdapterReadiness(result.project.latestAdapterReadiness || adapterReadiness || null);
+      setAdapterPreflight(result.project.latestAdapterPreflight || adapterPreflight || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
       setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
@@ -1044,7 +1056,7 @@ function App() {
       setAdapterDepsBusy(false);
       setAdapterCacheBusy(false);
     }
-  }, [adapterBuild, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, refreshAfterAdapterOperation]);
+  }, [adapterBuild, adapterPreflight, adapterPromotion, adapterReadiness, adapterTrainingRun, monitorAdapterOperationJob, project?.latestAdapterBuild, refreshAfterAdapterOperation]);
 
   const handleApplyRecommendedAdapterBaseModel = useCallback(async () => {
     const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
@@ -1063,6 +1075,7 @@ function App() {
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
       setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
       setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
+      setAdapterPreflight(result.project.latestAdapterPreflight || adapterPreflight || null);
       await refreshModelLibrary();
       if (!result.ok) {
         setError(result.readiness?.summary || "Recommended base model was applied, but other readiness blockers remain.");
@@ -1072,7 +1085,7 @@ function App() {
     } finally {
       setAdapterBaseModelBusy(false);
     }
-  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
+  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterPreflight, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
 
   const buildRecipeForWorkspace = useCallback(async (nextWorkspace: WorkspaceView) => {
     setRecipeBusy(true);
@@ -1414,6 +1427,7 @@ function App() {
     setAdapterReadiness(projectPayload.latestAdapterReadiness || null);
     setAdapterOperationJob(projectPayload.latestAdapterOperationJob || null);
     setAdapterOperationHistory(projectPayload.adapterOperationHistory || []);
+    setAdapterPreflight(projectPayload.latestAdapterPreflight || null);
     setAdapterTrainingRun(projectPayload.latestAdapterTrainingRun || fallbackRun || null);
     setAdapterPromotion(projectPayload.latestAdapterPromotion || null);
     setAdapterTrainingRunHistory(projectPayload.adapterTrainingRunHistory || []);
@@ -1445,12 +1459,45 @@ function App() {
     }
   }, [refreshAfterAdapterRun]);
 
+  const handleRunAdapterPreflight = useCallback(async () => {
+    const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
+    if (!adapterBuildId) return null;
+    setAdapterPreflightBusy(true);
+    setError("");
+    try {
+      const result = await runAdapterTrainerPreflight(adapterBuildId, true);
+      setAdapterPreflight(result.preflight);
+      setProject(result.project);
+      setSources(result.project.sources);
+      setBuildPlan(result.project.latestBuildPlan || null);
+      setAdapterBuild(result.project.latestAdapterBuild || adapterBuild || null);
+      setAdapterReadiness(result.project.latestAdapterReadiness || null);
+      setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
+      setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
+      setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun || null);
+      setAdapterPromotion(result.project.latestAdapterPromotion || adapterPromotion || null);
+      setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
+      await refreshModelLibrary();
+      if (result.preflight.status === "blocked") {
+        setError(result.preflight.summary || "Preflight found a blocking trainer issue.");
+      }
+      return result.preflight;
+    } catch (preflightError) {
+      setError(preflightError instanceof Error ? preflightError.message : String(preflightError));
+      return null;
+    } finally {
+      setAdapterPreflightBusy(false);
+    }
+  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterPromotion, adapterTrainingRun, project?.latestAdapterBuild, refreshModelLibrary]);
+
   const handleRunAdapterTraining = useCallback(async () => {
     const adapterBuildId = (project?.latestAdapterBuild || adapterBuild)?.adapterBuildId;
     if (!adapterBuildId) return;
     setAdapterTrainingBusy(true);
     setError("");
     try {
+      const preflightResult = await runAdapterTrainerPreflight(adapterBuildId, true);
+      setAdapterPreflight(preflightResult.preflight);
       const result = await startAdapterTrainingRun(adapterBuildId, true);
       setAdapterTrainingRun(result.run);
       setProject(result.project);
@@ -1458,6 +1505,7 @@ function App() {
       setAdapterReadiness(result.project.latestAdapterReadiness || null);
       setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
       setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
+      setAdapterPreflight(result.project.latestAdapterPreflight || result.run.preflight || preflightResult.preflight);
       setAdapterPromotion(result.project.latestAdapterPromotion || null);
       setAdapterTrainingRunHistory((history) => [result.run, ...history.filter((run) => run.runId !== result.run.runId)].slice(0, 8));
       setActiveWorkspace("builder");
@@ -1498,6 +1546,7 @@ function App() {
       setAdapterReadiness(result.project.latestAdapterReadiness || null);
       setAdapterOperationJob(result.project.latestAdapterOperationJob || adapterOperationJob || null);
       setAdapterOperationHistory(result.project.adapterOperationHistory || adapterOperationHistory);
+      setAdapterPreflight(result.project.latestAdapterPreflight || adapterPreflight || null);
       setAdapterTrainingRun(result.project.latestAdapterTrainingRun || adapterTrainingRun);
       setAdapterTrainingRunHistory(result.project.adapterTrainingRunHistory || []);
       await refreshModelLibrary();
@@ -1509,7 +1558,7 @@ function App() {
     } finally {
       setAdapterPromoteBusy(false);
     }
-  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterTrainingRun, project?.latestAdapterBuild, project?.latestAdapterTrainingRun, refreshModelLibrary]);
+  }, [adapterBuild, adapterOperationHistory, adapterOperationJob, adapterPreflight, adapterTrainingRun, project?.latestAdapterBuild, project?.latestAdapterTrainingRun, refreshModelLibrary]);
 
   useEffect(() => {
     const runId = adapterTrainingRun?.runId;
@@ -1930,6 +1979,7 @@ function App() {
                     adapterReadiness={project?.latestAdapterReadiness || adapterReadiness}
                     adapterOperationJob={project?.latestAdapterOperationJob || adapterOperationJob}
                     adapterOperationHistory={project?.adapterOperationHistory?.length ? project.adapterOperationHistory : adapterOperationHistory}
+                    adapterPreflight={project?.latestAdapterPreflight || adapterPreflight}
                     adapterTrainingRun={project?.latestAdapterTrainingRun || adapterTrainingRun}
                     adapterPromotion={project?.latestAdapterPromotion || adapterPromotion}
                     builderRun={builderRun}
@@ -1943,6 +1993,7 @@ function App() {
                     adapterDepsBusy={adapterDepsBusy}
                     adapterCacheBusy={adapterCacheBusy}
                     adapterBaseModelBusy={adapterBaseModelBusy}
+                    adapterPreflightBusy={adapterPreflightBusy}
                     adapterTrainingBusy={adapterTrainingBusy}
                     adapterPromoteBusy={adapterPromoteBusy}
                     chatBusy={chatBusy || builderTestBusy}
@@ -1959,6 +2010,7 @@ function App() {
                     onCancelAdapterOperation={handleCancelAdapterOperation}
                     onRetryAdapterOperation={handleRetryAdapterOperation}
                     onApplyRecommendedAdapterBaseModel={handleApplyRecommendedAdapterBaseModel}
+                    onRunAdapterPreflight={handleRunAdapterPreflight}
                     onRunAdapterTraining={handleRunAdapterTraining}
                     onCancelAdapterTraining={handleCancelAdapterTraining}
                     onPromoteAdapter={handlePromoteAdapter}

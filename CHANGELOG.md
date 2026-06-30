@@ -39,6 +39,9 @@ forge cockpit.
   Transformers base-model cache warmup run as receipt-backed jobs with live
   logs, progress, disk/time estimates, cancel/retry controls, and clear Builder
   status.
+- Added Adapter Trainer Preflight receipts and Builder guardrails so Run
+  Trainer checks dependency, cache, CUDA, base-model, dataset, and requested
+  mode readiness before any real LoRA/QLoRA run can start.
 - Added Adapter Training Run receipts so Run Trainer executes the local runner,
   streams progress/log tails, supports cancellation, detects dry-run versus real
   checkpoints, and updates the adapter status.
