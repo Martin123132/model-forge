@@ -28,6 +28,7 @@ const builderRunJobs = new Map();
 const adapterTrainingRunJobs = new Map();
 const adapterOperationJobs = new Map();
 const adapterFixLoopJobs = new Map();
+const adapterFirstRealRunJobs = new Map();
 
 const skippedDirs = new Set([
   ".git",
@@ -111,6 +112,7 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "adapters", "operations"), { recursive: true });
   await mkdir(join(root, "adapters", "preflight"), { recursive: true });
   await mkdir(join(root, "adapters", "fixes"), { recursive: true });
+  await mkdir(join(root, "adapters", "first-real"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness", "history"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
@@ -5249,6 +5251,647 @@ async function runAdapterTrainerFixLoop(fixLoop, body = {}) {
     adapterFixAction(fixLoop, "fix-loop-error", "Fix loop error", fixLoop.summary, "fail", { ok: false });
     await persistAdapterTrainerFixLoop(fixLoop);
     adapterFixLoopJobs.delete(fixLoop.fixId);
+  }
+}
+
+function adapterFirstRealRunGateFiles(gateId) {
+  const latestDir = join(dataRoot, "adapters", "first-real");
+  const historyDir = join(latestDir, "history", gateId);
+  return {
+    latestJson: join(latestDir, "latest-first-real-run.json"),
+    latestMarkdown: join(latestDir, "latest-first-real-run.md"),
+    historyJson: join(historyDir, "first-real-run.json"),
+    historyMarkdown: join(historyDir, "first-real-run.md"),
+    evalScript: join(historyDir, "adapter-first-real-eval.py"),
+    evalPrompts: join(historyDir, "adapter-first-real-prompts.json"),
+    latestEvalJson: join(latestDir, "latest-first-real-eval.json"),
+    historyEvalJson: join(historyDir, "first-real-eval.json")
+  };
+}
+
+function adapterFirstRealRunGateMarkdown(receipt) {
+  return [
+    "# Adapter First Real Run Gate",
+    "",
+    `Gate: ${receipt.gateId}`,
+    `Created: ${receipt.createdAt}`,
+    `Ended: ${receipt.endedAt || ""}`,
+    `Status: ${receipt.status}`,
+    `Adapter build: ${receipt.adapterBuildId || ""}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary || "",
+    "",
+    "## Unlock",
+    "",
+    `Fix loop: ${receipt.fixLoop?.fixId || "not found"}`,
+    `Real training: ${receipt.trainingUnlock?.realTraining ? "unlocked" : "locked"}`,
+    `Will run: ${receipt.trainingUnlock?.willRunMode || ""}`,
+    `Reason: ${receipt.trainingUnlock?.reason || ""}`,
+    "",
+    "## Training",
+    "",
+    `Run: ${receipt.trainingRun?.runId || ""}`,
+    `Mode: ${receipt.trainingRun?.mode || ""}`,
+    `Run status: ${receipt.trainingRun?.status || "not run"}`,
+    "",
+    "## Checkpoint",
+    "",
+    `Status: ${receipt.checkpointValidation?.status || "not run"}`,
+    `Summary: ${receipt.checkpointValidation?.summary || ""}`,
+    `Adapter model: ${receipt.checkpointValidation?.checkpoint?.adapterModel || ""}`,
+    "",
+    "## Adapter Eval",
+    "",
+    `Status: ${receipt.adapterEval?.status || "not run"}`,
+    `Base model: ${receipt.adapterEval?.baseModel || ""}`,
+    `Prompt count: ${receipt.adapterEval?.promptCount || 0}`,
+    `Summary: ${receipt.adapterEval?.summary || ""}`,
+    "",
+    "## Actions",
+    "",
+    ...(receipt.actions?.length
+      ? receipt.actions.map((item) => `- ${item.label}: ${item.status} - ${item.detail || item.summary || ""}${item.receiptPath ? ` (${item.receiptPath})` : ""}`)
+      : ["- No actions recorded."]),
+    "",
+    ...(receipt.blockers?.length ? ["## Blockers", "", ...receipt.blockers.map((item) => `- ${item}`), ""] : []),
+    ...(receipt.warnings?.length ? ["## Warnings", "", ...receipt.warnings.map((item) => `- ${item}`), ""] : []),
+    ""
+  ].join("\n");
+}
+
+function publicAdapterFirstRealRunGate(gate) {
+  return gate || null;
+}
+
+async function persistAdapterFirstRealRunGate(gate) {
+  if (!gate?.files) return;
+  const safeGate = publicAdapterFirstRealRunGate(gate);
+  await mkdir(dirname(gate.files.latestJson), { recursive: true });
+  await mkdir(dirname(gate.files.historyJson), { recursive: true });
+  await writeJson(gate.files.latestJson, safeGate);
+  await writeFile(gate.files.latestMarkdown, adapterFirstRealRunGateMarkdown(safeGate), "utf-8");
+  await writeJson(gate.files.historyJson, safeGate);
+  await writeFile(gate.files.historyMarkdown, adapterFirstRealRunGateMarkdown(safeGate), "utf-8");
+}
+
+async function getLatestAdapterFirstRealRunGate() {
+  const running = Array.from(adapterFirstRealRunJobs.values())
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  if (running) return publicAdapterFirstRealRunGate(running);
+  return readJsonIfExists(join(dataRoot, "adapters", "first-real", "latest-first-real-run.json"));
+}
+
+async function getAdapterFirstRealRunGate(gateId = "") {
+  const safeId = String(gateId || "").trim();
+  if (safeId && adapterFirstRealRunJobs.has(safeId)) return publicAdapterFirstRealRunGate(adapterFirstRealRunJobs.get(safeId));
+  if (!safeId) return getLatestAdapterFirstRealRunGate();
+  if (!/^adapter-first-real-\d{4}-\d{2}-\d{2}T/.test(safeId)) {
+    throw new Error("A valid adapter first real run gate id is required.");
+  }
+  return readJsonIfExists(join(dataRoot, "adapters", "first-real", "history", safeId, "first-real-run.json"));
+}
+
+function adapterFirstRealGateAction(gate, id, label, detail = "", status = "pending", extra = {}) {
+  const existing = (gate.actions || []).find((item) => item.id === id);
+  const next = {
+    id,
+    label,
+    detail,
+    status,
+    summary: extra.summary || detail,
+    startedAt: existing?.startedAt || extra.startedAt || "",
+    endedAt: extra.endedAt || existing?.endedAt || "",
+    runId: extra.runId || existing?.runId || "",
+    receiptPath: extra.receiptPath || existing?.receiptPath || "",
+    ok: extra.ok ?? existing?.ok ?? false
+  };
+  if (status === "running" && !next.startedAt) next.startedAt = new Date().toISOString();
+  if (["pass", "warn", "fail", "blocked", "skipped"].includes(status) && !next.endedAt) next.endedAt = new Date().toISOString();
+  if (existing) Object.assign(existing, next);
+  else gate.actions.push(next);
+  gate.updatedAt = new Date().toISOString();
+  return existing || next;
+}
+
+function adapterFirstRealEvalScriptSource() {
+  return `#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+import traceback
+
+
+def write_json(path, value):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\\n", encoding="utf-8")
+
+
+def read_jsonl(path, limit):
+    rows = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+            if len(rows) >= limit:
+                break
+    return rows
+
+
+def prompt_from_row(row):
+    instruction = str(row.get("instruction") or "Answer from the supplied source.").strip()
+    source_input = str(row.get("input") or "").strip()
+    source_path = str(row.get("sourcePath") or row.get("path") or "unknown-source").strip()
+    if len(source_input) > 1800:
+        source_input = source_input[:1800] + "\\n[truncated for eval]"
+    return "\\n".join([
+        "Use the source excerpt and answer with a concise, source-backed response.",
+        "",
+        "Source: %s" % source_path,
+        "",
+        instruction,
+        "",
+        source_input
+    ])
+
+
+def generate(model, tokenizer, prompt, max_new_tokens):
+    import torch
+
+    device = next(model.parameters()).device
+    encoded = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+    encoded = {key: value.to(device) for key, value in encoded.items()}
+    with torch.no_grad():
+        output = model.generate(
+            **encoded,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id
+        )
+    new_tokens = output[0][encoded["input_ids"].shape[-1]:]
+    return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--checkpoint-dir", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--max-prompts", type=int, default=3)
+    parser.add_argument("--max-new-tokens", type=int, default=96)
+    args = parser.parse_args()
+
+    created_at = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    trainer = config.get("trainer") or {}
+    model_id = str(trainer.get("transformersModelId") or config.get("baseModel") or "").strip()
+    dataset_path = config.get("dataset", {}).get("jsonl")
+    checkpoint_dir = str(Path(args.checkpoint_dir))
+    receipt = {
+        "schema": "modelforge.adapter_first_real_eval.v1",
+        "createdAt": created_at,
+        "ok": False,
+        "status": "running",
+        "baseModel": config.get("baseModel") or model_id,
+        "transformersModelId": model_id,
+        "checkpointDir": checkpoint_dir,
+        "promptCount": 0,
+        "comparisons": [],
+        "summary": "Adapter eval is running."
+    }
+    try:
+        if not model_id:
+            raise RuntimeError("No Transformers model id or local model path is configured.")
+        if not dataset_path or not os.path.exists(dataset_path):
+            raise RuntimeError("Adapter eval dataset was not found.")
+        if not os.path.exists(checkpoint_dir):
+            raise RuntimeError("Adapter checkpoint directory was not found.")
+
+        import torch
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        rows = read_jsonl(dataset_path, max(1, args.max_prompts))
+        prompts = [prompt_from_row(row) for row in rows]
+        tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        model_kwargs = {}
+        if torch.cuda.is_available():
+            model_kwargs["device_map"] = "auto"
+            model_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        base_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        if not torch.cuda.is_available():
+            base_model.to("cpu")
+        base_model.eval()
+        base_outputs = [generate(base_model, tokenizer, prompt, args.max_new_tokens) for prompt in prompts]
+        adapter_model = PeftModel.from_pretrained(base_model, checkpoint_dir)
+        adapter_model.eval()
+        adapter_outputs = [generate(adapter_model, tokenizer, prompt, args.max_new_tokens) for prompt in prompts]
+        comparisons = []
+        for index, row in enumerate(rows):
+            source_path = str(row.get("sourcePath") or row.get("path") or "unknown-source")
+            base_answer = base_outputs[index]
+            adapter_answer = adapter_outputs[index]
+            comparisons.append({
+                "id": "prompt-%s" % (index + 1),
+                "sourcePath": source_path,
+                "baseAnswerPreview": base_answer[:800],
+                "adapterAnswerPreview": adapter_answer[:800],
+                "baseChars": len(base_answer),
+                "adapterChars": len(adapter_answer),
+                "adapterNonEmpty": bool(adapter_answer.strip()),
+                "changedFromBase": base_answer.strip() != adapter_answer.strip()
+            })
+        passed = bool(comparisons) and all(item["adapterNonEmpty"] for item in comparisons)
+        receipt.update({
+            "ok": passed,
+            "status": "pass" if passed else "warn",
+            "promptCount": len(comparisons),
+            "comparisons": comparisons,
+            "summary": "Adapter eval generated %s adapter-vs-base comparison(s)." % len(comparisons)
+        })
+    except Exception as error:
+        receipt.update({
+            "ok": False,
+            "status": "fail",
+            "summary": str(error),
+            "error": str(error),
+            "traceback": traceback.format_exc()
+        })
+    write_json(args.output, receipt)
+    return 0 if receipt.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`;
+}
+
+async function adapterFirstRealEvalPromptPack(adapterReceipt, limit = 3) {
+  const datasetPath = adapterReceipt?.files?.trainingDatasetJsonl || "";
+  const rows = [];
+  try {
+    const text = await readFile(datasetPath, "utf-8");
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const row = parseJsonLoose(line);
+      if (!row) continue;
+      rows.push({
+        id: `prompt-${rows.length + 1}`,
+        sourcePath: row.sourcePath || row.path || "",
+        instruction: cleanSetting(row.instruction || "Answer from the supplied source."),
+        inputPreview: cleanSetting(String(row.input || "").slice(0, 500))
+      });
+      if (rows.length >= limit) break;
+    }
+  } catch {
+    return [];
+  }
+  return rows;
+}
+
+async function runAdapterFirstRealEval({ gate, adapterReceipt, run, checkpoint }) {
+  const prompts = await adapterFirstRealEvalPromptPack(adapterReceipt, 3);
+  await writeJson(gate.files.evalPrompts, {
+    schema: "modelforge.adapter_first_real_eval_prompts.v1",
+    createdAt: new Date().toISOString(),
+    adapterBuildId: adapterReceipt.adapterBuildId,
+    trainingRunId: run?.runId || "",
+    promptCount: prompts.length,
+    prompts
+  });
+  if (!checkpoint?.trained) {
+    const evalReceipt = {
+      schema: "modelforge.adapter_first_real_eval.v1",
+      createdAt: new Date().toISOString(),
+      ok: false,
+      status: "not-run",
+      baseModel: adapterReceipt.adapter?.baseModel || "",
+      transformersModelId: adapterReceipt.config?.trainer?.transformersModelId || "",
+      checkpointDir: checkpoint?.dir || run?.checkpointDir || "",
+      promptCount: prompts.length,
+      comparisons: [],
+      summary: "Adapter eval waits for trained checkpoint files."
+    };
+    await writeJson(gate.files.latestEvalJson, evalReceipt);
+    await writeJson(gate.files.historyEvalJson, evalReceipt);
+    return evalReceipt;
+  }
+  await writeFile(gate.files.evalScript, adapterFirstRealEvalScriptSource(), "utf-8");
+  const command = [
+    pythonCommand,
+    "-u",
+    gate.files.evalScript,
+    "--config",
+    adapterReceipt.files.trainingConfigJson,
+    "--checkpoint-dir",
+    checkpoint.dir || run.checkpointDir,
+    "--output",
+    gate.files.historyEvalJson,
+    "--max-prompts",
+    "3"
+  ];
+  const startedAt = new Date().toISOString();
+  const result = await runCommand(command[0], command.slice(1), {
+    timeout: 30 * 60 * 1000,
+    cwd: adapterReceipt.files?.latestDir || projectRoot,
+    maxBuffer: 20 * 1024 * 1024
+  });
+  const output = (await readJsonIfExists(gate.files.historyEvalJson)) || {};
+  const status = result.ok && output.ok ? "pass" : output.status === "warn" ? "warn" : "warn";
+  const summary = output.summary || (result.ok ? "Adapter eval completed with warnings." : `Adapter eval could not complete: ${result.error || result.stderr || "unknown error"}`);
+  const evalReceipt = {
+    schema: "modelforge.adapter_first_real_eval.v1",
+    createdAt: output.createdAt || startedAt,
+    endedAt: new Date().toISOString(),
+    ok: Boolean(result.ok && output.ok),
+    status,
+    baseModel: output.baseModel || adapterReceipt.adapter?.baseModel || "",
+    transformersModelId: output.transformersModelId || adapterReceipt.config?.trainer?.transformersModelId || "",
+    checkpointDir: output.checkpointDir || checkpoint.dir || run.checkpointDir,
+    promptCount: Number(output.promptCount || prompts.length || 0),
+    comparisons: output.comparisons || [],
+    promptPack: gate.files.evalPrompts,
+    command,
+    receipt: commandReceipt({
+      name: "adapter_first_real_eval",
+      ok: Boolean(result.ok && output.ok),
+      status: result.ok && output.ok ? "ok" : "warning",
+      command,
+      outputPath: gate.files.historyEvalJson,
+      summary,
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+      error: output.error || result.error || "",
+      startedAt,
+      endedAt: new Date().toISOString()
+    }),
+    summary
+  };
+  await writeJson(gate.files.historyEvalJson, evalReceipt);
+  await writeJson(gate.files.latestEvalJson, evalReceipt);
+  return evalReceipt;
+}
+
+function firstRealGateCheckpointValidation({ run, checkpoint }) {
+  const checks = [
+    {
+      id: "run-mode",
+      label: "Real run mode",
+      status: run?.mode === "train" ? "pass" : "fail",
+      detail: run?.mode === "train" ? "Trainer ran in real training mode." : `Trainer ran in ${run?.mode || "unknown"} mode.`
+    },
+    {
+      id: "run-status",
+      label: "Training run status",
+      status: run?.status === "pass" ? "pass" : "fail",
+      detail: run?.summary || "Training run did not finish."
+    },
+    {
+      id: "adapter-model",
+      label: "Adapter weights",
+      status: checkpoint?.adapterModel && existsSync(checkpoint.adapterModel) ? "pass" : "fail",
+      detail: checkpoint?.adapterModel || "adapter_model.safetensors or adapter_model.bin was not detected."
+    },
+    {
+      id: "adapter-config",
+      label: "Adapter config",
+      status: checkpoint?.adapterConfig && existsSync(checkpoint.adapterConfig) ? "pass" : "fail",
+      detail: checkpoint?.adapterConfig || "adapter_config.json was not detected."
+    }
+  ];
+  const ok = checks.every((check) => check.status === "pass") && Boolean(checkpoint?.trained);
+  return {
+    schema: "modelforge.adapter_checkpoint_validation.v1",
+    checkedAt: new Date().toISOString(),
+    ok,
+    status: ok ? "pass" : "fail",
+    summary: ok
+      ? "Real adapter checkpoint files were detected and validated."
+      : checkpoint?.summary || "Real adapter checkpoint validation failed.",
+    checkpoint,
+    checks
+  };
+}
+
+async function waitForAdapterTrainingRunForFirstRealGate(gate, run) {
+  let current = run || null;
+  for (let index = 0; index < 21600 && current?.status === "running"; index += 1) {
+    current = await getAdapterTrainingRun(current.runId);
+    gate.trainingRun = current;
+    adapterFirstRealGateAction(gate, "training-run", "Run tiny adapter trainer", current?.summary || "Trainer is running.", "running", {
+      runId: current?.runId || run?.runId || "",
+      receiptPath: current?.files?.latestJson || ""
+    });
+    await persistAdapterFirstRealRunGate(gate);
+    await sleep(1000);
+  }
+  if (current?.status === "running") current = await getAdapterTrainingRun(current.runId);
+  return current;
+}
+
+async function startAdapterFirstRealRunGate(body = {}) {
+  await ensureDataRoot();
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  if (!adapterReceipt?.adapterBuildId) {
+    throw new Error("Prepare an adapter before starting the first real run gate.");
+  }
+  const existing = Array.from(adapterFirstRealRunJobs.values()).find((job) => job.adapterBuildId === adapterReceipt.adapterBuildId && job.status === "running");
+  if (existing && body.reuseRunning !== false) return publicAdapterFirstRealRunGate(existing);
+  const createdAt = new Date().toISOString();
+  const gateId = `adapter-first-real-${createdAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+  const files = adapterFirstRealRunGateFiles(gateId);
+  const gate = {
+    schema: "modelforge.adapter_first_real_run_gate.v1",
+    gateId,
+    createdAt,
+    endedAt: "",
+    updatedAt: createdAt,
+    ok: false,
+    status: "running",
+    adapterBuildId: adapterReceipt.adapterBuildId,
+    planId: adapterReceipt.planId || "",
+    adapterName: adapterReceipt.adapter?.name || "",
+    method: adapterReceipt.adapter?.method || "",
+    summary: "First real adapter run gate is checking the fix-loop unlock before starting training.",
+    settings: {
+      runTraining: body.runTraining !== false,
+      allowLongRun: body.allowLongRun === true,
+      requireFixLoop: body.requireFixLoop !== false,
+      maxEvalPrompts: Number(body.maxEvalPrompts || 3)
+    },
+    fixLoop: null,
+    preflightBefore: null,
+    trainingUnlock: {
+      realTraining: false,
+      dryRun: false,
+      willRunMode: "dry-run",
+      reason: "Gate has not checked the assisted fix loop yet.",
+      nextAction: "Wait for the first real run gate to finish checking."
+    },
+    trainingRun: null,
+    checkpointValidation: null,
+    adapterEval: null,
+    actions: [],
+    blockers: [],
+    warnings: [],
+    files
+  };
+  adapterFirstRealRunJobs.set(gateId, gate);
+  await persistAdapterFirstRealRunGate(gate);
+  void runAdapterFirstRealRunGate(gate, body).catch(async (error) => {
+    gate.status = "fail";
+    gate.ok = false;
+    gate.summary = String(error?.message || error);
+    gate.endedAt = new Date().toISOString();
+    gate.updatedAt = gate.endedAt;
+    gate.blockers = [gate.summary];
+    adapterFirstRealGateAction(gate, "gate-error", "First real run error", gate.summary, "fail", { ok: false });
+    await persistAdapterFirstRealRunGate(gate);
+    adapterFirstRealRunJobs.delete(gate.gateId);
+  });
+  return publicAdapterFirstRealRunGate(gate);
+}
+
+async function runAdapterFirstRealRunGate(gate, body = {}) {
+  try {
+    const adapterReceipt = await getAdapterBuilderReceiptById(gate.adapterBuildId);
+    const selectedFixLoop = body.fixId ? await getAdapterTrainerFixLoop(body.fixId) : await getLatestAdapterTrainerFixLoop();
+    const fixLoopMatches = Boolean(selectedFixLoop?.adapterBuildId === gate.adapterBuildId);
+    const fixLoopUnlocked = Boolean(fixLoopMatches && selectedFixLoop?.status === "pass" && selectedFixLoop?.trainingUnlock?.realTraining);
+    gate.fixLoop = fixLoopMatches ? selectedFixLoop : null;
+    adapterFirstRealGateAction(
+      gate,
+      "fix-loop-unlock",
+      "Verify fix-loop unlock",
+      fixLoopUnlocked
+        ? "Assisted fix loop unlocked real tiny LoRA/QLoRA training."
+        : "Run Fix Trainer until the assisted fix loop clears dependencies, base cache, CUDA, dataset, and base-model checks.",
+      fixLoopUnlocked ? "pass" : "blocked",
+      {
+        ok: fixLoopUnlocked,
+        receiptPath: fixLoopMatches ? selectedFixLoop.files?.latestJson || selectedFixLoop.files?.historyJson || "" : ""
+      }
+    );
+    const preflight = await buildAdapterTrainerPreflight(
+      { adapterBuildId: gate.adapterBuildId, runTraining: true, allowLongRun: true },
+      { write: true }
+    );
+    gate.preflightBefore = preflight;
+    gate.trainingUnlock = {
+      realTraining: Boolean(fixLoopUnlocked && preflight.guard?.realTrainingAllowed),
+      dryRun: Boolean(preflight.guard?.dryRunAllowed),
+      willRunMode: preflight.guard?.willRunMode || "dry-run",
+      reason: fixLoopUnlocked ? preflight.guard?.reason || "" : "Assisted fix loop has not unlocked real training.",
+      nextAction: fixLoopUnlocked && preflight.guard?.realTrainingAllowed
+        ? "Start the tiny real LoRA/QLoRA run and then validate the checkpoint."
+        : "Run the assisted trainer fix loop before starting a real adapter run."
+    };
+    adapterFirstRealGateAction(gate, "preflight", "Re-run trainer preflight", preflight.summary, preflight.guard?.realTrainingAllowed ? "pass" : "blocked", {
+      ok: Boolean(preflight.guard?.realTrainingAllowed),
+      receiptPath: preflight.files?.latestJson || ""
+    });
+    const armed = gate.settings.runTraining && gate.settings.allowLongRun;
+    const blockers = [
+      !fixLoopMatches ? "No assisted fix loop receipt was found for this adapter build." : "",
+      fixLoopMatches && !fixLoopUnlocked ? selectedFixLoop?.trainingUnlock?.reason || selectedFixLoop?.summary || "Assisted fix loop has not unlocked real training." : "",
+      !preflight.guard?.realTrainingAllowed ? preflight.guard?.reason || "Trainer preflight still blocks real training." : "",
+      !armed ? "The first real run gate was not explicitly armed with allowLongRun and runTraining." : ""
+    ].filter(Boolean);
+    if (blockers.length) {
+      gate.status = "blocked";
+      gate.ok = false;
+      gate.summary = `First real adapter run is locked: ${blockers[0]}`;
+      gate.blockers = blockers.concat(preflight.blockers || []).filter(Boolean);
+      gate.warnings = preflight.warnings || [];
+      gate.checkpointValidation = {
+        schema: "modelforge.adapter_checkpoint_validation.v1",
+        checkedAt: new Date().toISOString(),
+        ok: false,
+        status: "not-run",
+        summary: "Checkpoint validation waits for an unlocked real training run.",
+        checkpoint: await detectAdapterCheckpoint(adapterReceipt?.adapter?.checkpointDir || ""),
+        checks: []
+      };
+      gate.adapterEval = await runAdapterFirstRealEval({
+        gate,
+        adapterReceipt,
+        run: null,
+        checkpoint: gate.checkpointValidation.checkpoint
+      });
+      adapterFirstRealGateAction(gate, "training-run", "Run tiny adapter trainer", gate.summary, "blocked", { ok: false });
+      adapterFirstRealGateAction(gate, "checkpoint-validation", "Validate checkpoint files", gate.checkpointValidation.summary, "skipped", { ok: false });
+      adapterFirstRealGateAction(gate, "adapter-eval", "Eval adapter against base", gate.adapterEval.summary, "skipped", {
+        ok: false,
+        receiptPath: gate.files.latestEvalJson || gate.files.historyEvalJson || ""
+      });
+      gate.endedAt = new Date().toISOString();
+      gate.updatedAt = gate.endedAt;
+      await persistAdapterFirstRealRunGate(gate);
+      adapterFirstRealRunJobs.delete(gate.gateId);
+      return;
+    }
+
+    adapterFirstRealGateAction(gate, "training-run", "Run tiny adapter trainer", "Real training is unlocked; starting the first tiny LoRA/QLoRA run.", "running");
+    await persistAdapterFirstRealRunGate(gate);
+    const run = await startAdapterTrainingRun({
+      adapterBuildId: gate.adapterBuildId,
+      runTraining: true,
+      allowLongRun: true
+    });
+    gate.trainingRun = run;
+    adapterFirstRealGateAction(gate, "training-run", "Run tiny adapter trainer", run.summary, "running", {
+      runId: run.runId,
+      receiptPath: run.files?.latestJson || ""
+    });
+    await persistAdapterFirstRealRunGate(gate);
+    const finishedRun = await waitForAdapterTrainingRunForFirstRealGate(gate, run);
+    gate.trainingRun = finishedRun;
+    const checkpoint = await detectAdapterCheckpoint(finishedRun?.checkpointDir || adapterReceipt.adapter?.checkpointDir || "");
+    gate.checkpointValidation = firstRealGateCheckpointValidation({ run: finishedRun, checkpoint });
+    adapterFirstRealGateAction(gate, "training-run", "Run tiny adapter trainer", finishedRun?.summary || "Training run finished.", finishedRun?.ok ? "pass" : "fail", {
+      ok: Boolean(finishedRun?.ok),
+      runId: finishedRun?.runId || "",
+      receiptPath: finishedRun?.files?.latestJson || ""
+    });
+    adapterFirstRealGateAction(gate, "checkpoint-validation", "Validate checkpoint files", gate.checkpointValidation.summary, gate.checkpointValidation.status, {
+      ok: Boolean(gate.checkpointValidation.ok),
+      receiptPath: checkpoint.trainingReceipt || finishedRun?.files?.trainingReceiptJson || ""
+    });
+    gate.adapterEval = await runAdapterFirstRealEval({ gate, adapterReceipt, run: finishedRun, checkpoint });
+    adapterFirstRealGateAction(gate, "adapter-eval", "Eval adapter against base", gate.adapterEval.summary, gate.adapterEval.status === "pass" ? "pass" : "warn", {
+      ok: Boolean(gate.adapterEval.ok),
+      receiptPath: gate.files.latestEvalJson || gate.files.historyEvalJson || ""
+    });
+    gate.ok = Boolean(gate.checkpointValidation.ok && gate.adapterEval.status !== "fail");
+    gate.status = !gate.checkpointValidation.ok ? "fail" : gate.adapterEval.status === "pass" ? "pass" : "warn";
+    gate.summary = gate.status === "pass"
+      ? "First real tiny LoRA/QLoRA run produced a validated checkpoint and adapter-vs-base eval receipt."
+      : gate.status === "warn"
+        ? "First real tiny LoRA/QLoRA run produced a checkpoint, but adapter-vs-base eval needs review."
+        : "First real tiny LoRA/QLoRA run did not produce a valid checkpoint.";
+    gate.blockers = gate.status === "fail" ? [gate.checkpointValidation.summary] : [];
+    gate.warnings = gate.status === "warn" ? [gate.adapterEval.summary] : preflight.warnings || [];
+    gate.endedAt = new Date().toISOString();
+    gate.updatedAt = gate.endedAt;
+    await persistAdapterFirstRealRunGate(gate);
+    adapterFirstRealRunJobs.delete(gate.gateId);
+  } catch (error) {
+    gate.status = "fail";
+    gate.ok = false;
+    gate.summary = String(error?.message || error);
+    gate.endedAt = new Date().toISOString();
+    gate.updatedAt = gate.endedAt;
+    gate.blockers = [gate.summary];
+    adapterFirstRealGateAction(gate, "gate-error", "First real run error", gate.summary, "fail", { ok: false });
+    await persistAdapterFirstRealRunGate(gate);
+    adapterFirstRealRunJobs.delete(gate.gateId);
   }
 }
 
@@ -10498,6 +11141,7 @@ async function buildModelLibrary() {
     latestAdapterOperationJob,
     latestAdapterPreflight,
     latestAdapterFixLoop,
+    latestAdapterFirstRealGate,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     recipeRunHistory,
@@ -10520,6 +11164,7 @@ async function buildModelLibrary() {
     getLatestAdapterOperationJob(),
     getLatestAdapterTrainerPreflight(),
     getLatestAdapterTrainerFixLoop(),
+    getLatestAdapterFirstRealRunGate(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getRecipeRunHistory(),
@@ -10553,6 +11198,8 @@ async function buildModelLibrary() {
     libraryReceipt("Adapter operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
     libraryReceipt("Adapter preflight receipt", latestAdapterPreflight?.files?.latestJson, "receipt"),
     libraryReceipt("Adapter fix loop receipt", latestAdapterFixLoop?.files?.latestJson, "receipt"),
+    libraryReceipt("First real run gate", latestAdapterFirstRealGate?.files?.latestJson, "receipt"),
+    libraryReceipt("First real adapter eval", latestAdapterFirstRealGate?.files?.latestEvalJson, "eval"),
     libraryReceipt("Adapter training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
     libraryReceipt("Adapter promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
@@ -10660,7 +11307,8 @@ async function buildModelLibrary() {
         readiness: latestAdapterReadiness?.status || "not checked",
         operation: latestAdapterOperationJob?.status || "not run",
         preflight: latestAdapterPreflight?.status || "not checked",
-        fixLoop: latestAdapterFixLoop?.status || "not run"
+        fixLoop: latestAdapterFixLoop?.status || "not run",
+        firstRealRun: latestAdapterFirstRealGate?.status || "not run"
       },
       receipts: [
         libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
@@ -10671,6 +11319,8 @@ async function buildModelLibrary() {
         libraryReceipt("Operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
         libraryReceipt("Preflight receipt", latestAdapterPreflight?.files?.latestJson, "receipt"),
         libraryReceipt("Fix loop receipt", latestAdapterFixLoop?.files?.latestJson, "receipt"),
+        libraryReceipt("First real run gate", latestAdapterFirstRealGate?.files?.latestJson, "receipt"),
+        libraryReceipt("First real adapter eval", latestAdapterFirstRealGate?.files?.latestEvalJson, "eval"),
         libraryReceipt("Training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
         libraryReceipt("Promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
         libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
@@ -10698,6 +11348,13 @@ async function buildModelLibrary() {
           kind: "builder-adapter-fix",
           workspace: "builder",
           detail: "Run the assisted trainer fix loop before trying a real adapter training run."
+        },
+        {
+          id: "builder-first-real-adapter-run",
+          label: latestAdapterFirstRealGate?.status === "running" ? "Real Run" : "First Real Run",
+          kind: "builder-adapter-first-real",
+          workspace: "builder",
+          detail: "Start only after Fix Trainer unlocks real LoRA/QLoRA training; validates checkpoints and writes an adapter-vs-base eval receipt."
         },
         {
           id: "builder-promote-adapter",
@@ -11158,6 +11815,7 @@ async function getProjectPayload() {
     latestAdapterOperationJob,
     latestAdapterPreflight,
     latestAdapterFixLoop,
+    latestAdapterFirstRealGate,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterOperationHistory,
@@ -11186,6 +11844,7 @@ async function getProjectPayload() {
     getLatestAdapterOperationJob(),
     getLatestAdapterTrainerPreflight(),
     getLatestAdapterTrainerFixLoop(),
+    getLatestAdapterFirstRealRunGate(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getAdapterOperationHistory(),
@@ -11233,6 +11892,7 @@ async function getProjectPayload() {
     latestAdapterOperationJob,
     latestAdapterPreflight,
     latestAdapterFixLoop,
+    latestAdapterFirstRealGate,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterOperationHistory,
@@ -11679,6 +12339,18 @@ async function handleApi(request, response, url) {
 
     if (request.method === "GET" && url.pathname === "/api/builder/adapter/training/fix") {
       sendJson(response, 200, { ok: true, fixLoop: await getAdapterTrainerFixLoop(url.searchParams.get("fixId") || "") });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/training/first-real") {
+      const body = await readJsonBody(request);
+      const gate = await startAdapterFirstRealRunGate(body);
+      sendJson(response, gate.status === "running" ? 202 : 200, { ok: gate.ok, gate, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/adapter/training/first-real") {
+      sendJson(response, 200, { ok: true, gate: await getAdapterFirstRealRunGate(url.searchParams.get("gateId") || "") });
       return;
     }
 

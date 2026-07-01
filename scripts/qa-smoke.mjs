@@ -70,6 +70,16 @@ async function pollAdapterFixLoop(fixLoop) {
   return current;
 }
 
+async function pollAdapterFirstRealGate(gate) {
+  let current = gate || null;
+  for (let index = 0; index < 80 && current && ["queued", "running"].includes(String(current.status || "").toLowerCase()); index += 1) {
+    await sleep(250);
+    const polled = await getJson(`/api/builder/adapter/training/first-real?gateId=${encodeURIComponent(current.gateId)}`);
+    current = polled.gate || current;
+  }
+  return current;
+}
+
 async function main() {
   let [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorStartDryRun, doctorRepairDryRun] = await Promise.all([
     getJson("/api/project"),
@@ -102,6 +112,7 @@ async function main() {
   let adapterOperationHistory = project.adapterOperationHistory || [];
   let latestAdapterPreflight = project.latestAdapterPreflight || null;
   let latestAdapterFixLoop = project.latestAdapterFixLoop || null;
+  let latestAdapterFirstRealGate = project.latestAdapterFirstRealGate || null;
   let latestAdapterTrainingRun = project.latestAdapterTrainingRun || null;
   let adapterDepsDryRun = null;
   let adapterDepsOperationDryRun = null;
@@ -164,6 +175,13 @@ async function main() {
       startTraining: false
     });
     latestAdapterFixLoop = await pollAdapterFixLoop(fixLoopStarted.fixLoop);
+    const firstRealGateStarted = await postJson("/api/builder/adapter/training/first-real", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      runTraining: true,
+      allowLongRun: true,
+      maxEvalPrompts: 3
+    });
+    latestAdapterFirstRealGate = await pollAdapterFirstRealGate(firstRealGateStarted.gate);
     const started = await postJson("/api/builder/adapter/training/run", {
       adapterBuildId: latestAdapterBuild.adapterBuildId,
       runTraining: false,
@@ -183,6 +201,7 @@ async function main() {
     adapterOperationHistory = project.adapterOperationHistory || adapterOperationHistory;
     latestAdapterPreflight = project.latestAdapterPreflight || latestAdapterPreflight;
     latestAdapterFixLoop = project.latestAdapterFixLoop || latestAdapterFixLoop;
+    latestAdapterFirstRealGate = project.latestAdapterFirstRealGate || latestAdapterFirstRealGate;
     latestAdapterTrainingRun = project.latestAdapterTrainingRun || latestAdapterTrainingRun;
     modelLibrary = refreshedModelLibraryResponse.library || modelLibrary;
   }
@@ -493,6 +512,26 @@ async function main() {
         : "no adapter assisted fix loop receipt"
     ),
     check(
+      "Adapter first real run gate receipt",
+      Boolean(
+        latestAdapterFirstRealGate?.schema === "modelforge.adapter_first_real_run_gate.v1" &&
+          latestAdapterFirstRealGate.adapterBuildId === latestAdapterBuild?.adapterBuildId &&
+          latestAdapterFirstRealGate.status === "blocked" &&
+          latestAdapterFirstRealGate.trainingUnlock?.realTraining === false &&
+          latestAdapterFirstRealGate.actions?.some((item) => item.id === "fix-loop-unlock") &&
+          latestAdapterFirstRealGate.actions?.some((item) => item.id === "adapter-eval" && item.status === "skipped") &&
+          latestAdapterFirstRealGate.checkpointValidation?.status === "not-run" &&
+          latestAdapterFirstRealGate.adapterEval?.status === "not-run" &&
+          latestAdapterFirstRealGate.files?.latestJson &&
+          existsSync(latestAdapterFirstRealGate.files.latestJson) &&
+          latestAdapterFirstRealGate.files?.latestEvalJson &&
+          existsSync(latestAdapterFirstRealGate.files.latestEvalJson)
+      ),
+      latestAdapterFirstRealGate
+        ? `${latestAdapterFirstRealGate.status}: unlock=${latestAdapterFirstRealGate.trainingUnlock?.realTraining ? "real" : "locked"}; eval=${latestAdapterFirstRealGate.adapterEval?.status || "none"}`
+        : "no adapter first real run gate receipt"
+    ),
+    check(
       "Adapter Training Run receipt",
       Boolean(
         latestAdapterTrainingRun?.schema === "modelforge.adapter_training_run.v1" &&
@@ -592,8 +631,10 @@ async function main() {
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Operation receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Preflight receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Fix loop receipt" && receipt.exists) &&
+          adapterLibraryItem.receipts?.some((receipt) => receipt.label === "First real run gate" && receipt.exists) &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-fix-adapter-trainer" && action.kind === "builder-adapter-fix") &&
+          adapterLibraryItem.actions?.some((action) => action.id === "builder-first-real-adapter-run" && action.kind === "builder-adapter-first-real") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-run-adapter-training" && action.kind === "builder-adapter-run") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-promote-adapter" && action.kind === "builder-adapter-promote")
       ),

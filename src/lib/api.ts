@@ -1,6 +1,7 @@
 import type {
   AdapterBuilderReceipt,
   AdapterDependencyInstallReceipt,
+  AdapterFirstRealRunGateReceipt,
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
@@ -276,6 +277,31 @@ export function runAdapterTrainerFixLoop(adapterBuildId?: string, options?: {
 export function getAdapterTrainerFixLoop(fixId?: string) {
   const query = fixId ? `?fixId=${encodeURIComponent(fixId)}` : "";
   return requestJson<{ ok: boolean; fixLoop: AdapterTrainerFixLoopReceipt | null }>(`/api/builder/adapter/training/fix${query}`);
+}
+
+export function startAdapterFirstRealRunGate(adapterBuildId?: string, options?: {
+  runTraining?: boolean;
+  allowLongRun?: boolean;
+  maxEvalPrompts?: number;
+}) {
+  return requestJson<{
+    ok: boolean;
+    gate: AdapterFirstRealRunGateReceipt;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/training/first-real", {
+    method: "POST",
+    body: JSON.stringify({
+      adapterBuildId,
+      runTraining: options?.runTraining !== false,
+      allowLongRun: options?.allowLongRun === true,
+      maxEvalPrompts: options?.maxEvalPrompts || 3
+    })
+  });
+}
+
+export function getAdapterFirstRealRunGate(gateId?: string) {
+  const query = gateId ? `?gateId=${encodeURIComponent(gateId)}` : "";
+  return requestJson<{ ok: boolean; gate: AdapterFirstRealRunGateReceipt | null }>(`/api/builder/adapter/training/first-real${query}`);
 }
 
 export function startAdapterTrainingRun(adapterBuildId?: string, runTraining = true) {

@@ -2507,6 +2507,34 @@ h2 {
   background: rgba(254, 242, 242, 0.82);
 }
 
+.adapter-first-real-panel {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 7px;
+  background: rgba(239, 246, 255, 0.74);
+}
+
+.adapter-first-real-panel.pass {
+  border-color: rgba(22, 163, 74, 0.2);
+  background: rgba(240, 253, 244, 0.76);
+}
+
+.adapter-first-real-panel.running,
+.adapter-first-real-panel.warn,
+.adapter-first-real-panel.blocked {
+  border-color: rgba(202, 138, 4, 0.25);
+  background: rgba(254, 252, 232, 0.82);
+}
+
+.adapter-first-real-panel.fail,
+.adapter-first-real-panel.canceled {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(254, 242, 242, 0.82);
+}
+
 .adapter-readiness-mini {
   display: grid;
   gap: 7px;

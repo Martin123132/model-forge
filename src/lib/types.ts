@@ -842,6 +842,100 @@ export type AdapterTrainerFixLoopReceipt = {
   };
 };
 
+export type AdapterFirstRealRunGateReceipt = {
+  schema: string;
+  gateId: string;
+  createdAt: string;
+  endedAt: string;
+  updatedAt: string;
+  ok: boolean;
+  status: "running" | "pass" | "warn" | "blocked" | "fail" | "canceled" | string;
+  adapterBuildId: string;
+  planId: string;
+  adapterName: string;
+  method: string;
+  summary: string;
+  settings: {
+    runTraining: boolean;
+    allowLongRun: boolean;
+    requireFixLoop: boolean;
+    maxEvalPrompts: number;
+  };
+  fixLoop?: AdapterTrainerFixLoopReceipt | null;
+  preflightBefore?: AdapterTrainerPreflightReceipt | null;
+  trainingUnlock: {
+    realTraining: boolean;
+    dryRun: boolean;
+    willRunMode: "train" | "dry-run" | string;
+    reason: string;
+    nextAction: string;
+  };
+  trainingRun?: AdapterTrainingRun | null;
+  checkpointValidation?: {
+    schema: string;
+    checkedAt: string;
+    ok: boolean;
+    status: "pass" | "fail" | "not-run" | string;
+    summary: string;
+    checkpoint?: AdapterCheckpointDetection | null;
+    checks: Array<{
+      id: string;
+      label: string;
+      status: "pass" | "warn" | "fail" | string;
+      detail: string;
+    }>;
+  } | null;
+  adapterEval?: {
+    schema: string;
+    createdAt: string;
+    endedAt?: string;
+    ok: boolean;
+    status: "pass" | "warn" | "fail" | "not-run" | string;
+    baseModel: string;
+    transformersModelId?: string;
+    checkpointDir: string;
+    promptCount: number;
+    comparisons?: Array<{
+      id: string;
+      sourcePath: string;
+      baseAnswerPreview?: string;
+      adapterAnswerPreview?: string;
+      baseChars?: number;
+      adapterChars?: number;
+      adapterNonEmpty?: boolean;
+      changedFromBase?: boolean;
+    }>;
+    promptPack?: string;
+    command?: string[];
+    receipt?: Record<string, unknown>;
+    summary: string;
+  } | null;
+  actions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    status: "pending" | "running" | "pass" | "warn" | "fail" | "blocked" | "skipped" | string;
+    summary: string;
+    startedAt: string;
+    endedAt: string;
+    runId: string;
+    receiptPath: string;
+    ok: boolean;
+  }>;
+  blockers: string[];
+  warnings: string[];
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+    evalScript: string;
+    evalPrompts: string;
+    latestEvalJson: string;
+    historyEvalJson: string;
+  };
+};
+
 export type AdapterBuilderReceipt = {
   schema: string;
   adapterBuildId: string;
@@ -1989,6 +2083,7 @@ export type ProjectPayload = {
   latestAdapterOperationJob?: AdapterOperationJob | null;
   latestAdapterPreflight?: AdapterTrainerPreflightReceipt | null;
   latestAdapterFixLoop?: AdapterTrainerFixLoopReceipt | null;
+  latestAdapterFirstRealGate?: AdapterFirstRealRunGateReceipt | null;
   latestAdapterTrainingRun?: AdapterTrainingRun | null;
   latestAdapterPromotion?: AdapterPromotionReceipt | null;
   adapterOperationHistory?: AdapterOperationJob[];

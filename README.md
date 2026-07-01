@@ -76,6 +76,9 @@ artifacts from code and project folders.
   Transformers base, installs/checks adapter dependencies when explicitly
   allowed, warms the base-model cache when allowed, re-runs preflight, writes a
   fix receipt, and only then unlocks a real tiny LoRA/QLoRA trainer start.
+- Adds a **First Real Run Gate**: starts only after Fix Trainer unlocks real
+  training, captures live trainer progress, validates real adapter checkpoint
+  files, and writes an adapter-vs-base eval receipt.
 - Runs that adapter runner with live progress, cancellation, checkpoint
   detection, and receipts. ModelForge dry-runs when hardware, dependencies, or
   the base-model config are not ready, and only enables promotion after real
@@ -223,6 +226,11 @@ The plan records:
   cache preparation, Python/package verification, dependency install/check
   actions, base-model cache warmup, automatic preflight reruns, remaining
   blockers, and whether the real tiny LoRA/QLoRA trainer is unlocked.
+- A **First Real Run Gate** receipt after First Real Run checks the Fix Trainer
+  unlock, starts only when real mode is allowed, records trainer progress,
+  validates adapter weight/config files, and writes an adapter-vs-base eval
+  receipt. When real training is still locked, it records a blocked receipt
+  instead of silently doing a dry-run.
 - An **Adapter Training Run** receipt after Run Trainer executes the local
   runner, captures stdout/stderr tails, records dry-run or train mode, scans for
   checkpoint files, and updates the adapter status.
@@ -272,18 +280,19 @@ The library shows:
 - Which forged target was built from the current recipe/profile.
 - Which adapter pack was prepared, including dry-run/trained status, dataset
   size, training config, runner script, runner recipe, readiness receipt, latest
-  operation receipt, preflight receipt, fix loop receipt, training run,
-  promotion receipt, and adapter manifest.
+  operation receipt, preflight receipt, fix loop receipt, first real run gate,
+  training run, promotion receipt, and adapter manifest.
 - Dataset rows, token estimates, source-file counts, proof freshness, and eval
   freshness.
 - Receipts behind the build, including Modelfiles, model profiles, Dataset
   Forge artifacts, export manifests, proof bundles, Builder create/update
   receipts, and Ollama create receipts.
 - Source evidence previews with local paths and hashes.
-- Rebuild AI, Prepare Adapter, Fix Trainer, Run Trainer, Promote AI, and Retest
-  AI actions, so the library can create/update the local Ollama target, refresh the adapter
-  pack, execute the guarded trainer, promote real checkpoints, and rerun the
-  guided source-backed test. Builder also exposes operation controls for
+- Rebuild AI, Prepare Adapter, Fix Trainer, First Real Run, Run Trainer,
+  Promote AI, and Retest AI actions, so the library can create/update the local
+  Ollama target, refresh the adapter pack, unlock and validate the first real
+  adapter run, execute the guarded trainer, promote real checkpoints, and rerun
+  the guided source-backed test. Builder also exposes operation controls for
   Install deps, Warm cache, Cancel op, and Retry op.
 
 The same workspace includes a **Test side by side** playground. It sends one

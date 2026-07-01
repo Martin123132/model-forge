@@ -46,6 +46,9 @@ forge cockpit.
   into Fix Trainer actions, prepare D-drive caches, verify Python/packages,
   apply the recommended base model, run allowed dependency/cache jobs, re-run
   preflight, and write a fix receipt before real training is unlocked.
+- Added the First Real Run Gate so Builder starts a tiny real LoRA/QLoRA run
+  only after Fix Trainer unlocks it, captures training progress, validates real
+  adapter checkpoint files, and writes an adapter-vs-base eval receipt.
 - Added Adapter Training Run receipts so Run Trainer executes the local runner,
   streams progress/log tails, supports cancellation, detects dry-run versus real
   checkpoints, and updates the adapter status.

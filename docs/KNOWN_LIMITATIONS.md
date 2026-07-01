@@ -32,6 +32,11 @@ model trainer.
   dependency/cache jobs when explicitly allowed. Real installs and model cache
   warmups still depend on network access, package indexes, Hugging Face model
   availability, local disk space, and CUDA/PyTorch compatibility.
+- The First Real Run Gate starts only after the fix loop and preflight unlock
+  real training. On locked systems it writes a blocked receipt. Adapter-vs-base
+  eval runs only after real adapter weight/config files exist, and it can still
+  warn or fail because of memory limits, package/runtime issues, or model
+  loading failures.
 - Dry-run adapter receipts prove the dataset/config/runner path executed, but
   they do not claim trained weights. Promotion into an Ollama target is blocked
   until real adapter weight and config files are detected.

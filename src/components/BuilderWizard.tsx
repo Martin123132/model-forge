@@ -25,6 +25,7 @@ import {
 import { useMemo, useState } from "react";
 import type {
   AdapterBuilderReceipt,
+  AdapterFirstRealRunGateReceipt,
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
@@ -66,6 +67,7 @@ type BuilderWizardProps = {
   adapterOperationHistory?: AdapterOperationJob[];
   adapterPreflight?: AdapterTrainerPreflightReceipt | null;
   adapterFixLoop?: AdapterTrainerFixLoopReceipt | null;
+  adapterFirstRealGate?: AdapterFirstRealRunGateReceipt | null;
   adapterTrainingRun?: AdapterTrainingRun | null;
   adapterPromotion?: AdapterPromotionReceipt | null;
   builderRun?: BuilderRun | null;
@@ -81,6 +83,7 @@ type BuilderWizardProps = {
   adapterBaseModelBusy: boolean;
   adapterPreflightBusy: boolean;
   adapterFixLoopBusy: boolean;
+  adapterFirstRealBusy: boolean;
   adapterTrainingBusy: boolean;
   adapterPromoteBusy: boolean;
   chatBusy: boolean;
@@ -99,6 +102,7 @@ type BuilderWizardProps = {
   onApplyRecommendedAdapterBaseModel: () => void;
   onRunAdapterPreflight: () => void;
   onRunAdapterFixLoop: () => void;
+  onStartAdapterFirstRealRun: () => void;
   onRunAdapterTraining: () => void;
   onCancelAdapterTraining: (runId: string) => void;
   onPromoteAdapter: () => void;
@@ -626,6 +630,22 @@ function adapterFixLoopLabel(fixLoop?: AdapterTrainerFixLoopReceipt | null) {
   return fixLoop.status || "Fix loop";
 }
 
+function adapterFirstRealTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "pass") return "pass";
+  if (status === "running" || status === "warn" || status === "blocked") return "warn";
+  if (status === "fail" || status === "canceled") return "fail";
+  return "neutral";
+}
+
+function adapterFirstRealLabel(gate?: AdapterFirstRealRunGateReceipt | null) {
+  if (!gate) return "Not started";
+  if (gate.status === "pass") return "Passed";
+  if (gate.status === "warn") return "Review";
+  if (gate.status === "running") return "Running";
+  if (gate.status === "blocked") return "Locked";
+  return gate.status || "Gate";
+}
+
 function optionLabel(options: Array<{ id: string; label: string }>, id?: string) {
   return options.find((option) => option.id === id)?.label || options[0]?.label || "Auto";
 }
@@ -1075,6 +1095,7 @@ export function BuilderWizard({
   adapterOperationHistory = [],
   adapterPreflight,
   adapterFixLoop,
+  adapterFirstRealGate,
   adapterTrainingRun,
   adapterPromotion,
   builderRun,
@@ -1090,6 +1111,7 @@ export function BuilderWizard({
   adapterBaseModelBusy,
   adapterPreflightBusy,
   adapterFixLoopBusy,
+  adapterFirstRealBusy,
   adapterTrainingBusy,
   adapterPromoteBusy,
   chatBusy,
@@ -1108,6 +1130,7 @@ export function BuilderWizard({
   onApplyRecommendedAdapterBaseModel,
   onRunAdapterPreflight,
   onRunAdapterFixLoop,
+  onStartAdapterFirstRealRun,
   onRunAdapterTraining,
   onCancelAdapterTraining,
   onPromoteAdapter,
@@ -1291,6 +1314,13 @@ export function BuilderWizard({
   const adapterFixLoopReceiptPath = currentAdapterFixLoop?.files?.latestJson || currentAdapterFixLoop?.files?.historyJson || "";
   const adapterFixLoopActive = Boolean(currentAdapterFixLoop?.status === "running");
   const adapterFixLoopLatestAction = [...(currentAdapterFixLoop?.actions || [])].reverse()[0] || null;
+  const adapterFirstRealMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterFirstRealGate?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterFirstRealGate = adapterFirstRealMatchesReceipt ? adapterFirstRealGate : null;
+  const adapterFirstRealReceiptPath = currentAdapterFirstRealGate?.files?.latestJson || currentAdapterFirstRealGate?.files?.historyJson || "";
+  const adapterFirstRealEvalPath = currentAdapterFirstRealGate?.files?.latestEvalJson || currentAdapterFirstRealGate?.files?.historyEvalJson || "";
+  const adapterFirstRealActive = Boolean(currentAdapterFirstRealGate?.status === "running");
+  const adapterFirstRealLatestAction = [...(currentAdapterFirstRealGate?.actions || [])].reverse()[0] || null;
+  const adapterFirstRealUnlocked = Boolean(currentAdapterFixLoop?.trainingUnlock?.realTraining && currentAdapterPreflight?.guard?.realTrainingAllowed);
   const adapterRunMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterTrainingRun?.adapterBuildId === adapterReceipt.adapterBuildId);
   const currentAdapterRun = adapterRunMatchesReceipt ? adapterTrainingRun : null;
   const adapterRunProgress = adapterRunPercent(currentAdapterRun);
@@ -2245,6 +2275,68 @@ export function BuilderWizard({
                 </div>
               ) : null}
               {adapterReceipt ? (
+                <div className={`adapter-first-real-panel ${currentAdapterFirstRealGate?.status || "pending"}`}>
+                  <div className="adapter-runner-head">
+                    <div>
+                      <strong>First Real Run Gate</strong>
+                      <span>
+                        {currentAdapterFirstRealGate?.summary ||
+                          (adapterFirstRealUnlocked
+                            ? "Real tiny LoRA/QLoRA training is unlocked. Start the guarded run to validate checkpoint files and compare the adapter against the base model."
+                            : "This gate starts only after Fix Trainer unlocks real training. Until then it records what is still blocking the first real run.")}
+                      </span>
+                    </div>
+                    <StatusPill status={adapterFirstRealTone(currentAdapterFirstRealGate?.status)} label={adapterFirstRealLabel(currentAdapterFirstRealGate)} />
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Unlock</strong>
+                      <em>{currentAdapterFirstRealGate?.trainingUnlock?.realTraining || adapterFirstRealUnlocked ? "real ready" : "locked"}</em>
+                    </span>
+                    <span>
+                      <strong>Latest</strong>
+                      <em>{adapterFirstRealLatestAction?.label || "waiting"}</em>
+                    </span>
+                    <span>
+                      <strong>Checkpoint</strong>
+                      <em>{currentAdapterFirstRealGate?.checkpointValidation?.status || "not run"}</em>
+                    </span>
+                    <span>
+                      <strong>Eval</strong>
+                      <em>{currentAdapterFirstRealGate?.adapterEval?.status || "not run"}</em>
+                    </span>
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Receipt</strong>
+                      <em title={adapterFirstRealReceiptPath}>{compactPath(adapterFirstRealReceiptPath)}</em>
+                    </span>
+                    <span>
+                      <strong>Eval file</strong>
+                      <em title={adapterFirstRealEvalPath}>{compactPath(adapterFirstRealEvalPath)}</em>
+                    </span>
+                    <span>
+                      <strong>Prompts</strong>
+                      <em>{currentAdapterFirstRealGate?.adapterEval?.promptCount || 0}</em>
+                    </span>
+                    <span>
+                      <strong>Run</strong>
+                      <em>{currentAdapterFirstRealGate?.trainingRun?.status || "not started"}</em>
+                    </span>
+                  </div>
+                  {currentAdapterFirstRealGate?.actions?.length ? (
+                    <div className="adapter-preflight-checks">
+                      {currentAdapterFirstRealGate.actions.slice(-6).map((action) => (
+                        <span key={action.id}>
+                          <StatusPill status={adapterFirstRealTone(action.status)} label={action.status} />
+                          <em title={action.detail || action.summary}>{action.label}</em>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {adapterReceipt ? (
                 <div className="adapter-runner-panel">
                   <div className="adapter-runner-head">
                     <div>
@@ -2327,6 +2419,12 @@ export function BuilderWizard({
                   <button className="plain-button small" type="button" onClick={onRunAdapterFixLoop} disabled={adapterFixLoopBusy || adapterOperationActive || adapterFixLoopActive}>
                     {adapterFixLoopBusy || adapterFixLoopActive ? <LoaderCircle className="spin-icon" size={14} /> : <Wand2 size={14} />}
                     <span>{adapterFixLoopBusy || adapterFixLoopActive ? "Fixing" : "Fix Trainer"}</span>
+                  </button>
+                ) : null}
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onStartAdapterFirstRealRun} disabled={adapterFirstRealBusy || adapterOperationActive || adapterFirstRealActive || currentAdapterRun?.status === "running"}>
+                    {adapterFirstRealBusy || adapterFirstRealActive ? <LoaderCircle className="spin-icon" size={14} /> : <Rocket size={14} />}
+                    <span>{adapterFirstRealBusy || adapterFirstRealActive ? "Running" : adapterFirstRealUnlocked ? "First Real Run" : "Check Real Run"}</span>
                   </button>
                 ) : null}
                 {adapterReceipt ? (

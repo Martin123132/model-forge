@@ -1,4 +1,4 @@
-import { Bot, Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, RefreshCw, Send, ShieldCheck, Wand2, XCircle } from "lucide-react";
+import { Bot, Copy, Database, Download, FileText, FolderOpen, Hammer, History, Lock, MessageSquare, Play, RefreshCw, Rocket, Send, ShieldCheck, Wand2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { datasetForgeDownloadUrl } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
@@ -24,6 +24,7 @@ type ModelLabProps = {
   createBusy: boolean;
   adapterBusy: boolean;
   adapterFixLoopBusy: boolean;
+  adapterFirstRealBusy: boolean;
   adapterTrainingBusy: boolean;
   adapterPromoteBusy: boolean;
   chatBusy: boolean;
@@ -38,6 +39,7 @@ type ModelLabProps = {
   onRebuildBuilderAi: () => void;
   onBuildAdapter: () => void;
   onRunAdapterFixLoop: () => void;
+  onStartAdapterFirstRealRun: () => void;
   onRunAdapterTraining: () => void;
   onPromoteAdapter: () => void;
   onRetestBuilderAi: () => void;
@@ -167,6 +169,7 @@ export function ModelLab({
   createBusy,
   adapterBusy,
   adapterFixLoopBusy,
+  adapterFirstRealBusy,
   adapterTrainingBusy,
   adapterPromoteBusy,
   chatBusy,
@@ -181,6 +184,7 @@ export function ModelLab({
   onRebuildBuilderAi,
   onBuildAdapter,
   onRunAdapterFixLoop,
+  onStartAdapterFirstRealRun,
   onRunAdapterTraining,
   onPromoteAdapter,
   onRetestBuilderAi,
@@ -381,11 +385,12 @@ export function ModelLab({
                 ) : null}
                 {item.actions?.length ? (
                   <div className="model-library-actions">
-                    {item.actions.slice(0, item.kind === "adapter" ? 5 : 2).map((action) => {
+                    {item.actions.slice(0, item.kind === "adapter" ? 6 : 2).map((action) => {
                       const isRebuild = action.id === "builder-rebuild-ai";
                       const isAdapterPrep = action.id === "builder-build-adapter";
                       const isAdapterRun = action.id === "builder-run-adapter-training";
                       const isAdapterFix = action.id === "builder-fix-adapter-trainer";
+                      const isAdapterFirstReal = action.id === "builder-first-real-adapter-run";
                       const isAdapterPromote = action.id === "builder-promote-adapter";
                       const isRetest = action.id === "builder-retest-ai";
                       const disabled = isRebuild
@@ -396,12 +401,14 @@ export function ModelLab({
                             ? adapterTrainingBusy || adapterTrainingRun?.status === "running"
                             : isAdapterFix
                               ? adapterFixLoopBusy
-                              : isAdapterPromote
-                                ? adapterPromoteBusy || adapterPromotion?.ok === true
-                                : isRetest
-                                  ? chatBusy
-                                  : false;
-                      const Icon = isRebuild ? RefreshCw : isAdapterPrep ? Hammer : isAdapterRun ? Play : isAdapterFix ? Wand2 : isAdapterPromote ? Download : MessageSquare;
+                              : isAdapterFirstReal
+                                ? adapterFirstRealBusy || adapterTrainingRun?.status === "running"
+                                : isAdapterPromote
+                                  ? adapterPromoteBusy || adapterPromotion?.ok === true
+                                  : isRetest
+                                    ? chatBusy
+                                    : false;
+                      const Icon = isRebuild ? RefreshCw : isAdapterPrep ? Hammer : isAdapterRun ? Play : isAdapterFix ? Wand2 : isAdapterFirstReal ? Rocket : isAdapterPromote ? Download : MessageSquare;
                       const busyLabel = isRebuild
                         ? "Rebuilding"
                         : isAdapterPrep
@@ -410,15 +417,17 @@ export function ModelLab({
                             ? adapterTrainingRun?.status === "running" ? "Training" : "Starting"
                             : isAdapterFix
                               ? "Fixing"
-                              : isAdapterPromote
-                                ? adapterPromotion?.ok ? "Promoted" : "Promoting"
-                                : "Testing";
+                              : isAdapterFirstReal
+                                ? "Running"
+                                : isAdapterPromote
+                                  ? adapterPromotion?.ok ? "Promoted" : "Promoting"
+                                  : "Testing";
                       return (
                         <button
-                          className={isRebuild || isAdapterPrep || isAdapterRun || isAdapterFix ? "primary-action compact" : "plain-button small"}
+                          className={isRebuild || isAdapterPrep || isAdapterRun || isAdapterFix || isAdapterFirstReal ? "primary-action compact" : "plain-button small"}
                           disabled={disabled}
                           key={`${item.id}-${action.id}`}
-                          onClick={isRebuild ? onRebuildBuilderAi : isAdapterPrep ? onBuildAdapter : isAdapterRun ? onRunAdapterTraining : isAdapterFix ? onRunAdapterFixLoop : isAdapterPromote ? onPromoteAdapter : onRetestBuilderAi}
+                          onClick={isRebuild ? onRebuildBuilderAi : isAdapterPrep ? onBuildAdapter : isAdapterRun ? onRunAdapterTraining : isAdapterFix ? onRunAdapterFixLoop : isAdapterFirstReal ? onStartAdapterFirstRealRun : isAdapterPromote ? onPromoteAdapter : onRetestBuilderAi}
                           title={action.detail}
                           type="button"
                         >
