@@ -27,6 +27,11 @@ model trainer.
   model, warmed cache, CUDA, hardware tier, dataset, and requested mode checks
   pass. It can still allow a dry-run receipt so users can test the runner path
   without claiming trained weights.
+- The Assisted Trainer Fix Loop can prepare D-drive caches, verify
+  Python/package compatibility, apply the recommended base model, and run
+  dependency/cache jobs when explicitly allowed. Real installs and model cache
+  warmups still depend on network access, package indexes, Hugging Face model
+  availability, local disk space, and CUDA/PyTorch compatibility.
 - Dry-run adapter receipts prove the dataset/config/runner path executed, but
   they do not claim trained weights. Promotion into an Ollama target is blocked
   until real adapter weight and config files are detected.

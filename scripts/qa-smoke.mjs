@@ -60,6 +60,16 @@ async function pollAdapterOperation(job) {
   return current;
 }
 
+async function pollAdapterFixLoop(fixLoop) {
+  let current = fixLoop || null;
+  for (let index = 0; index < 80 && current && ["queued", "running"].includes(String(current.status || "").toLowerCase()); index += 1) {
+    await sleep(250);
+    const polled = await getJson(`/api/builder/adapter/training/fix?fixId=${encodeURIComponent(current.fixId)}`);
+    current = polled.fixLoop || current;
+  }
+  return current;
+}
+
 async function main() {
   let [project, sources, setup, ollama, exportPackResponse, datasetResponse, modelLibraryResponse, projectRegistryResponse, diagnosticsResponse, doctorStartDryRun, doctorRepairDryRun] = await Promise.all([
     getJson("/api/project"),
@@ -91,6 +101,7 @@ async function main() {
   let latestAdapterOperationJob = project.latestAdapterOperationJob || null;
   let adapterOperationHistory = project.adapterOperationHistory || [];
   let latestAdapterPreflight = project.latestAdapterPreflight || null;
+  let latestAdapterFixLoop = project.latestAdapterFixLoop || null;
   let latestAdapterTrainingRun = project.latestAdapterTrainingRun || null;
   let adapterDepsDryRun = null;
   let adapterDepsOperationDryRun = null;
@@ -144,6 +155,15 @@ async function main() {
       allowLongRun: true
     });
     latestAdapterPreflight = preflightResponse.preflight || latestAdapterPreflight;
+    const fixLoopStarted = await postJson("/api/builder/adapter/training/fix", {
+      adapterBuildId: latestAdapterBuild.adapterBuildId,
+      allowDependencyInstall: true,
+      allowCacheWarmup: true,
+      dryRun: true,
+      includeOptional: false,
+      startTraining: false
+    });
+    latestAdapterFixLoop = await pollAdapterFixLoop(fixLoopStarted.fixLoop);
     const started = await postJson("/api/builder/adapter/training/run", {
       adapterBuildId: latestAdapterBuild.adapterBuildId,
       runTraining: false,
@@ -162,6 +182,7 @@ async function main() {
     latestAdapterOperationJob = project.latestAdapterOperationJob || adapterCacheOperationDryRun || adapterDepsOperationDryRun || latestAdapterOperationJob;
     adapterOperationHistory = project.adapterOperationHistory || adapterOperationHistory;
     latestAdapterPreflight = project.latestAdapterPreflight || latestAdapterPreflight;
+    latestAdapterFixLoop = project.latestAdapterFixLoop || latestAdapterFixLoop;
     latestAdapterTrainingRun = project.latestAdapterTrainingRun || latestAdapterTrainingRun;
     modelLibrary = refreshedModelLibraryResponse.library || modelLibrary;
   }
@@ -453,6 +474,25 @@ async function main() {
         : "no adapter trainer preflight receipt"
     ),
     check(
+      "Adapter assisted fix loop receipt",
+      Boolean(
+        latestAdapterFixLoop?.schema === "modelforge.adapter_trainer_fix_loop.v1" &&
+          latestAdapterFixLoop.adapterBuildId === latestAdapterBuild?.adapterBuildId &&
+          latestAdapterFixLoop.settings?.dryRun === true &&
+          latestAdapterFixLoop.actions?.some((item) => item.id === "cache-root" && item.status === "pass") &&
+          latestAdapterFixLoop.actions?.some((item) => item.id === "dependency-install") &&
+          latestAdapterFixLoop.actions?.some((item) => item.id === "base-cache-warmup") &&
+          latestAdapterFixLoop.preflightAfter?.schema === "modelforge.adapter_trainer_preflight.v1" &&
+          latestAdapterFixLoop.trainingUnlock?.willRunMode &&
+          latestAdapterFixLoop.cachePlan?.onPreferredDrive &&
+          latestAdapterFixLoop.files?.latestJson &&
+          existsSync(latestAdapterFixLoop.files.latestJson)
+      ),
+      latestAdapterFixLoop
+        ? `${latestAdapterFixLoop.status}: real=${latestAdapterFixLoop.trainingUnlock?.realTraining ? "unlocked" : "locked"}; actions=${latestAdapterFixLoop.actions?.length || 0}`
+        : "no adapter assisted fix loop receipt"
+    ),
+    check(
       "Adapter Training Run receipt",
       Boolean(
         latestAdapterTrainingRun?.schema === "modelforge.adapter_training_run.v1" &&
@@ -551,7 +591,9 @@ async function main() {
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Readiness receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Operation receipt" && receipt.exists) &&
           adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Preflight receipt" && receipt.exists) &&
+          adapterLibraryItem.receipts?.some((receipt) => receipt.label === "Fix loop receipt" && receipt.exists) &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-build-adapter" && action.kind === "builder-adapter") &&
+          adapterLibraryItem.actions?.some((action) => action.id === "builder-fix-adapter-trainer" && action.kind === "builder-adapter-fix") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-run-adapter-training" && action.kind === "builder-adapter-run") &&
           adapterLibraryItem.actions?.some((action) => action.id === "builder-promote-adapter" && action.kind === "builder-adapter-promote")
       ),

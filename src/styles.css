@@ -2480,6 +2480,33 @@ h2 {
   background: rgba(254, 242, 242, 0.82);
 }
 
+.adapter-fix-loop-panel {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  border-radius: 7px;
+  background: rgba(240, 253, 250, 0.78);
+}
+
+.adapter-fix-loop-panel.pass {
+  border-color: rgba(22, 163, 74, 0.2);
+  background: rgba(240, 253, 244, 0.76);
+}
+
+.adapter-fix-loop-panel.running,
+.adapter-fix-loop-panel.blocked {
+  border-color: rgba(202, 138, 4, 0.25);
+  background: rgba(254, 252, 232, 0.82);
+}
+
+.adapter-fix-loop-panel.fail,
+.adapter-fix-loop-panel.canceled {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(254, 242, 242, 0.82);
+}
+
 .adapter-readiness-mini {
   display: grid;
   gap: 7px;

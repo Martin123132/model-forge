@@ -42,6 +42,10 @@ forge cockpit.
 - Added Adapter Trainer Preflight receipts and Builder guardrails so Run
   Trainer checks dependency, cache, CUDA, base-model, dataset, and requested
   mode readiness before any real LoRA/QLoRA run can start.
+- Added the Assisted Trainer Fix Loop so Builder can turn preflight blockers
+  into Fix Trainer actions, prepare D-drive caches, verify Python/packages,
+  apply the recommended base model, run allowed dependency/cache jobs, re-run
+  preflight, and write a fix receipt before real training is unlocked.
 - Added Adapter Training Run receipts so Run Trainer executes the local runner,
   streams progress/log tails, supports cancellation, detects dry-run versus real
   checkpoints, and updates the adapter status.

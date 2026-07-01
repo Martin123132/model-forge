@@ -27,6 +27,7 @@ const recipeRunJobs = new Map();
 const builderRunJobs = new Map();
 const adapterTrainingRunJobs = new Map();
 const adapterOperationJobs = new Map();
+const adapterFixLoopJobs = new Map();
 
 const skippedDirs = new Set([
   ".git",
@@ -109,6 +110,7 @@ async function ensureDataRootAt(root = dataRoot) {
   await mkdir(join(root, "adapters", "runs"), { recursive: true });
   await mkdir(join(root, "adapters", "operations"), { recursive: true });
   await mkdir(join(root, "adapters", "preflight"), { recursive: true });
+  await mkdir(join(root, "adapters", "fixes"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness"), { recursive: true });
   await mkdir(join(root, "adapters", "readiness", "history"), { recursive: true });
   await mkdir(join(root, "logs"), { recursive: true });
@@ -4875,6 +4877,379 @@ async function buildAdapterTrainerPreflight(body = {}, options = {}) {
 
 async function getLatestAdapterTrainerPreflight() {
   return readJsonIfExists(join(dataRoot, "adapters", "preflight", "latest-preflight.json"));
+}
+
+function adapterTrainerFixLoopFiles(fixId) {
+  const latestDir = join(dataRoot, "adapters", "fixes");
+  const historyDir = join(latestDir, "history", fixId);
+  return {
+    latestJson: join(latestDir, "latest-fix-loop.json"),
+    latestMarkdown: join(latestDir, "latest-fix-loop.md"),
+    historyJson: join(historyDir, "fix-loop.json"),
+    historyMarkdown: join(historyDir, "fix-loop.md")
+  };
+}
+
+function adapterTrainerFixLoopMarkdown(receipt) {
+  return [
+    "# Adapter Trainer Assisted Fix Loop",
+    "",
+    `Fix loop: ${receipt.fixId}`,
+    `Created: ${receipt.createdAt}`,
+    `Ended: ${receipt.endedAt || ""}`,
+    `Status: ${receipt.status}`,
+    `Adapter build: ${receipt.adapterBuildId || ""}`,
+    "",
+    "## Summary",
+    "",
+    receipt.summary || "",
+    "",
+    "## Actions",
+    "",
+    ...(receipt.actions?.length
+      ? receipt.actions.map((item) => `- ${item.label}: ${item.status} - ${item.detail || item.summary || ""}${item.receiptPath ? ` (${item.receiptPath})` : ""}`)
+      : ["- No actions recorded."]),
+    "",
+    "## Unlock",
+    "",
+    `Real training: ${receipt.trainingUnlock?.realTraining ? "unlocked" : "locked"}`,
+    `Dry-run: ${receipt.trainingUnlock?.dryRun ? "available" : "blocked"}`,
+    `Will run: ${receipt.trainingUnlock?.willRunMode || ""}`,
+    `Reason: ${receipt.trainingUnlock?.reason || ""}`,
+    "",
+    "## Cache",
+    "",
+    `Root: ${receipt.cachePlan?.root || ""}`,
+    `Preferred drive: ${receipt.cachePlan?.onPreferredDrive ? "yes" : "no"}`,
+    "",
+    ...(receipt.blockers?.length ? ["## Blockers", "", ...receipt.blockers.map((item) => `- ${item}`), ""] : []),
+    ...(receipt.warnings?.length ? ["## Warnings", "", ...receipt.warnings.map((item) => `- ${item}`), ""] : []),
+    ""
+  ].join("\n");
+}
+
+function publicAdapterTrainerFixLoop(fixLoop) {
+  return fixLoop || null;
+}
+
+async function persistAdapterTrainerFixLoop(fixLoop) {
+  if (!fixLoop?.files) return;
+  const safeFixLoop = publicAdapterTrainerFixLoop(fixLoop);
+  await mkdir(dirname(fixLoop.files.latestJson), { recursive: true });
+  await mkdir(dirname(fixLoop.files.historyJson), { recursive: true });
+  await writeJson(fixLoop.files.latestJson, safeFixLoop);
+  await writeFile(fixLoop.files.latestMarkdown, adapterTrainerFixLoopMarkdown(safeFixLoop), "utf-8");
+  await writeJson(fixLoop.files.historyJson, safeFixLoop);
+  await writeFile(fixLoop.files.historyMarkdown, adapterTrainerFixLoopMarkdown(safeFixLoop), "utf-8");
+}
+
+async function getLatestAdapterTrainerFixLoop() {
+  const running = Array.from(adapterFixLoopJobs.values())
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  if (running) return publicAdapterTrainerFixLoop(running);
+  return readJsonIfExists(join(dataRoot, "adapters", "fixes", "latest-fix-loop.json"));
+}
+
+async function getAdapterTrainerFixLoop(fixId = "") {
+  const safeId = String(fixId || "").trim();
+  if (safeId && adapterFixLoopJobs.has(safeId)) return publicAdapterTrainerFixLoop(adapterFixLoopJobs.get(safeId));
+  if (!safeId) return getLatestAdapterTrainerFixLoop();
+  if (!/^adapter-fix-\d{4}-\d{2}-\d{2}T/.test(safeId)) {
+    throw new Error("A valid adapter trainer fix id is required.");
+  }
+  return readJsonIfExists(join(dataRoot, "adapters", "fixes", "history", safeId, "fix-loop.json"));
+}
+
+function adapterFixAction(fixLoop, id, label, detail = "", status = "pending", extra = {}) {
+  const existing = (fixLoop.actions || []).find((item) => item.id === id);
+  const next = {
+    id,
+    label,
+    detail,
+    status,
+    summary: extra.summary || detail,
+    startedAt: existing?.startedAt || extra.startedAt || "",
+    endedAt: extra.endedAt || existing?.endedAt || "",
+    jobId: extra.jobId || existing?.jobId || "",
+    operationKind: extra.operationKind || existing?.operationKind || "",
+    receiptPath: extra.receiptPath || existing?.receiptPath || "",
+    ok: extra.ok ?? existing?.ok ?? false
+  };
+  if (status === "running" && !next.startedAt) next.startedAt = new Date().toISOString();
+  if (["pass", "warn", "fail", "blocked", "skipped"].includes(status) && !next.endedAt) next.endedAt = new Date().toISOString();
+  if (existing) Object.assign(existing, next);
+  else fixLoop.actions.push(next);
+  fixLoop.updatedAt = new Date().toISOString();
+  return existing || next;
+}
+
+function adapterPreflightCheck(preflight, id) {
+  return (preflight?.checks || []).find((item) => item.id === id) || null;
+}
+
+async function waitForAdapterOperationForFixLoop(fixLoop, job, actionId) {
+  let current = job || null;
+  for (let index = 0; index < 21600 && current && !terminalRunStatus(current.status); index += 1) {
+    current = await getAdapterOperationJob(current.jobId);
+    fixLoop.latestOperations = {
+      ...(fixLoop.latestOperations || {}),
+      [current?.kind === "base-cache-warmup" ? "baseCacheWarmup" : "dependencyInstall"]: current
+    };
+    adapterFixAction(fixLoop, actionId, adapterOperationLabel(current?.kind), current?.summary || "Operation running.", "running", {
+      jobId: current?.jobId || "",
+      operationKind: current?.kind || "",
+      receiptPath: current?.files?.latestReceiptJson || current?.files?.receiptJson || ""
+    });
+    await persistAdapterTrainerFixLoop(fixLoop);
+    await sleep(1000);
+  }
+  if (current && !terminalRunStatus(current.status)) current = await getAdapterOperationJob(current.jobId);
+  return current;
+}
+
+async function refreshAdapterFixLoopPreflight(fixLoop, label = "Preflight") {
+  const preflight = await buildAdapterTrainerPreflight(
+    { adapterBuildId: fixLoop.adapterBuildId, runTraining: true, allowLongRun: true },
+    { write: true }
+  );
+  fixLoop.preflightAfter = preflight;
+  fixLoop.readinessAfter = preflight.readiness || null;
+  fixLoop.trainingUnlock = {
+    realTraining: Boolean(preflight.guard?.realTrainingAllowed),
+    dryRun: Boolean(preflight.guard?.dryRunAllowed),
+    willRunMode: preflight.guard?.willRunMode || "dry-run",
+    reason: preflight.guard?.reason || "",
+    nextAction: preflight.guard?.realTrainingAllowed
+      ? "Run Trainer is unlocked for a real tiny LoRA/QLoRA run."
+      : "Run Trainer will stay in dry-run until the remaining blockers clear."
+  };
+  fixLoop.blockers = preflight.blockers || [];
+  fixLoop.warnings = preflight.warnings || [];
+  adapterFixAction(fixLoop, `preflight-${(fixLoop.actions || []).filter((item) => item.id.startsWith("preflight-")).length + 1}`, label, preflight.summary, preflight.guard?.realTrainingAllowed ? "pass" : "warn", {
+    ok: Boolean(preflight.guard?.realTrainingAllowed),
+    receiptPath: preflight.files?.latestJson || ""
+  });
+  await persistAdapterTrainerFixLoop(fixLoop);
+  return preflight;
+}
+
+async function startAdapterTrainerFixLoop(body = {}) {
+  await ensureDataRoot();
+  const adapterReceipt = await getAdapterBuilderReceiptById(body.adapterBuildId || "");
+  if (!adapterReceipt?.adapterBuildId) {
+    throw new Error("Prepare an adapter before running the assisted trainer fix loop.");
+  }
+  const existing = Array.from(adapterFixLoopJobs.values()).find((job) => job.adapterBuildId === adapterReceipt.adapterBuildId && job.status === "running");
+  if (existing && body.reuseRunning !== false) return publicAdapterTrainerFixLoop(existing);
+  const createdAt = new Date().toISOString();
+  const fixId = `adapter-fix-${createdAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z")}`;
+  const files = adapterTrainerFixLoopFiles(fixId);
+  const cachePlan = adapterTrainingCachePlan();
+  const fixLoop = {
+    schema: "modelforge.adapter_trainer_fix_loop.v1",
+    fixId,
+    createdAt,
+    endedAt: "",
+    updatedAt: createdAt,
+    ok: false,
+    status: "running",
+    adapterBuildId: adapterReceipt.adapterBuildId,
+    planId: adapterReceipt.planId || "",
+    adapterName: adapterReceipt.adapter?.name || "",
+    method: adapterReceipt.adapter?.method || "",
+    summary: "Assisted trainer fix loop is checking the environment and applying allowed fixes.",
+    settings: {
+      allowDependencyInstall: body.allowDependencyInstall === true,
+      allowCacheWarmup: body.allowCacheWarmup === true,
+      dryRun: body.dryRun === true,
+      includeOptional: body.includeOptional === true,
+      startTraining: body.startTraining === true
+    },
+    cachePlan,
+    preflightBefore: null,
+    preflightAfter: null,
+    readinessAfter: null,
+    latestOperations: {
+      dependencyInstall: null,
+      baseCacheWarmup: null
+    },
+    trainingRun: null,
+    trainingUnlock: {
+      realTraining: false,
+      dryRun: false,
+      willRunMode: "dry-run",
+      reason: "Fix loop has not completed yet.",
+      nextAction: "Wait for assisted fixes to complete."
+    },
+    actions: [],
+    blockers: [],
+    warnings: [],
+    files
+  };
+  adapterFixLoopJobs.set(fixId, fixLoop);
+  await persistAdapterTrainerFixLoop(fixLoop);
+  void runAdapterTrainerFixLoop(fixLoop, body).catch(async (error) => {
+    fixLoop.status = "fail";
+    fixLoop.ok = false;
+    fixLoop.summary = String(error?.message || error);
+    fixLoop.endedAt = new Date().toISOString();
+    fixLoop.updatedAt = fixLoop.endedAt;
+    fixLoop.blockers = [fixLoop.summary];
+    adapterFixAction(fixLoop, "fix-loop-error", "Fix loop error", fixLoop.summary, "fail", { ok: false });
+    await persistAdapterTrainerFixLoop(fixLoop);
+    adapterFixLoopJobs.delete(fixLoop.fixId);
+  });
+  return publicAdapterTrainerFixLoop(fixLoop);
+}
+
+async function runAdapterTrainerFixLoop(fixLoop, body = {}) {
+  try {
+    await ensureAdapterTrainingCacheDirs(fixLoop.cachePlan);
+    adapterFixAction(fixLoop, "cache-root", "Prepare D-drive caches", fixLoop.cachePlan.summary, fixLoop.cachePlan.onPreferredDrive ? "pass" : "warn", {
+      ok: Boolean(fixLoop.cachePlan.onPreferredDrive)
+    });
+    let preflight = await buildAdapterTrainerPreflight(
+      { adapterBuildId: fixLoop.adapterBuildId, runTraining: true, allowLongRun: true },
+      { write: true }
+    );
+    fixLoop.preflightBefore = preflight;
+    fixLoop.preflightAfter = preflight;
+    fixLoop.readinessAfter = preflight.readiness || null;
+    adapterFixAction(fixLoop, "python-runtime", "Verify Python and packages", preflight.readiness?.python?.summary || "Python runtime checked.", preflight.readiness?.python?.ok ? "pass" : "fail", {
+      ok: Boolean(preflight.readiness?.python?.ok),
+      receiptPath: preflight.readiness?.files?.latestJson || ""
+    });
+    await persistAdapterTrainerFixLoop(fixLoop);
+
+    const baseModelCheck = adapterPreflightCheck(preflight, "base-model");
+    if (baseModelCheck && baseModelCheck.status !== "pass") {
+      adapterFixAction(fixLoop, "apply-base-model", "Use recommended base", baseModelCheck.detail, "running");
+      await persistAdapterTrainerFixLoop(fixLoop);
+      const applied = await applyRecommendedAdapterBaseModel({ adapterBuildId: fixLoop.adapterBuildId });
+      adapterFixAction(fixLoop, "apply-base-model", "Use recommended base", applied.readiness?.recommendedBaseModel?.summary || "Recommended Transformers base model applied.", applied.ok ? "pass" : "warn", {
+        ok: Boolean(applied.readiness?.recommendedBaseModel?.applied),
+        receiptPath: applied.receipt?.files?.receiptJson || ""
+      });
+      preflight = await refreshAdapterFixLoopPreflight(fixLoop, "Preflight after base model");
+    } else {
+      adapterFixAction(fixLoop, "apply-base-model", "Use recommended base", baseModelCheck?.detail || "Transformers base model is already set.", "pass", { ok: true });
+    }
+
+    const depsCheck = adapterPreflightCheck(preflight, "dependencies");
+    if (depsCheck && depsCheck.status !== "pass") {
+      if (fixLoop.settings.allowDependencyInstall) {
+        adapterFixAction(fixLoop, "dependency-install", "Install/check trainer deps", depsCheck.detail, "running");
+        await persistAdapterTrainerFixLoop(fixLoop);
+        const depJob = await createAdapterOperationJob("dependency-install", {
+          adapterBuildId: fixLoop.adapterBuildId,
+          includeOptional: fixLoop.settings.includeOptional,
+          dryRun: fixLoop.settings.dryRun,
+          reuseRunning: true
+        });
+        fixLoop.latestOperations.dependencyInstall = depJob;
+        const finishedDepJob = await waitForAdapterOperationForFixLoop(fixLoop, depJob, "dependency-install");
+        fixLoop.latestOperations.dependencyInstall = finishedDepJob || depJob;
+        adapterFixAction(fixLoop, "dependency-install", "Install/check trainer deps", finishedDepJob?.summary || "Dependency install finished.", finishedDepJob?.ok && !finishedDepJob?.dryRun ? "pass" : finishedDepJob?.ok ? "warn" : "fail", {
+          ok: Boolean(finishedDepJob?.ok && !finishedDepJob?.dryRun),
+          jobId: finishedDepJob?.jobId || depJob.jobId,
+          operationKind: "dependency-install",
+          receiptPath: finishedDepJob?.files?.latestReceiptJson || finishedDepJob?.files?.receiptJson || ""
+        });
+        preflight = await refreshAdapterFixLoopPreflight(fixLoop, "Preflight after dependency install");
+      } else {
+        adapterFixAction(fixLoop, "dependency-install", "Install/check trainer deps", "Dependency installation needs explicit permission from the assisted fix action.", "blocked", { ok: false });
+      }
+    } else {
+      adapterFixAction(fixLoop, "dependency-install", "Install/check trainer deps", depsCheck?.detail || "Required trainer dependencies are importable.", "pass", { ok: true });
+    }
+
+    const cacheCheck = adapterPreflightCheck(preflight, "base-cache");
+    const depsReadyNow = adapterPreflightCheck(preflight, "dependencies")?.status === "pass";
+    if (cacheCheck && cacheCheck.status !== "pass") {
+      if (fixLoop.settings.allowCacheWarmup && (depsReadyNow || fixLoop.settings.dryRun)) {
+        adapterFixAction(fixLoop, "base-cache-warmup", "Warm base-model cache", cacheCheck.detail, "running");
+        await persistAdapterTrainerFixLoop(fixLoop);
+        const modelId =
+          preflight.readiness?.recommendedBaseModel?.configuredModelId ||
+          preflight.readiness?.recommendedBaseModel?.modelId ||
+          "";
+        const cacheJob = await createAdapterOperationJob("base-cache-warmup", {
+          adapterBuildId: fixLoop.adapterBuildId,
+          modelId,
+          dryRun: fixLoop.settings.dryRun,
+          reuseRunning: true
+        });
+        fixLoop.latestOperations.baseCacheWarmup = cacheJob;
+        const finishedCacheJob = await waitForAdapterOperationForFixLoop(fixLoop, cacheJob, "base-cache-warmup");
+        fixLoop.latestOperations.baseCacheWarmup = finishedCacheJob || cacheJob;
+        adapterFixAction(fixLoop, "base-cache-warmup", "Warm base-model cache", finishedCacheJob?.summary || "Base cache warmup finished.", finishedCacheJob?.ok && !finishedCacheJob?.dryRun ? "pass" : finishedCacheJob?.ok ? "warn" : "fail", {
+          ok: Boolean(finishedCacheJob?.ok && !finishedCacheJob?.dryRun),
+          jobId: finishedCacheJob?.jobId || cacheJob.jobId,
+          operationKind: "base-cache-warmup",
+          receiptPath: finishedCacheJob?.files?.latestReceiptJson || finishedCacheJob?.files?.receiptJson || ""
+        });
+        preflight = await refreshAdapterFixLoopPreflight(fixLoop, "Preflight after cache warmup");
+      } else {
+        const reason = depsReadyNow
+          ? "Base-model cache warmup needs explicit download permission."
+          : "Base-model cache warmup waits until trainer dependencies are importable.";
+        adapterFixAction(fixLoop, "base-cache-warmup", "Warm base-model cache", reason, "blocked", { ok: false });
+      }
+    } else {
+      adapterFixAction(fixLoop, "base-cache-warmup", "Warm base-model cache", cacheCheck?.detail || "Base cache is ready.", "pass", { ok: true });
+    }
+
+    const finalPreflight = await refreshAdapterFixLoopPreflight(fixLoop, "Final preflight");
+    const realTrainingReady = Boolean(finalPreflight.guard?.realTrainingAllowed);
+    if (fixLoop.settings.startTraining && realTrainingReady) {
+      adapterFixAction(fixLoop, "start-training", "Start first real adapter run", "Real training is unlocked; starting the tiny adapter run.", "running");
+      const trainingRun = await startAdapterTrainingRun({
+        adapterBuildId: fixLoop.adapterBuildId,
+        runTraining: true,
+        allowLongRun: true
+      });
+      fixLoop.trainingRun = trainingRun;
+      adapterFixAction(fixLoop, "start-training", "Start first real adapter run", trainingRun.summary, "pass", {
+        ok: true,
+        receiptPath: trainingRun.files?.latestJson || trainingRun.files?.trainingReceiptJson || ""
+      });
+    } else if (realTrainingReady) {
+      adapterFixAction(fixLoop, "start-training", "Start first real adapter run", "Run Trainer is now unlocked; ModelForge will start real mode when you press it.", "pass", { ok: true });
+    } else {
+      adapterFixAction(fixLoop, "start-training", "Start first real adapter run", finalPreflight.guard?.reason || "Real training remains locked.", "blocked", { ok: false });
+    }
+
+    fixLoop.ok = realTrainingReady;
+    fixLoop.status = realTrainingReady ? "pass" : finalPreflight.guard?.dryRunAllowed ? "blocked" : "fail";
+    fixLoop.summary = realTrainingReady
+      ? "Assisted fixes completed and real tiny LoRA/QLoRA training is unlocked."
+      : `Assisted fixes completed, but real training remains locked: ${finalPreflight.guard?.reason || "remaining blockers are still present"}`;
+    fixLoop.endedAt = new Date().toISOString();
+    fixLoop.updatedAt = fixLoop.endedAt;
+    fixLoop.trainingUnlock = {
+      realTraining: realTrainingReady,
+      dryRun: Boolean(finalPreflight.guard?.dryRunAllowed),
+      willRunMode: finalPreflight.guard?.willRunMode || "dry-run",
+      reason: finalPreflight.guard?.reason || "",
+      nextAction: realTrainingReady
+        ? "Press Run Trainer to start the first real tiny LoRA/QLoRA run."
+        : "Use the remaining blocker details before trying a real training run."
+    };
+    fixLoop.blockers = finalPreflight.blockers || [];
+    fixLoop.warnings = finalPreflight.warnings || [];
+    await persistAdapterTrainerFixLoop(fixLoop);
+    adapterFixLoopJobs.delete(fixLoop.fixId);
+  } catch (error) {
+    fixLoop.status = "fail";
+    fixLoop.ok = false;
+    fixLoop.summary = String(error?.message || error);
+    fixLoop.endedAt = new Date().toISOString();
+    fixLoop.updatedAt = fixLoop.endedAt;
+    fixLoop.blockers = [fixLoop.summary];
+    adapterFixAction(fixLoop, "fix-loop-error", "Fix loop error", fixLoop.summary, "fail", { ok: false });
+    await persistAdapterTrainerFixLoop(fixLoop);
+    adapterFixLoopJobs.delete(fixLoop.fixId);
+  }
 }
 
 function adapterDependencyInstallMarkdown(receipt) {
@@ -10122,6 +10497,7 @@ async function buildModelLibrary() {
     latestAdapterReadiness,
     latestAdapterOperationJob,
     latestAdapterPreflight,
+    latestAdapterFixLoop,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     recipeRunHistory,
@@ -10143,6 +10519,7 @@ async function buildModelLibrary() {
     getLatestAdapterTrainingReadiness(),
     getLatestAdapterOperationJob(),
     getLatestAdapterTrainerPreflight(),
+    getLatestAdapterTrainerFixLoop(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getRecipeRunHistory(),
@@ -10175,6 +10552,7 @@ async function buildModelLibrary() {
     libraryReceipt("Adapter readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
     libraryReceipt("Adapter operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
     libraryReceipt("Adapter preflight receipt", latestAdapterPreflight?.files?.latestJson, "receipt"),
+    libraryReceipt("Adapter fix loop receipt", latestAdapterFixLoop?.files?.latestJson, "receipt"),
     libraryReceipt("Adapter training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
     libraryReceipt("Adapter promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
     libraryReceipt("Model profile", latestModelExport?.profilePath, "model"),
@@ -10281,7 +10659,8 @@ async function buildModelLibrary() {
         latestRun: latestAdapterTrainingRun?.status || "not run",
         readiness: latestAdapterReadiness?.status || "not checked",
         operation: latestAdapterOperationJob?.status || "not run",
-        preflight: latestAdapterPreflight?.status || "not checked"
+        preflight: latestAdapterPreflight?.status || "not checked",
+        fixLoop: latestAdapterFixLoop?.status || "not run"
       },
       receipts: [
         libraryReceipt("Adapter receipt", latestAdapterBuild.files?.receiptJson, "receipt"),
@@ -10291,6 +10670,7 @@ async function buildModelLibrary() {
         libraryReceipt("Readiness receipt", latestAdapterReadiness?.files?.latestJson, "receipt"),
         libraryReceipt("Operation receipt", latestAdapterOperationJob?.files?.latestReceiptJson || latestAdapterOperationJob?.files?.receiptJson, "receipt"),
         libraryReceipt("Preflight receipt", latestAdapterPreflight?.files?.latestJson, "receipt"),
+        libraryReceipt("Fix loop receipt", latestAdapterFixLoop?.files?.latestJson, "receipt"),
         libraryReceipt("Training run", latestAdapterTrainingRun?.files?.latestJson || latestAdapterTrainingRun?.files?.runJson, "receipt"),
         libraryReceipt("Promotion receipt", latestAdapterPromotion?.files?.latestJson, "receipt"),
         libraryReceipt("Adapter manifest", latestAdapterBuild.files?.adapterManifestJson, "artifact"),
@@ -10311,6 +10691,13 @@ async function buildModelLibrary() {
           kind: "builder-adapter-run",
           workspace: "builder",
           detail: "Run the local adapter trainer; ModelForge dry-runs unless hardware, dependencies, and model config are ready."
+        },
+        {
+          id: "builder-fix-adapter-trainer",
+          label: latestAdapterFixLoop?.status === "running" ? "Fixing Trainer" : "Fix Trainer",
+          kind: "builder-adapter-fix",
+          workspace: "builder",
+          detail: "Run the assisted trainer fix loop before trying a real adapter training run."
         },
         {
           id: "builder-promote-adapter",
@@ -10770,6 +11157,7 @@ async function getProjectPayload() {
     latestAdapterReadiness,
     latestAdapterOperationJob,
     latestAdapterPreflight,
+    latestAdapterFixLoop,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterOperationHistory,
@@ -10797,6 +11185,7 @@ async function getProjectPayload() {
     getLatestAdapterTrainingReadiness(),
     getLatestAdapterOperationJob(),
     getLatestAdapterTrainerPreflight(),
+    getLatestAdapterTrainerFixLoop(),
     getLatestAdapterTrainingRun(),
     getLatestAdapterPromotionReceipt(),
     getAdapterOperationHistory(),
@@ -10843,6 +11232,7 @@ async function getProjectPayload() {
     latestAdapterReadiness,
     latestAdapterOperationJob,
     latestAdapterPreflight,
+    latestAdapterFixLoop,
     latestAdapterTrainingRun,
     latestAdapterPromotion,
     adapterOperationHistory,
@@ -11277,6 +11667,18 @@ async function handleApi(request, response, url) {
       const body = await readJsonBody(request);
       const preflight = await buildAdapterTrainerPreflight(body, { write: true });
       sendJson(response, 200, { ok: preflight.ok, preflight, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/builder/adapter/training/fix") {
+      const body = await readJsonBody(request);
+      const fixLoop = await startAdapterTrainerFixLoop(body);
+      sendJson(response, fixLoop.status === "running" ? 202 : 200, { ok: fixLoop.ok, fixLoop, project: await getProjectPayload() });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/builder/adapter/training/fix") {
+      sendJson(response, 200, { ok: true, fixLoop: await getAdapterTrainerFixLoop(url.searchParams.get("fixId") || "") });
       return;
     }
 

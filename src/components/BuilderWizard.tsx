@@ -28,6 +28,7 @@ import type {
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
+  AdapterTrainerFixLoopReceipt,
   AdapterTrainerPreflightReceipt,
   AdapterTrainingRun,
   BuilderAiCreateReceipt,
@@ -64,6 +65,7 @@ type BuilderWizardProps = {
   adapterOperationJob?: AdapterOperationJob | null;
   adapterOperationHistory?: AdapterOperationJob[];
   adapterPreflight?: AdapterTrainerPreflightReceipt | null;
+  adapterFixLoop?: AdapterTrainerFixLoopReceipt | null;
   adapterTrainingRun?: AdapterTrainingRun | null;
   adapterPromotion?: AdapterPromotionReceipt | null;
   builderRun?: BuilderRun | null;
@@ -78,6 +80,7 @@ type BuilderWizardProps = {
   adapterCacheBusy: boolean;
   adapterBaseModelBusy: boolean;
   adapterPreflightBusy: boolean;
+  adapterFixLoopBusy: boolean;
   adapterTrainingBusy: boolean;
   adapterPromoteBusy: boolean;
   chatBusy: boolean;
@@ -95,6 +98,7 @@ type BuilderWizardProps = {
   onRetryAdapterOperation: (jobId: string) => void;
   onApplyRecommendedAdapterBaseModel: () => void;
   onRunAdapterPreflight: () => void;
+  onRunAdapterFixLoop: () => void;
   onRunAdapterTraining: () => void;
   onCancelAdapterTraining: (runId: string) => void;
   onPromoteAdapter: () => void;
@@ -607,6 +611,21 @@ function adapterPreflightLabel(preflight?: AdapterTrainerPreflightReceipt | null
   return preflight.status || "Preflight";
 }
 
+function adapterFixLoopTone(status?: string): "pass" | "warn" | "fail" | "neutral" {
+  if (status === "pass") return "pass";
+  if (status === "running" || status === "blocked") return "warn";
+  if (status === "fail" || status === "canceled") return "fail";
+  return "neutral";
+}
+
+function adapterFixLoopLabel(fixLoop?: AdapterTrainerFixLoopReceipt | null) {
+  if (!fixLoop) return "Not run";
+  if (fixLoop.status === "pass") return "Fixed";
+  if (fixLoop.status === "running") return "Fixing";
+  if (fixLoop.status === "blocked") return "Needs action";
+  return fixLoop.status || "Fix loop";
+}
+
 function optionLabel(options: Array<{ id: string; label: string }>, id?: string) {
   return options.find((option) => option.id === id)?.label || options[0]?.label || "Auto";
 }
@@ -1055,6 +1074,7 @@ export function BuilderWizard({
   adapterOperationJob,
   adapterOperationHistory = [],
   adapterPreflight,
+  adapterFixLoop,
   adapterTrainingRun,
   adapterPromotion,
   builderRun,
@@ -1069,6 +1089,7 @@ export function BuilderWizard({
   adapterCacheBusy,
   adapterBaseModelBusy,
   adapterPreflightBusy,
+  adapterFixLoopBusy,
   adapterTrainingBusy,
   adapterPromoteBusy,
   chatBusy,
@@ -1086,6 +1107,7 @@ export function BuilderWizard({
   onRetryAdapterOperation,
   onApplyRecommendedAdapterBaseModel,
   onRunAdapterPreflight,
+  onRunAdapterFixLoop,
   onRunAdapterTraining,
   onCancelAdapterTraining,
   onPromoteAdapter,
@@ -1264,6 +1286,11 @@ export function BuilderWizard({
   const adapterPreflightReceiptPath = currentAdapterPreflight?.files?.latestJson || currentAdapterPreflight?.files?.historyJson || "";
   const adapterPreflightNextAction = currentAdapterPreflight?.suggestedActions?.find((action) => action.primary) || currentAdapterPreflight?.suggestedActions?.[0] || null;
   const adapterWillRunRealTraining = Boolean(currentAdapterPreflight?.guard?.willRunMode === "train");
+  const adapterFixLoopMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterFixLoop?.adapterBuildId === adapterReceipt.adapterBuildId);
+  const currentAdapterFixLoop = adapterFixLoopMatchesReceipt ? adapterFixLoop : null;
+  const adapterFixLoopReceiptPath = currentAdapterFixLoop?.files?.latestJson || currentAdapterFixLoop?.files?.historyJson || "";
+  const adapterFixLoopActive = Boolean(currentAdapterFixLoop?.status === "running");
+  const adapterFixLoopLatestAction = [...(currentAdapterFixLoop?.actions || [])].reverse()[0] || null;
   const adapterRunMatchesReceipt = Boolean(adapterReceipt?.adapterBuildId && adapterTrainingRun?.adapterBuildId === adapterReceipt.adapterBuildId);
   const currentAdapterRun = adapterRunMatchesReceipt ? adapterTrainingRun : null;
   const adapterRunProgress = adapterRunPercent(currentAdapterRun);
@@ -2178,6 +2205,45 @@ export function BuilderWizard({
                   ) : null}
                 </div>
               ) : null}
+              {adapterReceipt && currentAdapterFixLoop ? (
+                <div className={`adapter-fix-loop-panel ${currentAdapterFixLoop.status || "pending"}`}>
+                  <div className="adapter-runner-head">
+                    <div>
+                      <strong>Assisted Fix</strong>
+                      <span>{currentAdapterFixLoop.summary || "Trainer fixes are being checked."}</span>
+                    </div>
+                    <StatusPill status={adapterFixLoopTone(currentAdapterFixLoop.status)} label={adapterFixLoopLabel(currentAdapterFixLoop)} />
+                  </div>
+                  <div className="adapter-builder-facts">
+                    <span>
+                      <strong>Latest</strong>
+                      <em>{adapterFixLoopLatestAction?.label || "waiting"}</em>
+                    </span>
+                    <span>
+                      <strong>Real train</strong>
+                      <em>{currentAdapterFixLoop.trainingUnlock?.realTraining ? "unlocked" : "locked"}</em>
+                    </span>
+                    <span>
+                      <strong>Cache root</strong>
+                      <em title={currentAdapterFixLoop.cachePlan?.root || ""}>{compactPath(currentAdapterFixLoop.cachePlan?.root || "")}</em>
+                    </span>
+                    <span>
+                      <strong>Receipt</strong>
+                      <em title={adapterFixLoopReceiptPath}>{compactPath(adapterFixLoopReceiptPath)}</em>
+                    </span>
+                  </div>
+                  {currentAdapterFixLoop.actions?.length ? (
+                    <div className="adapter-preflight-checks">
+                      {currentAdapterFixLoop.actions.slice(-6).map((action) => (
+                        <span key={action.id}>
+                          <StatusPill status={adapterFixLoopTone(action.status)} label={action.status} />
+                          <em title={action.detail || action.summary}>{action.label}</em>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {adapterReceipt ? (
                 <div className="adapter-runner-panel">
                   <div className="adapter-runner-head">
@@ -2255,6 +2321,12 @@ export function BuilderWizard({
                   <button className="plain-button small" type="button" onClick={onRunAdapterPreflight} disabled={adapterPreflightBusy || adapterOperationActive}>
                     {adapterPreflightBusy ? <LoaderCircle className="spin-icon" size={14} /> : <ListChecks size={14} />}
                     <span>{adapterPreflightBusy ? "Checking" : "Preflight"}</span>
+                  </button>
+                ) : null}
+                {adapterReceipt ? (
+                  <button className="plain-button small" type="button" onClick={onRunAdapterFixLoop} disabled={adapterFixLoopBusy || adapterOperationActive || adapterFixLoopActive}>
+                    {adapterFixLoopBusy || adapterFixLoopActive ? <LoaderCircle className="spin-icon" size={14} /> : <Wand2 size={14} />}
+                    <span>{adapterFixLoopBusy || adapterFixLoopActive ? "Fixing" : "Fix Trainer"}</span>
                   </button>
                 ) : null}
                 {adapterReceipt ? (

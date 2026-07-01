@@ -783,6 +783,65 @@ export type AdapterTrainerPreflightReceipt = {
   };
 };
 
+export type AdapterTrainerFixLoopReceipt = {
+  schema: string;
+  fixId: string;
+  createdAt: string;
+  endedAt: string;
+  updatedAt: string;
+  ok: boolean;
+  status: "running" | "pass" | "blocked" | "fail" | "canceled" | string;
+  adapterBuildId: string;
+  planId: string;
+  adapterName: string;
+  method: string;
+  summary: string;
+  settings: {
+    allowDependencyInstall: boolean;
+    allowCacheWarmup: boolean;
+    dryRun: boolean;
+    includeOptional: boolean;
+    startTraining: boolean;
+  };
+  cachePlan: AdapterTrainingReadiness["cachePlan"];
+  preflightBefore?: AdapterTrainerPreflightReceipt | null;
+  preflightAfter?: AdapterTrainerPreflightReceipt | null;
+  readinessAfter?: AdapterTrainingReadiness | null;
+  latestOperations: {
+    dependencyInstall?: AdapterOperationJob | null;
+    baseCacheWarmup?: AdapterOperationJob | null;
+  };
+  trainingRun?: AdapterTrainingRun | null;
+  trainingUnlock: {
+    realTraining: boolean;
+    dryRun: boolean;
+    willRunMode: "train" | "dry-run" | string;
+    reason: string;
+    nextAction: string;
+  };
+  actions: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    status: "pending" | "running" | "pass" | "warn" | "fail" | "blocked" | "skipped" | string;
+    summary: string;
+    startedAt: string;
+    endedAt: string;
+    jobId: string;
+    operationKind: string;
+    receiptPath: string;
+    ok: boolean;
+  }>;
+  blockers: string[];
+  warnings: string[];
+  files: {
+    latestJson: string;
+    latestMarkdown: string;
+    historyJson: string;
+    historyMarkdown: string;
+  };
+};
+
 export type AdapterBuilderReceipt = {
   schema: string;
   adapterBuildId: string;
@@ -1929,6 +1988,7 @@ export type ProjectPayload = {
   latestAdapterReadiness?: AdapterTrainingReadiness | null;
   latestAdapterOperationJob?: AdapterOperationJob | null;
   latestAdapterPreflight?: AdapterTrainerPreflightReceipt | null;
+  latestAdapterFixLoop?: AdapterTrainerFixLoopReceipt | null;
   latestAdapterTrainingRun?: AdapterTrainingRun | null;
   latestAdapterPromotion?: AdapterPromotionReceipt | null;
   adapterOperationHistory?: AdapterOperationJob[];

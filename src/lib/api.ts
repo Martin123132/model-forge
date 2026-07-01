@@ -4,6 +4,7 @@ import type {
   AdapterOperationJob,
   AdapterPromotionReceipt,
   AdapterTrainingReadiness,
+  AdapterTrainerFixLoopReceipt,
   AdapterTrainerPreflightReceipt,
   AdapterTrainingRun,
   BuilderAiCreateReceipt,
@@ -246,6 +247,35 @@ export function runAdapterTrainerPreflight(adapterBuildId?: string, runTraining 
     method: "POST",
     body: JSON.stringify({ adapterBuildId, runTraining, allowLongRun: runTraining })
   });
+}
+
+export function runAdapterTrainerFixLoop(adapterBuildId?: string, options?: {
+  allowDependencyInstall?: boolean;
+  allowCacheWarmup?: boolean;
+  dryRun?: boolean;
+  includeOptional?: boolean;
+  startTraining?: boolean;
+}) {
+  return requestJson<{
+    ok: boolean;
+    fixLoop: AdapterTrainerFixLoopReceipt;
+    project: ProjectPayload;
+  }>("/api/builder/adapter/training/fix", {
+    method: "POST",
+    body: JSON.stringify({
+      adapterBuildId,
+      allowDependencyInstall: options?.allowDependencyInstall ?? true,
+      allowCacheWarmup: options?.allowCacheWarmup ?? true,
+      dryRun: options?.dryRun === true,
+      includeOptional: options?.includeOptional === true,
+      startTraining: options?.startTraining === true
+    })
+  });
+}
+
+export function getAdapterTrainerFixLoop(fixId?: string) {
+  const query = fixId ? `?fixId=${encodeURIComponent(fixId)}` : "";
+  return requestJson<{ ok: boolean; fixLoop: AdapterTrainerFixLoopReceipt | null }>(`/api/builder/adapter/training/fix${query}`);
 }
 
 export function startAdapterTrainingRun(adapterBuildId?: string, runTraining = true) {
